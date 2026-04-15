@@ -27,7 +27,7 @@ export default defineConfig({
     },
     environment: 'node',
     globals: true,
-    include: ['test/**/*.test.ts'],
-    setupFiles: ['test/setup.ts'],
+    include: ['test/**/*.test.ts', 'Test_Droid/**/*.test.ts'],
+    setupFiles: ['test/setup.ts', 'Test_Droid/setup.ts'],
   },
 });
