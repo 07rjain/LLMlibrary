@@ -1,0 +1,97 @@
+{
+  "name": "unified-llm-client",
+  "version": "0.1.0",
+  "description": "Provider-agnostic LLM client library for Anthropic, OpenAI, and Gemini.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js",
+      "require": "./dist/client.cjs"
+    },
+    "./errors": {
+      "types": "./dist/errors.d.ts",
+      "import": "./dist/errors.js",
+      "require": "./dist/errors.cjs"
+    },
+    "./models": {
+      "types": "./dist/models.d.ts",
+      "import": "./dist/models.js",
+      "require": "./dist/models.cjs"
+    },
+    "./providers/anthropic": {
+      "types": "./dist/providers-anthropic.d.ts",
+      "import": "./dist/providers-anthropic.js",
+      "require": "./dist/providers-anthropic.cjs"
+    },
+    "./providers/gemini": {
+      "types": "./dist/providers-gemini.d.ts",
+      "import": "./dist/providers-gemini.js",
+      "require": "./dist/providers-gemini.cjs"
+    },
+    "./providers/openai": {
+      "types": "./dist/providers-openai.d.ts",
+      "import": "./dist/providers-openai.js",
+      "require": "./dist/providers-openai.cjs"
+    },
+    "./session-api": {
+      "types": "./dist/session-api.d.ts",
+      "import": "./dist/session-api.js",
+      "require": "./dist/session-api.cjs"
+    },
+    "./utils": {
+      "types": "./dist/utils.d.ts",
+      "import": "./dist/utils.js",
+      "require": "./dist/utils.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "packageManager": "pnpm@10.22.0",
+  "scripts": {
+    "build": "tsup",
+    "bench:complete": "node ./scripts/benchmark-complete-overhead.mjs",
+    "bench:concurrency": "node ./scripts/check-concurrent-sessions.mjs",
+    "bench:memory": "node ./scripts/check-conversation-memory.mjs",
+    "lint": "eslint .",
+    "docs:api": "typedoc --options typedoc.json",
+    "format": "prettier --write .",
+    "sizecheck": "node ./scripts/check-bundle-size.mjs",
+    "test": "vitest run --coverage",
+    "test:live": "LIVE_TESTS=1 vitest run test/live.e2e.test.ts",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b",
+    "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.25.0",
+    "@types/node": "^22.15.3",
+    "@types/pg": "^8.20.0",
+    "@vitest/coverage-v8": "^3.1.2",
+    "eslint": "^9.25.0",
+    "eslint-config-prettier": "^10.1.2",
+    "globals": "^16.0.0",
+    "prettier": "^3.5.3",
+    "tsup": "^8.4.0",
+    "typedoc": "^0.28.19",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.30.1",
+    "vitest": "^3.1.2"
+  },
+  "dependencies": {
+    "pg": "^8.20.0"
+  }
+}

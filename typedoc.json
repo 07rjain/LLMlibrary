@@ -1,0 +1,16 @@
+{
+  "entryPoints": [
+    "src/index.ts"
+  ],
+  "entryPointStrategy": "resolve",
+  "excludePrivate": true,
+  "excludeProtected": true,
+  "gitRevision": "main",
+  "hideGenerator": true,
+  "out": "docs/api",
+  "readme": "README.md",
+  "sort": [
+    "source-order"
+  ],
+  "tsconfig": "tsconfig.src.json"
+}
