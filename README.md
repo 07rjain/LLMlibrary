@@ -233,7 +233,7 @@ Supported endpoints include:
 - `POST /sessions/{id}/fork`
 - `GET /sessions`
 
-For the full endpoint contract and the OpenAI Responses-style mapping notes, see [SESSION_API.md](/Users/rishabh/Desktop/tryandtested/chatbot101/SESSION_API.md).
+For the full endpoint contract and the OpenAI Responses-style mapping notes, see [SESSION_API.md](SESSION_API.md).
 
 ## Runtime Support
 
@@ -243,15 +243,21 @@ For the full endpoint contract and the OpenAI Responses-style mapping notes, see
 
 ## Docs
 
+- User guide hub: [docs/README.md](docs/README.md)
+- Getting started: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
+- Completions and streaming: [docs/COMPLETIONS_AND_STREAMING.md](docs/COMPLETIONS_AND_STREAMING.md)
+- Conversations and tools: [docs/CONVERSATIONS_AND_TOOLS.md](docs/CONVERSATIONS_AND_TOOLS.md)
+- Persistence and Session API: [docs/PERSISTENCE_AND_SESSION_API.md](docs/PERSISTENCE_AND_SESSION_API.md)
+- Production guide: [docs/PRODUCTION_GUIDE.md](docs/PRODUCTION_GUIDE.md)
 - API reference source: `pnpm docs:api`
-- Session API contract: [SESSION_API.md](/Users/rishabh/Desktop/tryandtested/chatbot101/SESSION_API.md)
-- PRD decisions: [docs/PRD_DECISIONS.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/PRD_DECISIONS.md)
-- Provider comparison: [docs/PROVIDER_COMPARISON.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/PROVIDER_COMPARISON.md)
-- Migration guide: [docs/MIGRATION_GUIDE.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/MIGRATION_GUIDE.md)
-- Cost and pricing policy: [docs/COST_AND_PRICING.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/COST_AND_PRICING.md)
-- Roadmap: [docs/ROADMAP.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/ROADMAP.md)
-- Current project state: [PROJECT_STATUS.md](/Users/rishabh/Desktop/tryandtested/chatbot101/PROJECT_STATUS.md)
-- Validation handoff notes: [TEST_AGENT_HANDOFF.md](/Users/rishabh/Desktop/tryandtested/chatbot101/TEST_AGENT_HANDOFF.md)
+- Session API contract: [SESSION_API.md](SESSION_API.md)
+- PRD decisions: [docs/PRD_DECISIONS.md](docs/PRD_DECISIONS.md)
+- Provider comparison: [docs/PROVIDER_COMPARISON.md](docs/PROVIDER_COMPARISON.md)
+- Migration guide: [docs/MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md)
+- Cost and pricing policy: [docs/COST_AND_PRICING.md](docs/COST_AND_PRICING.md)
+- Roadmap: [docs/ROADMAP.md](docs/ROADMAP.md)
+- Current project state: [PROJECT_STATUS.md](PROJECT_STATUS.md)
+- Validation handoff notes: [TEST_AGENT_HANDOFF.md](TEST_AGENT_HANDOFF.md)
 
 ## Quality And Performance
 

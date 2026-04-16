@@ -22,7 +22,7 @@ Prepared: 2026-04-16
 
 ## Launch Matrix
 
-- The authoritative launch model matrix is the set of implemented models in [src/models/prices.json](/Users/rishabh/Desktop/tryandtested/chatbot101/src/models/prices.json).
+- The authoritative launch model matrix is the set of implemented models in [src/models/prices.json](../src/models/prices.json).
 - `prices.json` is the source of truth for launch pricing metadata and is intentionally limited to models the codebase can actually route today.
 - Models tied to deferred providers stay in the roadmap until the corresponding adapters exist.
 

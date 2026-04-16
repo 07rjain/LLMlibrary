@@ -4,7 +4,7 @@ Prepared: 2026-04-16
 
 ## Overview
 
-The library exposes a framework-agnostic session API through [src/session-api.ts](/Users/rishabh/Desktop/tryandtested/chatbot101/src/session-api.ts). It is designed around standard web `Request` and `Response` objects instead of a specific server framework.
+The library exposes a framework-agnostic session API through [src/session-api.ts](src/session-api.ts). It is designed around standard web `Request` and `Response` objects instead of a specific server framework.
 
 Use `createSessionApi({ client, sessionStore, ... })` to create a handler, then mount `sessionApi.handle(request)` inside your preferred runtime.
 

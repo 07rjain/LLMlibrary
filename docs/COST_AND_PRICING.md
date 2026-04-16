@@ -4,7 +4,7 @@ Prepared: 2026-04-16
 
 ## Cost Semantics
 
-- Cost outputs are estimates derived from [src/models/prices.json](/Users/rishabh/Desktop/tryandtested/chatbot101/src/models/prices.json) plus provider token usage returned at runtime.
+- Cost outputs are estimates derived from [src/models/prices.json](../src/models/prices.json) plus provider token usage returned at runtime.
 - The library treats provider-reported usage as authoritative whenever the provider returns token counts.
 - `Conversation` totals and `UsageLogger` aggregates accumulate those estimated USD values, not provider billing exports.
 

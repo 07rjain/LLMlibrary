@@ -68,7 +68,7 @@ Prepared: 2026-04-16
 ## Remaining Work
 
 - No open implementation blockers remain in the tracked PRD backlog.
-- Deferred provider expansion, OpenTelemetry, Python parity, and response caching are tracked in [docs/ROADMAP.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/ROADMAP.md).
+- Deferred provider expansion, OpenTelemetry, Python parity, and response caching are tracked in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Suggested Validation For Another Agent
 
@@ -76,6 +76,6 @@ Prepared: 2026-04-16
 2. Re-run live smoke tests with the local `.env`, without printing secrets.
 3. Verify default conversation persistence by creating a `LLMClient.fromEnv()` instance and restoring a session via `conversation({ sessionId })`.
 4. Verify `PostgresUsageLogger.fromEnv()` persists a usage row and that `client.getUsage({ sessionId })` returns it.
-5. Exercise the in-process Session API lifecycle in [src/session-api.ts](/Users/rishabh/Desktop/tryandtested/chatbot101/src/session-api.ts) and confirm [SESSION_API.md](/Users/rishabh/Desktop/tryandtested/chatbot101/SESSION_API.md) matches the code.
+5. Exercise the in-process Session API lifecycle in [src/session-api.ts](src/session-api.ts) and confirm [SESSION_API.md](SESSION_API.md) matches the code.
 6. Run `LIVE_TESTS=1 pnpm test:live` after exporting the populated `.env`.
 7. Check that `todo.md` matches the actual code state before starting any new implementation work.
