@@ -27,13 +27,13 @@ Provider-agnostic TypeScript client for Anthropic, OpenAI, and Google Gemini wit
 Once this repo is on GitHub, install it in another project with:
 
 ```bash
-pnpm add github:<your-github-user>/<your-repo>
+pnpm add github:07rjain/LLMlibrary
 ```
 
 or:
 
 ```bash
-pnpm add git+https://github.com/<your-github-user>/<your-repo>.git
+pnpm add git+https://github.com/07rjain/LLMlibrary.git
 ```
 
 The package runs `prepare` during Git installs, so the consumer project gets a built `dist` output automatically.
