@@ -22,6 +22,24 @@ Provider-agnostic TypeScript client for Anthropic, OpenAI, and Google Gemini wit
 
 ## Install
 
+### Use As A Library From GitHub
+
+Once this repo is on GitHub, install it in another project with:
+
+```bash
+pnpm add github:<your-github-user>/<your-repo>
+```
+
+or:
+
+```bash
+pnpm add git+https://github.com/<your-github-user>/<your-repo>.git
+```
+
+The package runs `prepare` during Git installs, so the consumer project gets a built `dist` output automatically.
+
+### Develop Locally
+
 ```bash
 pnpm install
 ```
