@@ -11,8 +11,11 @@ import { Conversation } from './conversation.js';
 import { AnthropicAdapter } from './providers/anthropic.js';
 import { GeminiAdapter } from './providers/gemini.js';
 import { OpenAIAdapter } from './providers/openai.js';
+import { getEnvironmentVariable } from './runtime.js';
 import { PostgresSessionStore } from './session-store.js';
+import { createCancelableStream } from './stream-control.js';
 import { calcCostUSD, estimateMessageTokens, formatCost } from './utils/index.js';
+import { exportUsageSummary } from './usage.js';
 
 import type { ModelRegistryOptions, ModelPriceOverrides } from './models/index.js';
 import type { ConversationOptions, ConversationSnapshot } from './conversation.js';
@@ -25,16 +28,24 @@ import type {
   CanonicalResponse,
   CanonicalTool,
   CanonicalToolChoice,
+  BudgetExceededAction,
+  CancelableStream,
   StreamChunk,
   UsageEvent,
   UsageMetrics,
 } from './types.js';
-import type { UsageLogger, UsageQuery, UsageSummary } from './usage.js';
+import type {
+  UsageExportFormat,
+  UsageLogger,
+  UsageQuery,
+  UsageSummary,
+} from './usage.js';
 import type { RetryOptions } from './utils/retry.js';
 
 /** Constructor options for `LLMClient`. */
 export interface LLMClientOptions {
   anthropicApiKey?: string;
+  budgetExceededAction?: BudgetExceededAction;
   defaultModel?: string;
   defaultProvider?: CanonicalProvider;
   fetchImplementation?: typeof fetch;
@@ -42,6 +53,7 @@ export interface LLMClientOptions {
   modelRegistry?: ModelRegistry;
   modelRegistryOptions?: ModelRegistryOptions;
   modelRouter?: ModelRouter;
+  onWarning?: (message: string) => void;
   openaiApiKey?: string;
   openaiOrganization?: string;
   openaiProject?: string;
@@ -53,6 +65,7 @@ export interface LLMClientOptions {
 /** Canonical request options shared by `complete()` and `stream()`. */
 export interface LLMRequestOptions {
   botId?: string;
+  budgetExceededAction?: BudgetExceededAction;
   budgetUsd?: number;
   maxTokens?: number;
   messages: CanonicalMessage[];
@@ -116,11 +129,13 @@ export interface MockLLMClientOptions
  */
 export class LLMClient {
   private readonly anthropicAdapter: AnthropicAdapter | null;
+  private readonly budgetExceededAction: BudgetExceededAction;
   private readonly defaultModel: string | undefined;
   private readonly defaultProvider: CanonicalProvider | undefined;
   private readonly geminiAdapter: GeminiAdapter | null;
   private readonly modelRegistry: ModelRegistry;
   private readonly modelRouter: ModelRouter | undefined;
+  private readonly onWarning: (message: string) => void;
   private readonly openaiAdapter: OpenAIAdapter | null;
   private readonly sessionStore: SessionStore<ConversationSnapshot> | undefined;
   private readonly usageLogger: UsageLogger | undefined;
@@ -136,16 +151,18 @@ export class LLMClient {
       options.modelRegistry ??
       new ModelRegistry(undefined, options.modelRegistryOptions);
     this.modelRegistry = modelRegistry;
+    this.budgetExceededAction = options.budgetExceededAction ?? 'throw';
     this.defaultModel = options.defaultModel;
     this.defaultProvider = options.defaultProvider;
     this.modelRouter = options.modelRouter;
+    this.onWarning = options.onWarning ?? ((message) => console.warn(message));
     this.sessionStore =
       options.sessionStore ?? resolveDefaultSessionStore(options.sessionStore);
     this.usageLogger = options.usageLogger;
 
-    const anthropicApiKey = options.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY;
-    const geminiApiKey = options.geminiApiKey ?? process.env.GEMINI_API_KEY;
-    const openaiApiKey = options.openaiApiKey ?? process.env.OPENAI_API_KEY;
+    const anthropicApiKey = options.anthropicApiKey ?? getEnvironmentVariable('ANTHROPIC_API_KEY');
+    const geminiApiKey = options.geminiApiKey ?? getEnvironmentVariable('GEMINI_API_KEY');
+    const openaiApiKey = options.openaiApiKey ?? getEnvironmentVariable('OPENAI_API_KEY');
     const fetchImplementation = options.fetchImplementation;
 
     this.anthropicAdapter = anthropicApiKey
@@ -165,8 +182,8 @@ export class LLMClient {
             openaiApiKey,
             fetchImplementation,
             modelRegistry,
-            options.openaiOrganization ?? process.env.OPENAI_ORG_ID,
-            options.openaiProject ?? process.env.OPENAI_PROJECT_ID,
+            options.openaiOrganization ?? getEnvironmentVariable('OPENAI_ORG_ID'),
+            options.openaiProject ?? getEnvironmentVariable('OPENAI_PROJECT_ID'),
             options.retryOptions,
           ),
         )
@@ -218,7 +235,27 @@ export class LLMClient {
       attemptedRoutes.push(attempt.decision);
 
       try {
-        this.assertBudget(attempt.request);
+        const budgetDecision = this.handleBudgetExceededAction(attempt.request);
+        if (budgetDecision.action === 'skip') {
+          const response = buildBudgetSkipResponse(
+            budgetDecision.error,
+            attempt.request,
+          );
+          await this.logUsageEvent(
+            buildUsageEvent({
+              durationMs: Date.now() - startedAt,
+              finishReason: response.finishReason,
+              model: response.model,
+              options,
+              provider: response.provider,
+              usage: response.usage,
+              ...(joinRoutingDecision(attemptedRoutes)
+                ? { routingDecision: joinRoutingDecision(attemptedRoutes) }
+                : {}),
+            }),
+          );
+          return response;
+        }
         const response = await this.dispatchComplete(attempt.request);
         await this.logUsageEvent(
           buildUsageEvent({
@@ -245,11 +282,22 @@ export class LLMClient {
   }
 
   /** Executes a streaming completion request and yields canonical chunks. */
-  stream(options: LLMRequestOptions): AsyncIterable<StreamChunk> {
+  stream(options: LLMRequestOptions): CancelableStream<StreamChunk> {
     const plan = this.resolveRequestPlan(options);
     const startedAt = Date.now();
 
-    return this.streamWithFallback(plan, options, startedAt);
+    return createCancelableStream(
+      (signal) =>
+        this.streamWithFallback(
+          plan,
+          {
+            ...options,
+            signal,
+          },
+          startedAt,
+        ),
+      options.signal,
+    );
   }
 
   /**
@@ -265,6 +313,12 @@ export class LLMClient {
       if (stored) {
         return Conversation.restore(this, stored.snapshot, {
           ...options,
+          ...(options.budgetExceededAction !== undefined
+            ? { budgetExceededAction: options.budgetExceededAction }
+            : { budgetExceededAction: this.budgetExceededAction }),
+          ...(options.onWarning !== undefined
+            ? { onWarning: options.onWarning }
+            : { onWarning: this.onWarning }),
           ...(store ? { store } : {}),
         });
       }
@@ -272,6 +326,12 @@ export class LLMClient {
 
     return new Conversation(this, {
       ...options,
+      ...(options.budgetExceededAction !== undefined
+        ? { budgetExceededAction: options.budgetExceededAction }
+        : { budgetExceededAction: this.budgetExceededAction }),
+      ...(options.onWarning !== undefined
+        ? { onWarning: options.onWarning }
+        : { onWarning: this.onWarning }),
       ...(store ? { store } : {}),
     });
   }
@@ -290,6 +350,14 @@ export class LLMClient {
     }
 
     return this.usageLogger.getUsage(query);
+  }
+
+  /** Returns aggregated usage serialized as JSON or CSV. */
+  async exportUsage(
+    format: UsageExportFormat,
+    query: UsageQuery = {},
+  ): Promise<string> {
+    return exportUsageSummary(await this.getUsage(query), format);
   }
 
   /** Returns the session store configured on this client, if any. */
@@ -488,15 +556,15 @@ export class LLMClient {
     };
   }
 
-  private assertBudget(
+  private resolveBudgetExceededError(
     options: LLMRequestOptions & {
       maxTokens: number;
       model: string;
       provider: CanonicalProvider;
     },
-  ): void {
+  ): BudgetExceededError | null {
     if (options.budgetUsd === undefined) {
-      return;
+      return null;
     }
 
     const estimatedMessages = options.system
@@ -514,10 +582,10 @@ export class LLMClient {
     );
 
     if (estimatedCostUSD <= options.budgetUsd) {
-      return;
+      return null;
     }
 
-    throw new BudgetExceededError(
+    return new BudgetExceededError(
       `Estimated request cost ${formatCost(estimatedCostUSD)} exceeds the budget of ${formatCost(
         options.budgetUsd,
       )}.`,
@@ -532,6 +600,31 @@ export class LLMClient {
         provider: options.provider,
       },
     );
+  }
+
+  private handleBudgetExceededAction(
+    options: LLMRequestOptions & {
+      maxTokens: number;
+      model: string;
+      provider: CanonicalProvider;
+    },
+  ): { action: 'continue' } | { action: 'skip'; error: BudgetExceededError } {
+    const error = this.resolveBudgetExceededError(options);
+    if (!error) {
+      return { action: 'continue' };
+    }
+
+    const action = options.budgetExceededAction ?? this.budgetExceededAction;
+    if (action === 'warn') {
+      this.onWarning(error.message);
+      return { action: 'continue' };
+    }
+
+    if (action === 'skip') {
+      return { action: 'skip', error };
+    }
+
+    throw error;
   }
 
   private async logUsageEvent(event: UsageEvent): Promise<void> {
@@ -567,7 +660,33 @@ export class LLMClient {
       let emittedUserVisibleChunk = false;
 
       try {
-        this.assertBudget(attempt.request);
+        const budgetDecision = this.handleBudgetExceededAction(attempt.request);
+        if (budgetDecision.action === 'skip') {
+          const skipped = buildBudgetSkipResponse(
+            budgetDecision.error,
+            attempt.request,
+          );
+          yield { delta: skipped.text, type: 'text-delta' };
+          await this.logUsageEvent(
+            buildUsageEvent({
+              durationMs: Date.now() - startedAt,
+              finishReason: skipped.finishReason,
+              model: skipped.model,
+              options,
+              provider: skipped.provider,
+              usage: skipped.usage,
+              ...(joinRoutingDecision(attemptedRoutes)
+                ? { routingDecision: joinRoutingDecision(attemptedRoutes) }
+                : {}),
+            }),
+          );
+          yield {
+            finishReason: skipped.finishReason,
+            type: 'done',
+            usage: skipped.usage,
+          };
+          return;
+        }
 
         for await (const chunk of this.dispatchStream(attempt.request)) {
           emittedUserVisibleChunk = true;
@@ -637,38 +756,42 @@ class MockLLMClient extends LLMClient {
     return response;
   }
 
-  override async *stream(options: LLMRequestOptions): AsyncIterable<StreamChunk> {
-    const resolved = this.resolveMockRequest(options);
-    const next = this.streamQueue.shift();
+  override stream(options: LLMRequestOptions): CancelableStream<StreamChunk> {
+    return createCancelableStream(
+      async function* (
+        this: MockLLMClient,
+      ): AsyncGenerator<StreamChunk, void, void> {
+        const resolved = this.resolveMockRequest(options);
+        const next = this.streamQueue.shift();
 
-    if (!next) {
-      const response = buildMockResponse(extractLastUserText(resolved.messages), resolved);
-      if (response.text.length > 0) {
-        yield { delta: response.text, type: 'text-delta' };
-      }
-      yield {
-        finishReason: response.finishReason,
-        type: 'done',
-        usage: response.usage,
-      };
-      return;
-    }
+        if (!next) {
+          const response = buildMockResponse(extractLastUserText(resolved.messages), resolved);
+          if (response.text.length > 0) {
+            yield { delta: response.text, type: 'text-delta' };
+          }
+          yield {
+            finishReason: response.finishReason,
+            type: 'done',
+            usage: response.usage,
+          };
+          return;
+        }
 
-    const stream =
-      typeof next === 'function'
-        ? await next(resolved)
-        : next;
+        const stream = typeof next === 'function' ? await next(resolved) : next;
 
-    if (isAsyncIterable(stream)) {
-      for await (const chunk of stream) {
-        yield chunk;
-      }
-      return;
-    }
+        if (isAsyncIterable(stream)) {
+          for await (const chunk of stream) {
+            yield chunk;
+          }
+          return;
+        }
 
-    for (const chunk of stream) {
-      yield chunk;
-    }
+        for (const chunk of stream) {
+          yield chunk;
+        }
+      }.bind(this),
+      options.signal,
+    );
   }
 
   private resolveMockRequest(
@@ -740,11 +863,34 @@ function resolveDefaultSessionStore(
     return sessionStore;
   }
 
-  if (!process.env.DATABASE_URL) {
+  if (!getEnvironmentVariable('DATABASE_URL')) {
     return undefined;
   }
 
   return PostgresSessionStore.fromEnv<ConversationSnapshot>();
+}
+
+function buildBudgetSkipResponse(
+  error: BudgetExceededError,
+  request: {
+    model: string;
+    provider: CanonicalProvider;
+  },
+): CanonicalResponse {
+  return {
+    content: [{ text: error.message, type: 'text' }],
+    finishReason: 'error',
+    model: request.model,
+    provider: request.provider,
+    raw: {
+      reason: 'budget_exceeded',
+      skipped: true,
+      ...(error.details ? { details: error.details } : {}),
+    },
+    text: error.message,
+    toolCalls: [],
+    usage: buildZeroUsage(),
+  };
 }
 
 function buildMockResponse(
@@ -762,13 +908,7 @@ function buildMockResponse(
     raw: {},
     text,
     toolCalls: [],
-    usage: {
-      cachedTokens: 0,
-      cost: '$0.00',
-      costUSD: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-    },
+    usage: buildZeroUsage(),
   };
 }
 
@@ -840,4 +980,14 @@ function shouldTryFallback(error: unknown): boolean {
     error instanceof RateLimitError ||
     (error instanceof LLMError && error.retryable)
   );
+}
+
+function buildZeroUsage(): UsageMetrics {
+  return {
+    cachedTokens: 0,
+    cost: '$0.00',
+    costUSD: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+  };
 }

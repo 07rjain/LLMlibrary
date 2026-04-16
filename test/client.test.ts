@@ -988,6 +988,120 @@ describe('LLMClient', () => {
     expect(fetchImplementation).not.toHaveBeenCalled();
   });
 
+  it('can warn and continue when a request exceeds the per-call budget', async () => {
+    const onWarning = vi.fn();
+    const fetchImplementation = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: 'stop',
+              index: 0,
+              message: {
+                content: 'Allowed with warning',
+                role: 'assistant',
+              },
+            },
+          ],
+          created: 1,
+          id: 'chatcmpl_1',
+          model: 'gpt-4o',
+          object: 'chat.completion',
+          usage: {
+            completion_tokens: 2,
+            prompt_tokens: 5,
+          },
+        }),
+        {
+          headers: { 'content-type': 'application/json' },
+          status: 200,
+        },
+      ),
+    );
+    const client = new LLMClient({
+      defaultModel: 'gpt-4o',
+      fetchImplementation,
+      onWarning,
+      openaiApiKey: 'openai-key',
+    });
+
+    await expect(
+      client.complete({
+        budgetExceededAction: 'warn',
+        budgetUsd: 0.000001,
+        messages: [{ content: 'Hello', role: 'user' }],
+      }),
+    ).resolves.toMatchObject({
+      text: 'Allowed with warning',
+    });
+    expect(onWarning).toHaveBeenCalledWith(
+      expect.stringContaining('Estimated request cost'),
+    );
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+  });
+
+  it('can skip provider dispatch when a request exceeds the per-call budget', async () => {
+    const fetchImplementation = vi.fn();
+    const usageLogger = {
+      log: vi.fn(async () => undefined),
+    };
+    const client = new LLMClient({
+      defaultModel: 'gpt-4o',
+      fetchImplementation,
+      openaiApiKey: 'openai-key',
+      usageLogger,
+    });
+
+    const response = await client.complete({
+      budgetExceededAction: 'skip',
+      budgetUsd: 0.000001,
+      messages: [{ content: 'Hello', role: 'user' }],
+      sessionId: 'skipped-session',
+    });
+
+    expect(response.finishReason).toBe('error');
+    expect(response.text).toContain('Estimated request cost');
+    expect(fetchImplementation).not.toHaveBeenCalled();
+    expect(usageLogger.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        finishReason: 'error',
+        sessionId: 'skipped-session',
+      }),
+    );
+  });
+
+  it('exposes a cancel() contract for streaming requests', async () => {
+    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.signal?.aborted) {
+        throw init.signal.reason ?? new Error('aborted');
+      }
+
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start() {},
+        }),
+        {
+          headers: { 'content-type': 'text/event-stream' },
+          status: 200,
+        },
+      );
+    });
+    const client = new LLMClient({
+      defaultModel: 'gpt-4o',
+      fetchImplementation,
+      openaiApiKey: 'openai-key',
+    });
+
+    const stream = client.stream({
+      messages: [{ content: 'Cancel me', role: 'user' }],
+    });
+
+    stream.cancel(new Error('manual cancel'));
+
+    expect(stream.signal.aborted).toBe(true);
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
   it('delegates getUsage() to the configured usage logger', async () => {
     const summary: UsageSummary = {
       breakdown: [
@@ -1023,6 +1137,51 @@ describe('LLMClient', () => {
     const client = new LLMClient();
 
     await expect(client.getUsage()).rejects.toBeInstanceOf(ProviderCapabilityError);
+  });
+
+  it('exports aggregated usage as CSV through the client surface', async () => {
+    const usageLogger = {
+      getUsage: vi.fn(async () => ({
+        breakdown: [
+          {
+            model: 'gpt-4o',
+            provider: 'openai' as const,
+            requestCount: 1,
+            totalCachedTokens: 0,
+            totalCostUSD: 0.01,
+            totalInputTokens: 10,
+            totalOutputTokens: 4,
+          },
+        ],
+        requestCount: 1,
+        totalCachedTokens: 0,
+        totalCostUSD: 0.01,
+        totalInputTokens: 10,
+        totalOutputTokens: 4,
+      })),
+      log: vi.fn(async () => undefined),
+    };
+    const client = new LLMClient({
+      usageLogger,
+    });
+
+    await expect(client.exportUsage('csv')).resolves.toContain(
+      'provider,model,requestCount,totalInputTokens,totalOutputTokens,totalCachedTokens,totalCostUSD',
+    );
+  });
+
+  it('keeps model registry state isolated across client instances', () => {
+    const first = new LLMClient();
+    const second = new LLMClient();
+
+    first.updatePrices({
+      'gpt-4o': {
+        inputPrice: 99,
+      },
+    });
+
+    expect(first.models.get('gpt-4o').inputPrice).toBe(99);
+    expect(second.models.get('gpt-4o').inputPrice).not.toBe(99);
   });
 });
 

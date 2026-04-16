@@ -93,6 +93,11 @@ export interface CanonicalToolCall {
     name: string;
     result?: JsonValue;
 }
+export type BudgetExceededAction = 'skip' | 'throw' | 'warn';
+export interface CancelableStream<TChunk> extends AsyncIterable<TChunk> {
+    cancel(reason?: unknown): void;
+    readonly signal: AbortSignal;
+}
 export interface UsageMetrics {
     cachedReadTokens?: number;
     cachedTokens: number;

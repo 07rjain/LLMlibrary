@@ -1,16 +1,18 @@
-import { Pool } from 'pg';
+import { loadPgPoolConstructor } from './node-pg-loader.js';
+import { sanitizeForLogging } from './redaction.js';
+import { getEnvironmentVariable, isProductionRuntime } from './runtime.js';
 export class ConsoleLogger {
     enabled;
     write;
     constructor(options = {}) {
-        this.enabled = options.enabled ?? process.env.NODE_ENV !== 'production';
+        this.enabled = options.enabled ?? !isProductionRuntime();
         this.write = options.write ?? ((message) => console.info(message));
     }
     log(event) {
         if (!this.enabled) {
             return;
         }
-        this.write(`llm-usage ${JSON.stringify(event)}`);
+        this.write(`llm-usage ${JSON.stringify(sanitizeForLogging(event))}`);
     }
 }
 /**
@@ -42,17 +44,16 @@ export class PostgresUsageLogger {
         this.flushIntervalMs = options.flushIntervalMs ?? 1000;
         this.onError =
             options.onError ??
-                ((error) => console.error('PostgresUsageLogger flush failed.', error));
+                ((error) => console.error('PostgresUsageLogger flush failed.', sanitizeForLogging(error)));
         this.pool = options.pool;
         this.schemaName = options.schemaName ?? 'public';
         this.tableName = options.tableName ?? 'llm_usage_events';
     }
     static fromEnv(options = {}) {
+        const connectionString = getEnvironmentVariable('DATABASE_URL');
         return new PostgresUsageLogger({
             ...options,
-            ...(process.env.DATABASE_URL
-                ? { connectionString: process.env.DATABASE_URL }
-                : {}),
+            ...(connectionString ? { connectionString } : {}),
         });
     }
     async close() {
@@ -71,7 +72,7 @@ export class PostgresUsageLogger {
             return;
         }
         this.ensureSchemaPromise = (async () => {
-            const pool = this.getPool();
+            const pool = await this.getPool();
             await pool.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(this.schemaName)}`);
             await pool.query(`CREATE TABLE IF NOT EXISTS ${this.qualifiedTableName()} (
           id BIGSERIAL PRIMARY KEY,
@@ -125,7 +126,8 @@ export class PostgresUsageLogger {
         await this.ensureSchema();
         const { conditions, values } = buildUsageFilters(query);
         const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-        const result = await this.getPool().query(`SELECT
+        const pool = await this.getPool();
+        const result = await pool.query(`SELECT
          provider,
          model,
          COUNT(*) AS request_count,
@@ -199,7 +201,8 @@ export class PostgresUsageLogger {
                 values.push(event.timestamp, event.provider, event.model, event.inputTokens, event.outputTokens, event.cachedTokens, event.cachedReadTokens ?? 0, event.cachedWriteTokens ?? 0, event.costUSD, event.finishReason, event.durationMs, normalizeTenantId(event.tenantId), event.sessionId ?? null, event.botId ?? null, event.routingDecision ?? null);
                 return `(${columns.map((_, columnIndex) => `$${offset + columnIndex + 1}`).join(', ')})`;
             });
-            await this.getPool().query(`INSERT INTO ${this.qualifiedTableName()} (${columns.join(', ')})
+            const pool = await this.getPool();
+            await pool.query(`INSERT INTO ${this.qualifiedTableName()} (${columns.join(', ')})
          VALUES ${placeholders.join(', ')}`, values);
         }
         catch (error) {
@@ -208,18 +211,20 @@ export class PostgresUsageLogger {
             throw error;
         }
     }
-    getPool() {
+    async getPool() {
         if (this.pool) {
             return this.pool;
         }
         if (this.internalPool) {
             return this.internalPool;
         }
-        if (!this.connectionString) {
+        const connectionString = this.connectionString ?? getEnvironmentVariable('DATABASE_URL');
+        if (!connectionString) {
             throw new Error('DATABASE_URL is required for PostgresUsageLogger.');
         }
+        const Pool = await loadPgPoolConstructor();
         this.internalPool = new Pool({
-            connectionString: this.connectionString,
+            connectionString,
         });
         return this.internalPool;
     }
@@ -286,4 +291,41 @@ function scheduleFlush(logger) {
         logger['flushTimer'] = undefined;
         void logger.flush().catch(() => undefined);
     }, logger['flushIntervalMs']);
+}
+/** Serializes aggregated usage into either JSON or CSV output. */
+export function exportUsageSummary(summary, format) {
+    if (format === 'json') {
+        return JSON.stringify(summary, null, 2);
+    }
+    const lines = [
+        [
+            'provider',
+            'model',
+            'requestCount',
+            'totalInputTokens',
+            'totalOutputTokens',
+            'totalCachedTokens',
+            'totalCostUSD',
+        ].join(','),
+    ];
+    for (const row of summary.breakdown) {
+        lines.push([
+            row.provider,
+            row.model,
+            row.requestCount,
+            row.totalInputTokens,
+            row.totalOutputTokens,
+            row.totalCachedTokens,
+            row.totalCostUSD.toFixed(6),
+        ]
+            .map((value) => escapeCsvField(String(value)))
+            .join(','));
+    }
+    return lines.join('\n');
+}
+function escapeCsvField(value) {
+    if (!/[",\n]/.test(value)) {
+        return value;
+    }
+    return `"${value.replaceAll('"', '""')}"`;
 }

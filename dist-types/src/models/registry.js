@@ -1,4 +1,5 @@
 import { ProviderCapabilityError } from '../errors.js';
+import { isProductionRuntime } from '../runtime.js';
 import { defaultModelPrices } from './prices.js';
 /**
  * Stores model capability and pricing metadata used by adapters, budget guards,
@@ -23,7 +24,7 @@ export class ModelRegistry {
         for (const [id, model] of Object.entries(seed)) {
             this.models.set(id, { ...model, id });
         }
-        if (options.emitStalenessWarning ?? process.env.NODE_ENV !== 'production') {
+        if (options.emitStalenessWarning ?? !isProductionRuntime()) {
             this.warnOnStalePrices();
         }
     }

@@ -1,9 +1,16 @@
 import { BudgetExceededError, MaxToolRoundsError, ProviderError } from './errors.js';
+import {
+  buildAbortError,
+  createCancelableStream,
+  throwIfAborted,
+} from './stream-control.js';
 import { formatCost } from './utils/cost.js';
 
 import type { ContextManager } from './context-manager.js';
 import type { SessionStore } from './session-store.js';
 import type {
+  BudgetExceededAction,
+  CancelableStream,
   CanonicalMessage,
   CanonicalPart,
   CanonicalProvider,
@@ -22,6 +29,7 @@ const DEFAULT_TOOL_EXECUTION_TIMEOUT_MS = 30_000;
 /** Minimal client contract consumed by `Conversation`. */
 export interface ConversationClient {
   complete(options: {
+    budgetExceededAction?: BudgetExceededAction;
     budgetUsd?: number;
     maxTokens?: number;
     messages: CanonicalMessage[];
@@ -35,6 +43,7 @@ export interface ConversationClient {
     tools?: CanonicalTool[];
   }): Promise<CanonicalResponse>;
   stream(options: {
+    budgetExceededAction?: BudgetExceededAction;
     budgetUsd?: number;
     maxTokens?: number;
     messages: CanonicalMessage[];
@@ -74,6 +83,7 @@ export interface ConversationSnapshot {
 
 /** Configuration for a new or restored `Conversation`. */
 export interface ConversationOptions {
+  budgetExceededAction?: BudgetExceededAction;
   budgetUsd?: number;
   contextManager?: ContextManager;
   maxToolRounds?: number;
@@ -89,6 +99,7 @@ export interface ConversationOptions {
   toolExecutionTimeoutMs?: number;
   toolChoice?: CanonicalToolChoice;
   tools?: CanonicalTool[];
+  onWarning?: (message: string) => void;
 }
 
 /**
@@ -106,6 +117,7 @@ export interface ConversationOptions {
  * ```
  */
 export class Conversation {
+  private readonly budgetExceededAction: BudgetExceededAction;
   private readonly client: ConversationClient;
   private readonly contextManager: ContextManager | undefined;
   private createdAt: string;
@@ -123,6 +135,7 @@ export class Conversation {
   private readonly toolExecutionTimeoutMs: number;
   private readonly toolChoice: CanonicalToolChoice | undefined;
   private readonly tools: CanonicalTool[] | undefined;
+  private readonly onWarning: (message: string) => void;
   private totalCachedTokens = 0;
   private totalCostUSD = 0;
   private totalInputTokens = 0;
@@ -130,6 +143,7 @@ export class Conversation {
   private updatedAt: string;
 
   constructor(client: ConversationClient, options: ConversationOptions = {}) {
+    this.budgetExceededAction = options.budgetExceededAction ?? 'throw';
     this.client = client;
     this.contextManager = options.contextManager;
     this.budgetUsd = options.budgetUsd;
@@ -148,6 +162,7 @@ export class Conversation {
       options.toolExecutionTimeoutMs ?? DEFAULT_TOOL_EXECUTION_TIMEOUT_MS;
     this.toolChoice = options.toolChoice;
     this.tools = options.tools ? cloneTools(options.tools) : undefined;
+    this.onWarning = options.onWarning ?? ((message) => console.warn(message));
     this.updatedAt = this.createdAt;
   }
 
@@ -192,13 +207,21 @@ export class Conversation {
   }
 
   /** Streams a user turn and commits state when the final `done` chunk arrives. */
-  async *sendStream(
+  sendStream(
     input: CanonicalMessage['content'],
     options: { signal?: AbortSignal } = {},
-  ): AsyncGenerator<StreamChunk, void, void> {
-    const nextMessages = await this.prepareMessages(buildUserMessage(input));
-    const result = yield* this.runStreamToolLoop(nextMessages, options.signal);
-    await this.finalizeExecution(result);
+  ): CancelableStream<StreamChunk> {
+    return createCancelableStream(
+      async function* (
+        this: Conversation,
+        signal: AbortSignal,
+      ): AsyncGenerator<StreamChunk, void, void> {
+        const nextMessages = await this.prepareMessages(buildUserMessage(input));
+        const result = yield* this.runStreamToolLoop(nextMessages, signal);
+        await this.finalizeExecution(result);
+      }.bind(this),
+      options.signal,
+    );
   }
 
   /** Clears non-system history while preserving running totals. */
@@ -365,12 +388,29 @@ export class Conversation {
 
     while (true) {
       throwIfAborted(signal);
+      const remainingBudget = this.resolveRemainingBudgetDecision(aggregateUsage.costUSD);
+      if (remainingBudget.action === 'skip') {
+        const response = buildBudgetSkipResponse(remainingBudget.error, model, provider);
+        aggregateUsage = accumulateUsage(aggregateUsage, response.usage);
+        workingMessages = [...workingMessages, buildAssistantMessage(response)];
+        return {
+          messages: workingMessages,
+          model: response.model,
+          provider: response.provider,
+          response: {
+            ...response,
+            usage: aggregateUsage,
+          },
+          usage: aggregateUsage,
+        };
+      }
+
       const response = await this.client.complete(
         this.buildRequestOptions(
           workingMessages,
           signal,
           toolRounds,
-          this.resolveRemainingBudgetUsd(aggregateUsage.costUSD),
+          remainingBudget.budgetUsd,
         ),
       );
       model = response.model;
@@ -420,11 +460,30 @@ export class Conversation {
 
     while (true) {
       throwIfAborted(signal);
+      const remainingBudget = this.resolveRemainingBudgetDecision(aggregateUsage.costUSD);
+      if (remainingBudget.action === 'skip') {
+        const response = buildBudgetSkipResponse(remainingBudget.error, model, provider);
+        aggregateUsage = accumulateUsage(aggregateUsage, response.usage);
+        workingMessages = [...workingMessages, buildAssistantMessage(response)];
+        yield { delta: response.text, type: 'text-delta' };
+        yield {
+          finishReason: response.finishReason,
+          type: 'done',
+          usage: aggregateUsage,
+        };
+        return {
+          messages: workingMessages,
+          model: response.model,
+          provider: response.provider,
+          usage: aggregateUsage,
+        };
+      }
+
       const requestOptions = this.buildRequestOptions(
         workingMessages,
         signal,
         toolRounds,
-        this.resolveRemainingBudgetUsd(aggregateUsage.costUSD),
+        remainingBudget.budgetUsd,
       );
       model = requestOptions.model ?? model;
       provider = requestOptions.provider ?? provider;
@@ -644,6 +703,7 @@ export class Conversation {
     toolRound: number = 0,
     budgetUsd: number | undefined = undefined,
   ): {
+    budgetExceededAction?: BudgetExceededAction;
     budgetUsd?: number;
     maxTokens?: number;
     messages: CanonicalMessage[];
@@ -659,6 +719,7 @@ export class Conversation {
     const toolChoice = resolveToolChoiceForRound(this.toolChoice, toolRound);
 
     return {
+      budgetExceededAction: this.budgetExceededAction,
       ...(budgetUsd !== undefined ? { budgetUsd } : {}),
       messages,
       ...(this.maxTokens !== undefined ? { maxTokens: this.maxTokens } : {}),
@@ -673,17 +734,27 @@ export class Conversation {
     };
   }
 
-  private resolveRemainingBudgetUsd(executionCostUSD: number): number | undefined {
+  private resolveRemainingBudgetDecision(
+    executionCostUSD: number,
+  ):
+    | { action: 'continue'; budgetUsd: number | undefined }
+    | { action: 'skip'; error: BudgetExceededError } {
     if (this.budgetUsd === undefined) {
-      return undefined;
+      return {
+        action: 'continue',
+        budgetUsd: undefined,
+      };
     }
 
     const remainingBudgetUsd = this.budgetUsd - (this.totalCostUSD + executionCostUSD);
     if (remainingBudgetUsd > 0) {
-      return remainingBudgetUsd;
+      return {
+        action: 'continue',
+        budgetUsd: remainingBudgetUsd,
+      };
     }
 
-    throw new BudgetExceededError(
+    const error = new BudgetExceededError(
       `Conversation budget of ${formatCost(this.budgetUsd)} has been exhausted.`,
       {
         details: {
@@ -694,6 +765,23 @@ export class Conversation {
         ...(this.provider !== undefined ? { provider: this.provider } : {}),
       },
     );
+
+    if (this.budgetExceededAction === 'warn') {
+      this.onWarning(error.message);
+      return {
+        action: 'continue',
+        budgetUsd: undefined,
+      };
+    }
+
+    if (this.budgetExceededAction === 'skip') {
+      return {
+        action: 'skip',
+        error,
+      };
+    }
+
+    throw error;
   }
 }
 
@@ -829,6 +917,27 @@ function createEmptyUsage(): UsageMetrics {
     costUSD: 0,
     inputTokens: 0,
     outputTokens: 0,
+  };
+}
+
+function buildBudgetSkipResponse(
+  error: BudgetExceededError,
+  model: string | undefined,
+  provider: CanonicalProvider | undefined,
+): CanonicalResponse {
+  return {
+    content: [{ text: error.message, type: 'text' }],
+    finishReason: 'error',
+    model: model ?? 'budget-skip',
+    provider: provider ?? 'mock',
+    raw: {
+      reason: 'budget_exceeded',
+      skipped: true,
+      ...(error.details ? { details: error.details } : {}),
+    },
+    text: error.message,
+    toolCalls: [],
+    usage: createEmptyUsage(),
   };
 }
 
@@ -1001,22 +1110,4 @@ async function executeToolWithGuards(
     }
     removeAbortListener?.();
   }
-}
-
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (!signal?.aborted) {
-    return;
-  }
-
-  throw buildAbortError(signal.reason);
-}
-
-function buildAbortError(reason: unknown): Error {
-  if (reason instanceof Error) {
-    return reason;
-  }
-
-  const error = new Error('The operation was aborted.');
-  error.name = 'AbortError';
-  return error;
 }

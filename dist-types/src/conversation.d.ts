@@ -1,9 +1,10 @@
 import type { ContextManager } from './context-manager.js';
 import type { SessionStore } from './session-store.js';
-import type { CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, StreamChunk } from './types.js';
+import type { BudgetExceededAction, CancelableStream, CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, StreamChunk } from './types.js';
 /** Minimal client contract consumed by `Conversation`. */
 export interface ConversationClient {
     complete(options: {
+        budgetExceededAction?: BudgetExceededAction;
         budgetUsd?: number;
         maxTokens?: number;
         messages: CanonicalMessage[];
@@ -17,6 +18,7 @@ export interface ConversationClient {
         tools?: CanonicalTool[];
     }): Promise<CanonicalResponse>;
     stream(options: {
+        budgetExceededAction?: BudgetExceededAction;
         budgetUsd?: number;
         maxTokens?: number;
         messages: CanonicalMessage[];
@@ -54,6 +56,7 @@ export interface ConversationSnapshot {
 }
 /** Configuration for a new or restored `Conversation`. */
 export interface ConversationOptions {
+    budgetExceededAction?: BudgetExceededAction;
     budgetUsd?: number;
     contextManager?: ContextManager;
     maxToolRounds?: number;
@@ -69,6 +72,7 @@ export interface ConversationOptions {
     toolExecutionTimeoutMs?: number;
     toolChoice?: CanonicalToolChoice;
     tools?: CanonicalTool[];
+    onWarning?: (message: string) => void;
 }
 /**
  * Stateful conversation wrapper that handles history, tool execution,
@@ -85,6 +89,7 @@ export interface ConversationOptions {
  * ```
  */
 export declare class Conversation {
+    private readonly budgetExceededAction;
     private readonly client;
     private readonly contextManager;
     private createdAt;
@@ -102,6 +107,7 @@ export declare class Conversation {
     private readonly toolExecutionTimeoutMs;
     private readonly toolChoice;
     private readonly tools;
+    private readonly onWarning;
     private totalCachedTokens;
     private totalCostUSD;
     private totalInputTokens;
@@ -125,7 +131,7 @@ export declare class Conversation {
     /** Streams a user turn and commits state when the final `done` chunk arrives. */
     sendStream(input: CanonicalMessage['content'], options?: {
         signal?: AbortSignal;
-    }): AsyncGenerator<StreamChunk, void, void>;
+    }): CancelableStream<StreamChunk>;
     /** Clears non-system history while preserving running totals. */
     clear(): void;
     /** Serializes the conversation for storage or transport. */
@@ -148,6 +154,6 @@ export declare class Conversation {
     private persist;
     private buildContextManagerContext;
     private buildRequestOptions;
-    private resolveRemainingBudgetUsd;
+    private resolveRemainingBudgetDecision;
 }
 //# sourceMappingURL=conversation.d.ts.map

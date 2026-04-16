@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { anthropicCountTokens, estimateMessageTokens, estimateTokens, geminiCountTokens, } from '../src/utils/token-estimator.js';
+import { anthropicCountTokens, estimateMessageTokens, estimateTokens, geminiCountTokens, openaiCountTokens, } from '../src/utils/token-estimator.js';
 describe('token estimator', () => {
     it('estimates tokens from text', () => {
         expect(estimateTokens('1234567')).toBe(2);
@@ -71,6 +71,37 @@ describe('token estimator', () => {
         expect(count).toBe(456);
         expect(fetchImplementation).toHaveBeenCalledTimes(1);
         expect(geminiCalls[0]?.[1]?.signal).toBe(signal);
+    });
+    it('counts OpenAI chat messages with the tokenizer wrapper', async () => {
+        const baseCount = await openaiCountTokens({
+            messages: [{ content: 'Hello world', role: 'user' }],
+            model: 'gpt-4o',
+        });
+        const withSystemCount = await openaiCountTokens({
+            messages: [{ content: 'Hello world', role: 'user' }],
+            model: 'gpt-4o',
+            system: 'Be concise.',
+            tools: [
+                {
+                    description: 'Look up weather',
+                    name: 'lookup_weather',
+                    parameters: { type: 'object' },
+                },
+            ],
+        });
+        expect(baseCount).toBeGreaterThan(0);
+        expect(withSystemCount).toBeGreaterThan(baseCount);
+    });
+    it('rejects OpenAI exact token counting for unsupported multimodal parts', async () => {
+        await expect(openaiCountTokens({
+            messages: [
+                {
+                    content: [{ type: 'image_url', url: 'https://example.com/image.png' }],
+                    role: 'user',
+                },
+            ],
+            model: 'gpt-4o',
+        })).rejects.toThrow('OpenAI token counting only supports text and tool message parts.');
     });
     it('throws when token count endpoints fail', async () => {
         const anthropicFetch = vi.fn(async () => new Response('', { status: 500 }));

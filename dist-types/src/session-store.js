@@ -1,4 +1,5 @@
-import { Pool } from 'pg';
+import { loadPgPoolConstructor } from './node-pg-loader.js';
+import { getEnvironmentVariable } from './runtime.js';
 /** Simple in-process store intended for tests and single-process development. */
 export class InMemorySessionStore {
     now;
@@ -71,11 +72,10 @@ export class PostgresSessionStore {
         this.tableName = options.tableName ?? 'llm_sessions';
     }
     static fromEnv(options = {}) {
+        const connectionString = getEnvironmentVariable('DATABASE_URL');
         return new PostgresSessionStore({
             ...options,
-            ...(process.env.DATABASE_URL
-                ? { connectionString: process.env.DATABASE_URL }
-                : {}),
+            ...(connectionString ? { connectionString } : {}),
         });
     }
     async close() {
@@ -88,11 +88,13 @@ export class PostgresSessionStore {
     }
     async delete(sessionId, tenantId) {
         await this.ensureSchema();
-        await this.getPool().query(`DELETE FROM ${this.qualifiedTableName()} WHERE tenant_id = $1 AND session_id = $2`, [normalizeTenantId(tenantId), sessionId]);
+        const pool = await this.getPool();
+        await pool.query(`DELETE FROM ${this.qualifiedTableName()} WHERE tenant_id = $1 AND session_id = $2`, [normalizeTenantId(tenantId), sessionId]);
     }
     async get(sessionId, tenantId) {
         await this.ensureSchema();
-        const result = await this.getPool().query(`SELECT session_id, tenant_id, snapshot, message_count, model, provider, total_cost_usd, created_at, updated_at
+        const pool = await this.getPool();
+        const result = await pool.query(`SELECT session_id, tenant_id, snapshot, message_count, model, provider, total_cost_usd, created_at, updated_at
        FROM ${this.qualifiedTableName()}
        WHERE tenant_id = $1 AND session_id = $2
        LIMIT 1`, [normalizeTenantId(tenantId), sessionId]);
@@ -105,7 +107,8 @@ export class PostgresSessionStore {
     async list(options = {}) {
         await this.ensureSchema();
         const filterByTenant = options.tenantId !== undefined;
-        const result = await this.getPool().query(`SELECT session_id, tenant_id, snapshot, message_count, model, provider, total_cost_usd, created_at, updated_at
+        const pool = await this.getPool();
+        const result = await pool.query(`SELECT session_id, tenant_id, snapshot, message_count, model, provider, total_cost_usd, created_at, updated_at
        FROM ${this.qualifiedTableName()}
        ${filterByTenant ? 'WHERE tenant_id = $1' : ''}
        ORDER BY updated_at DESC`, filterByTenant ? [normalizeTenantId(options.tenantId)] : []);
@@ -115,7 +118,8 @@ export class PostgresSessionStore {
         await this.ensureSchema();
         const timestamp = this.now().toISOString();
         const tenantId = normalizeTenantId(options.tenantId);
-        const result = await this.getPool().query(`INSERT INTO ${this.qualifiedTableName()} (
+        const pool = await this.getPool();
+        const result = await pool.query(`INSERT INTO ${this.qualifiedTableName()} (
          tenant_id,
          session_id,
          snapshot,
@@ -161,17 +165,18 @@ export class PostgresSessionStore {
     qualifiedTableName() {
         return `${quoteIdentifier(this.schemaName)}.${quoteIdentifier(this.tableName)}`;
     }
-    getPool() {
+    async getPool() {
         if (this.pool) {
             return this.pool;
         }
         if (this.internalPool) {
             return this.internalPool;
         }
-        const connectionString = this.connectionString ?? process.env.DATABASE_URL;
+        const connectionString = this.connectionString ?? getEnvironmentVariable('DATABASE_URL');
         if (!connectionString) {
             throw new Error('DATABASE_URL is required for PostgresSessionStore. Set it in .env or pass connectionString explicitly.');
         }
+        const Pool = await loadPgPoolConstructor();
         const pool = new Pool({
             connectionString,
         });
@@ -179,7 +184,7 @@ export class PostgresSessionStore {
         return pool;
     }
     async runEnsureSchema() {
-        const pool = this.getPool();
+        const pool = await this.getPool();
         const qualifiedTableName = this.qualifiedTableName();
         const updatedAtIndexName = quoteIdentifier(`${this.tableName}_tenant_updated_at_idx`);
         const snapshotIndexName = quoteIdentifier(`${this.tableName}_snapshot_gin_idx`);

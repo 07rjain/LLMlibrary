@@ -35,6 +35,27 @@ describe('LLMError hierarchy', () => {
     });
   });
 
+  it('redacts credentials when serialized', () => {
+    const error = new LLMError('Bearer sk-secret-value failed', {
+      cause: new Error('postgresql://user:password@example.test/app'),
+      details: {
+        authorization: 'Bearer sk-secret-value',
+        connectionString: 'postgresql://user:password@example.test/app',
+      },
+    });
+
+    expect(error.toJSON()).toMatchObject({
+      cause: expect.objectContaining({
+        message: 'postgresql://[REDACTED]@example.test/app',
+      }),
+      details: {
+        authorization: '[REDACTED]',
+        connectionString: '[REDACTED]',
+      },
+      message: 'Bearer [REDACTED] failed',
+    });
+  });
+
   it('exports typed subclasses', () => {
     expect(new AuthenticationError('auth')).toBeInstanceOf(LLMError);
     expect(new RateLimitError('rate')).toBeInstanceOf(LLMError);

@@ -1,4 +1,5 @@
 import { ProviderCapabilityError } from '../errors.js';
+import { isProductionRuntime } from '../runtime.js';
 
 import { defaultModelPrices } from './prices.js';
 
@@ -45,7 +46,7 @@ export class ModelRegistry {
       this.models.set(id, { ...model, id });
     }
 
-    if (options.emitStalenessWarning ?? process.env.NODE_ENV !== 'production') {
+    if (options.emitStalenessWarning ?? !isProductionRuntime()) {
       this.warnOnStalePrices();
     }
   }

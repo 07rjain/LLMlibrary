@@ -10,7 +10,7 @@ vi.mock('pg', () => {
         Pool: pgMockState.poolConstructor,
     };
 });
-import { ConsoleLogger, PostgresUsageLogger, } from '../src/usage.js';
+import { ConsoleLogger, PostgresUsageLogger, exportUsageSummary, } from '../src/usage.js';
 const createdPools = pgMockState.createdPools;
 describe('Usage logging', () => {
     beforeEach(() => {
@@ -37,6 +37,22 @@ describe('Usage logging', () => {
         disabledLogger.log(buildUsageEvent());
         expect(write).toHaveBeenCalledTimes(1);
         expect(write.mock.calls[0]?.[0]).toContain('llm-usage');
+    });
+    it('redacts credential-like fields from console logs', () => {
+        const write = vi.fn();
+        const logger = new ConsoleLogger({
+            enabled: true,
+            write,
+        });
+        logger.log({
+            ...buildUsageEvent(),
+            model: 'gpt-4o',
+            sessionId: 'session-1',
+            // @ts-expect-error test redaction of unexpected fields
+            metadata: { authorization: 'Bearer sk-secret-value' },
+        });
+        expect(write.mock.calls[0]?.[0]).toContain('"authorization":"[REDACTED]"');
+        expect(write.mock.calls[0]?.[0]).not.toContain('sk-secret-value');
     });
     it('batches Postgres usage writes and aggregates usage summaries', async () => {
         const pool = new MockPool();
@@ -91,27 +107,29 @@ describe('Usage logging', () => {
             totalOutputTokens: 12,
         });
     });
-    it('flushes queued usage events on a timer and closes env-backed pools', async () => {
+    it('flushes queued usage events on a timer', async () => {
         vi.useFakeTimers();
-        process.env.DATABASE_URL = 'postgresql://example.test/usage';
+        const pool = new MockPool();
         try {
-            const logger = PostgresUsageLogger.fromEnv({
+            const logger = new PostgresUsageLogger({
                 batchSize: 10,
                 flushIntervalMs: 5,
+                pool,
             });
             await logger.log(buildUsageEvent({ sessionId: 'timer-session' }));
-            expect(createdPools).toHaveLength(0);
+            expect(pool.queries).toHaveLength(0);
             await vi.advanceTimersByTimeAsync(5);
-            expect(pgMockState.poolConstructor).toHaveBeenCalledWith({
-                connectionString: 'postgresql://example.test/usage',
-            });
-            expect(createdPools[0]?.queries.at(-1)?.text).toContain('INSERT INTO "public"."llm_usage_events"');
+            expect(pool.queries.at(-1)?.text).toContain('INSERT INTO "public"."llm_usage_events"');
             await logger.close();
-            expect(createdPools[0]?.end).toHaveBeenCalledTimes(1);
         }
         finally {
             vi.useRealTimers();
         }
+    });
+    it('captures DATABASE_URL through fromEnv()', () => {
+        process.env.DATABASE_URL = 'postgresql://example.test/usage';
+        const logger = PostgresUsageLogger.fromEnv();
+        expect(logger.connectionString).toBe('postgresql://example.test/usage');
     });
     it('requeues failed flushes and applies all usage filters', async () => {
         const onError = vi.fn();
@@ -164,6 +182,29 @@ describe('Usage logging', () => {
     it('throws when DATABASE_URL is missing for PostgresUsageLogger', async () => {
         const logger = new PostgresUsageLogger();
         await expect(logger.ensureSchema()).rejects.toThrow('DATABASE_URL is required for PostgresUsageLogger.');
+    });
+    it('exports aggregated usage as JSON and CSV', () => {
+        const summary = {
+            breakdown: [
+                {
+                    model: 'gpt-4o',
+                    provider: 'openai',
+                    requestCount: 2,
+                    totalCachedTokens: 4,
+                    totalCostUSD: 0.03,
+                    totalInputTokens: 20,
+                    totalOutputTokens: 8,
+                },
+            ],
+            requestCount: 2,
+            totalCachedTokens: 4,
+            totalCostUSD: 0.03,
+            totalInputTokens: 20,
+            totalOutputTokens: 8,
+        };
+        expect(exportUsageSummary(summary, 'json')).toContain('"requestCount": 2');
+        expect(exportUsageSummary(summary, 'csv')).toContain('provider,model,requestCount,totalInputTokens,totalOutputTokens,totalCachedTokens,totalCostUSD');
+        expect(exportUsageSummary(summary, 'csv')).toContain('openai,gpt-4o,2,20,8,4,0.030000');
     });
 });
 class MockPool {

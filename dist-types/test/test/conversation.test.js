@@ -646,6 +646,55 @@ describe('Conversation', () => {
         await expect(conversation.send('Hi')).rejects.toBeInstanceOf(BudgetExceededError);
         expect(client.complete).not.toHaveBeenCalled();
     });
+    it('can warn and continue when the conversation budget is exhausted', async () => {
+        const onWarning = vi.fn();
+        const client = {
+            complete: vi.fn(async () => ({
+                content: [{ text: 'Still allowed.', type: 'text' }],
+                finishReason: 'stop',
+                model: 'gpt-4o',
+                provider: 'openai',
+                raw: {},
+                text: 'Still allowed.',
+                toolCalls: [],
+                usage: usage(4, 1, 0.01),
+            })),
+            stream: vi.fn(),
+        };
+        const conversation = new Conversation(client, {
+            budgetExceededAction: 'warn',
+            budgetUsd: 0,
+            model: 'gpt-4o',
+            onWarning,
+        });
+        await expect(conversation.send('Hi')).resolves.toMatchObject({
+            text: 'Still allowed.',
+        });
+        expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Conversation budget'));
+        expect(client.complete).toHaveBeenCalledWith(expect.objectContaining({
+            budgetExceededAction: 'warn',
+        }));
+    });
+    it('can skip provider execution when the conversation budget is exhausted', async () => {
+        const client = {
+            complete: vi.fn(),
+            stream: vi.fn(),
+        };
+        const conversation = new Conversation(client, {
+            budgetExceededAction: 'skip',
+            budgetUsd: 0,
+            model: 'gpt-4o',
+            provider: 'openai',
+        });
+        const response = await conversation.send('Hi');
+        expect(response.finishReason).toBe('error');
+        expect(response.text).toContain('Conversation budget');
+        expect(client.complete).not.toHaveBeenCalled();
+        expect(conversation.history.at(-1)).toEqual({
+            content: 'Conversation budget of $0.00 has been exhausted.',
+            role: 'assistant',
+        });
+    });
     it('throws MaxToolRoundsError when the model keeps requesting tools', async () => {
         const conversation = new Conversation({
             complete: vi
@@ -1072,6 +1121,24 @@ describe('Conversation', () => {
         expect(execute).toHaveBeenCalledWith({ result: 'Berlin' }, expect.objectContaining({
             sessionId: conversation.id,
         }));
+    });
+    it('exposes a cancel() contract for sendStream()', async () => {
+        const conversation = new Conversation({
+            complete: vi.fn(),
+            stream: vi.fn(({ signal }) => (async function* () {
+                await new Promise((_, reject) => {
+                    signal?.addEventListener('abort', () => {
+                        reject(signal.reason ?? new Error('aborted'));
+                    }, { once: true });
+                });
+                yield* [];
+            })()),
+        }, { model: 'gpt-4o' });
+        const stream = conversation.sendStream('Cancel me');
+        const iterator = stream[Symbol.asyncIterator]();
+        const nextChunk = iterator.next();
+        stream.cancel(new Error('conversation stream cancelled'));
+        await expect(nextChunk).rejects.toThrow('conversation stream cancelled');
     });
     it('returns structured errors when a called tool has no execute callback', async () => {
         const complete = vi

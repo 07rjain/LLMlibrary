@@ -24,3 +24,5 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm sizecheck
+      - run: pnpm depcheck
+      - run: pnpm edgecheck

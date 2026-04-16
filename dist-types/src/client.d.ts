@@ -4,12 +4,13 @@ import type { ModelRegistryOptions, ModelPriceOverrides } from './models/index.j
 import type { ConversationOptions, ConversationSnapshot } from './conversation.js';
 import type { SessionStore } from './session-store.js';
 import type { ModelRouter } from './router.js';
-import type { CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, StreamChunk } from './types.js';
-import type { UsageLogger, UsageQuery, UsageSummary } from './usage.js';
+import type { CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, BudgetExceededAction, CancelableStream, StreamChunk } from './types.js';
+import type { UsageExportFormat, UsageLogger, UsageQuery, UsageSummary } from './usage.js';
 import type { RetryOptions } from './utils/retry.js';
 /** Constructor options for `LLMClient`. */
 export interface LLMClientOptions {
     anthropicApiKey?: string;
+    budgetExceededAction?: BudgetExceededAction;
     defaultModel?: string;
     defaultProvider?: CanonicalProvider;
     fetchImplementation?: typeof fetch;
@@ -17,6 +18,7 @@ export interface LLMClientOptions {
     modelRegistry?: ModelRegistry;
     modelRegistryOptions?: ModelRegistryOptions;
     modelRouter?: ModelRouter;
+    onWarning?: (message: string) => void;
     openaiApiKey?: string;
     openaiOrganization?: string;
     openaiProject?: string;
@@ -27,6 +29,7 @@ export interface LLMClientOptions {
 /** Canonical request options shared by `complete()` and `stream()`. */
 export interface LLMRequestOptions {
     botId?: string;
+    budgetExceededAction?: BudgetExceededAction;
     budgetUsd?: number;
     maxTokens?: number;
     messages: CanonicalMessage[];
@@ -70,11 +73,13 @@ export interface MockLLMClientOptions extends Omit<LLMClientOptions, 'anthropicA
  */
 export declare class LLMClient {
     private readonly anthropicAdapter;
+    private readonly budgetExceededAction;
     private readonly defaultModel;
     private readonly defaultProvider;
     private readonly geminiAdapter;
     private readonly modelRegistry;
     private readonly modelRouter;
+    private readonly onWarning;
     private readonly openaiAdapter;
     private readonly sessionStore;
     private readonly usageLogger;
@@ -94,7 +99,7 @@ export declare class LLMClient {
     /** Executes a single non-streaming completion request. */
     complete(options: LLMRequestOptions): Promise<CanonicalResponse>;
     /** Executes a streaming completion request and yields canonical chunks. */
-    stream(options: LLMRequestOptions): AsyncIterable<StreamChunk>;
+    stream(options: LLMRequestOptions): CancelableStream<StreamChunk>;
     /**
      * Creates or restores a conversation, automatically hydrating from the
      * configured session store when a matching `sessionId` exists.
@@ -104,6 +109,8 @@ export declare class LLMClient {
     updatePrices(overrides: ModelPriceOverrides): void;
     /** Returns aggregated usage from the configured usage logger. */
     getUsage(query?: UsageQuery): Promise<UsageSummary>;
+    /** Returns aggregated usage serialized as JSON or CSV. */
+    exportUsage(format: UsageExportFormat, query?: UsageQuery): Promise<string>;
     /** Returns the session store configured on this client, if any. */
     getSessionStore(): SessionStore<ConversationSnapshot> | undefined;
     private getAnthropicAdapter;
@@ -115,7 +122,8 @@ export declare class LLMClient {
     private resolveRequestPlan;
     private resolveRoute;
     private buildRouterContext;
-    private assertBudget;
+    private resolveBudgetExceededError;
+    private handleBudgetExceededAction;
     private logUsageEvent;
     private streamWithFallback;
 }

@@ -13,6 +13,7 @@ export {
   estimateMessageTokens,
   estimateTokens,
   geminiCountTokens,
+  openaiCountTokens,
 } from './token-estimator.js';
 
 export type {
@@ -30,4 +31,5 @@ export type {
 export type {
   AnthropicCountTokensOptions,
   GeminiCountTokensOptions,
+  OpenAICountTokensOptions,
 } from './token-estimator.js';

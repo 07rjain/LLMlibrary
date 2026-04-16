@@ -26,7 +26,7 @@ This file is for a separate testing/validation agent. Use [todo.md](/Users/risha
     - `T-15.1` to `T-15.6` canonical stream chunking, abort-signal support, and tool pause/execute/resume complete
     - `T-16.1` to `T-16.5` model routing, fallback chains, deterministic weighted A/B routing, and routing decision logging complete
   - Usage/cost tracking:
-    - `T-17.1` to `T-17.6` usage logging, Postgres aggregation, per-call budget guards, per-session budget forwarding, and `client.getUsage()` complete
+    - `T-17.1` to `T-17.6` usage logging, Postgres aggregation, per-call budget guards, per-session budget forwarding, `client.getUsage()`, and `client.exportUsage()` complete
   - Session API:
     - `T-19.1` to `T-19.10` session lifecycle endpoints, SSE streaming, tenant middleware, and request-context hooks complete
     - `T-20.1` to `T-20.5` Responses-style mapping documentation complete in [SESSION_API.md](/Users/rishabh/Desktop/tryandtested/chatbot101/SESSION_API.md)
@@ -35,7 +35,10 @@ This file is for a separate testing/validation agent. Use [todo.md](/Users/risha
   - Phase 7 follow-up:
     - `T-21.1` to `T-21.7` complete, including provider mock-server coverage, cross-tenant isolation tests, cost-accuracy coverage, Session API lifecycle inspection, and `LIVE_TESTS=1` live smoke tests
     - `T-22.1` to `T-22.6` complete, including JSDoc, Typedoc, release docs workflow, README docs links, provider comparison, migration guide, and changelog
-    - `T-23.1` to `T-23.4` complete, including size checks and performance scripts for request overhead, 10,000-turn memory, and 100-session concurrency
+    - `T-23.1` to `T-23.4` complete, including size checks and performance scripts for request overhead, first-token streaming latency, 10,000-turn memory, and 100-session concurrency
+  - PRD addendum follow-up:
+    - OpenAI exact token counting, explicit cancelable streams, budget breach actions, no-credential serialization/logging, Edge-safe core imports, dependency-count CI, price-staleness CI, and usage export are complete
+    - Launch-scope and roadmap decisions are documented in [docs/PRD_DECISIONS.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/PRD_DECISIONS.md), [docs/COST_AND_PRICING.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/COST_AND_PRICING.md), and [docs/ROADMAP.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/ROADMAP.md)
 - The user has populated `.env` locally with API keys. Do not echo values in logs or reports.
 - The user has also populated `DATABASE_URL` locally for Postgres/Neon-backed session persistence.
 - Latest verified commands:
@@ -44,9 +47,13 @@ This file is for a separate testing/validation agent. Use [todo.md](/Users/risha
   - `pnpm test`
   - `pnpm build`
   - `pnpm sizecheck`
+  - `pnpm depcheck`
+  - `pnpm edgecheck`
   - `pnpm bench:complete`
+  - `pnpm bench:first-token`
   - `pnpm bench:memory`
   - `pnpm bench:concurrency`
+  - `pnpm pricecheck`
   - `pnpm docs:api`
   - `pnpm test:live` is available for opt-in real-provider validation when run with `LIVE_TESTS=1`
 - Live smoke verified locally after export-loading `.env`:
@@ -57,9 +64,9 @@ This file is for a separate testing/validation agent. Use [todo.md](/Users/risha
   - End-to-end `LLMClient.fromEnv()` auto-persistence and restore smoke passed against OpenAI plus `DATABASE_URL`
   - End-to-end `PostgresUsageLogger` insert plus `client.getUsage()` aggregation smoke passed against OpenAI plus `DATABASE_URL`
 - Latest verified test count and coverage:
-  - `170` passing tests, plus `4` opt-in live tests skipped unless `LIVE_TESTS=1`
+  - `342` passing tests, plus `4` opt-in live tests skipped unless `LIVE_TESTS=1`
   - `92.40%` statements / lines
-  - `86.26%` branches
+  - `86.38%` branches
   - `96.80%` functions
 
 ## Key Files
@@ -101,9 +108,16 @@ This file is for a separate testing/validation agent. Use [todo.md](/Users/risha
 - Docs and perf tooling:
   - [docs/PROVIDER_COMPARISON.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/PROVIDER_COMPARISON.md)
   - [docs/MIGRATION_GUIDE.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/MIGRATION_GUIDE.md)
+  - [docs/PRD_DECISIONS.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/PRD_DECISIONS.md)
+  - [docs/COST_AND_PRICING.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/COST_AND_PRICING.md)
+  - [docs/ROADMAP.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/ROADMAP.md)
   - [CHANGELOG.md](/Users/rishabh/Desktop/tryandtested/chatbot101/CHANGELOG.md)
   - [scripts/check-bundle-size.mjs](/Users/rishabh/Desktop/tryandtested/chatbot101/scripts/check-bundle-size.mjs)
+  - [scripts/check-runtime-deps.mjs](/Users/rishabh/Desktop/tryandtested/chatbot101/scripts/check-runtime-deps.mjs)
+  - [scripts/check-edge-compat.mjs](/Users/rishabh/Desktop/tryandtested/chatbot101/scripts/check-edge-compat.mjs)
+  - [scripts/check-price-staleness.mjs](/Users/rishabh/Desktop/tryandtested/chatbot101/scripts/check-price-staleness.mjs)
   - [scripts/benchmark-complete-overhead.mjs](/Users/rishabh/Desktop/tryandtested/chatbot101/scripts/benchmark-complete-overhead.mjs)
+  - [scripts/benchmark-first-token-latency.mjs](/Users/rishabh/Desktop/tryandtested/chatbot101/scripts/benchmark-first-token-latency.mjs)
   - [scripts/check-conversation-memory.mjs](/Users/rishabh/Desktop/tryandtested/chatbot101/scripts/check-conversation-memory.mjs)
   - [scripts/check-concurrent-sessions.mjs](/Users/rishabh/Desktop/tryandtested/chatbot101/scripts/check-concurrent-sessions.mjs)
 
@@ -117,9 +131,13 @@ pnpm lint
 pnpm test
 pnpm build
 pnpm sizecheck
+pnpm depcheck
+pnpm edgecheck
 pnpm bench:complete
+pnpm bench:first-token
 pnpm bench:memory
 pnpm bench:concurrency
+pnpm pricecheck
 pnpm docs:api
 ```
 
@@ -186,8 +204,10 @@ Only run these after the user fills `.env`.
 - Send one completion and confirm a usage row is inserted
 - Run `client.getUsage({ sessionId, tenantId })` and confirm the aggregate matches the live request
 - Confirm `ConsoleLogger` is development-only and that logger failures do not break successful completions
-- Confirm per-call budget guards reject over-budget requests before provider dispatch
+- Confirm per-call budget guards support `throw`, `warn`, and `skip` before provider dispatch
+- Confirm `client.exportUsage('json' | 'csv')` serializes the aggregate shape correctly
 - Confirm streaming fallback happens only before the first user-visible chunk is emitted
+- Confirm `stream.cancel()` and `conversation.sendStream().cancel()` abort cleanly
 
 ### Session API
 
@@ -212,15 +232,13 @@ Only run these after the user fills `.env`.
 
 ## Remaining Task Areas
 
-These are still open in `todo.md` and should not be marked complete by the test agent:
-
-- PRD addendum scope beyond the current implementation baseline
+No implementation tasks remain open in `todo.md`; the only remaining items are documented roadmap/deferred-scope notes.
 
 ## What To Report Back
 
 The testing agent should report:
 
-1. Whether `typecheck`, `lint`, `test`, `build`, `sizecheck`, `bench:complete`, `bench:memory`, `bench:concurrency`, and `docs:api` pass unchanged.
+1. Whether `typecheck`, `lint`, `test`, `build`, `sizecheck`, `depcheck`, `edgecheck`, `bench:complete`, `bench:first-token`, `bench:memory`, `bench:concurrency`, `pricecheck`, and `docs:api` pass unchanged.
 2. Whether Anthropic, OpenAI, Gemini, Postgres/Neon session persistence, and Postgres/Neon usage logging live smoke tests pass with the locally populated `.env`.
 3. Any mismatches between `todo.md` status and actual code behavior.
 4. Any missing environment variables, flaky tests, adapter regressions, or session restore issues.

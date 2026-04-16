@@ -65,10 +65,14 @@
     "build": "tsup",
     "bench:complete": "node ./scripts/benchmark-complete-overhead.mjs",
     "bench:concurrency": "node ./scripts/check-concurrent-sessions.mjs",
+    "bench:first-token": "node ./scripts/benchmark-first-token-latency.mjs",
     "bench:memory": "node ./scripts/check-conversation-memory.mjs",
+    "depcheck": "node ./scripts/check-runtime-deps.mjs",
+    "edgecheck": "node ./scripts/check-edge-compat.mjs",
     "lint": "eslint .",
     "docs:api": "typedoc --options typedoc.json",
     "format": "prettier --write .",
+    "pricecheck": "node ./scripts/check-price-staleness.mjs",
     "sizecheck": "node ./scripts/check-bundle-size.mjs",
     "test": "vitest run --coverage",
     "test:live": "LIVE_TESTS=1 vitest run test/live.e2e.test.ts",
@@ -92,6 +96,7 @@
     "vitest": "^3.1.2"
   },
   "dependencies": {
+    "js-tiktoken": "^1.0.21",
     "pg": "^8.20.0"
   }
 }

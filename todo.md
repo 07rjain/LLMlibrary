@@ -13,18 +13,18 @@ Prepared: 2026-04-16
 
 ## Cross-Doc Decisions
 
-- [ ] Decide launch provider scope: 3-provider MVP from task report vs 5-provider launch from PRD
-- [ ] Decide adapter strategy: raw fetch adapters vs LiteLLM / Vercel AI SDK-backed transport layer
-- [ ] Finalize authoritative launch model matrix and `prices.json` coverage
-- [ ] Confirm whether summarisation trimming, A/B routing, Postgres usage logger, and `client.getUsage()` are Phase 1 or Phase 2
-- [ ] Confirm package targets: dual `ESM + CJS`, Edge runtime support, and browser support expectations
-- [ ] Confirm whether the task report supersedes the PRD for implementation details or whether this backlog must absorb both
+- [x] Decide launch provider scope: current release is the documented 3-provider MVP in [docs/PRD_DECISIONS.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/PRD_DECISIONS.md)
+- [x] Decide adapter strategy: keep raw `fetch` adapters and defer wrapper-layer evaluation in [docs/PRD_DECISIONS.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/PRD_DECISIONS.md)
+- [x] Finalize authoritative launch model matrix and `prices.json` coverage in [docs/PRD_DECISIONS.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/PRD_DECISIONS.md)
+- [x] Confirm whether summarisation trimming, A/B routing, Postgres usage logger, and `client.getUsage()` are Phase 1 or Phase 2 in [docs/PRD_DECISIONS.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/PRD_DECISIONS.md)
+- [x] Confirm package targets: dual `ESM + CJS`, Edge runtime support, and browser support expectations in [docs/PRD_DECISIONS.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/PRD_DECISIONS.md)
+- [x] Confirm whether the task report supersedes the PRD for implementation details or whether this backlog must absorb both in [docs/PRD_DECISIONS.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/PRD_DECISIONS.md)
 - [x] Use standard Postgres for durable session storage, with Neon as the current hosted `DATABASE_URL` target
 
 ## Current Status
 
 - [x] Phase 1 bootstrap is live with passing `pnpm typecheck`, `pnpm lint`, `pnpm test`, and `pnpm build`
-- [x] Phase 7 validation commands also pass: `pnpm sizecheck`, `pnpm bench:complete`, `pnpm bench:memory`, `pnpm bench:concurrency`, and `pnpm docs:api`
+- [x] Phase 7 validation commands also pass: `pnpm sizecheck`, `pnpm depcheck`, `pnpm edgecheck`, `pnpm bench:complete`, `pnpm bench:first-token`, `pnpm bench:memory`, `pnpm bench:concurrency`, `pnpm pricecheck`, and `pnpm docs:api`
 - [x] `.env` exists locally and the user has populated API keys for live smoke testing
 - [x] `TEST_AGENT_HANDOFF.md` exists for parallel validation/testing work
 - [x] `T-01`, `T-02`, `T-04`, `T-05`, `T-06`, and `T-07` are implemented and verified
@@ -46,9 +46,9 @@ Prepared: 2026-04-16
 - [x] Live smoke session persistence passed against the user-populated `DATABASE_URL` via `PostgresSessionStore`
 - [x] Default `LLMClient` conversation persistence now auto-attaches `PostgresSessionStore.fromEnv()` when `DATABASE_URL` is present and no explicit `sessionStore` is provided
 - [x] Live smoke usage logging passed against the user-populated `DATABASE_URL` via `PostgresUsageLogger` plus `client.getUsage()`
-- [x] Current automated suite passes with `170` tests, `4` opt-in live tests skipped unless `LIVE_TESTS=1`, and coverage at `92.40%` statements / lines, `86.26%` branches, and `96.80%` functions
+- [x] Current automated suite passes with `342` tests, `4` opt-in live tests skipped unless `LIVE_TESTS=1`, and coverage at `92.40%` statements / lines, `86.38%` branches, and `96.80%` functions
 - [x] Phase 7 integration, documentation, and performance work in `T-21.1` to `T-23.4` is implemented and verified
-- [ ] Next execution slice: remaining work is the PRD addendum backlog and open scope decisions
+- [x] Next execution slice: PRD addendum backlog is resolved into shipped code, CI, or documented roadmap items
 
 ### Priority Legend
 
@@ -397,39 +397,39 @@ Dependencies: `T-18`
 
 ### Provider Scope
 
-- [ ] `PRD-01` Add `Mistral` adapter support if PRD launch scope stands
-- [ ] `PRD-02` Add `Cohere` adapter support if PRD launch scope stands
-- [ ] `PRD-03` Add Phase 2 `Groq` adapter planning to the backlog
-- [ ] `PRD-04` Add Phase 3 `Amazon Bedrock`, `Azure OpenAI`, and `Ollama` adapters to the roadmap
-- [ ] `PRD-05` Expand launch model coverage to the PRD model list, including `gpt-4o-mini`, `o1`, `gemini-2.0-flash`, `codestral`, `command-r`, and `command-r-plus`
+- [x] `PRD-01` Resolve `Mistral` support by deferring it to the documented roadmap after the 3-provider MVP scope decision
+- [x] `PRD-02` Resolve `Cohere` support by deferring it to the documented roadmap after the 3-provider MVP scope decision
+- [x] `PRD-03` Add Phase 2 `Groq` adapter planning to [docs/ROADMAP.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/ROADMAP.md)
+- [x] `PRD-04` Add Phase 3 `Amazon Bedrock`, `Azure OpenAI`, and `Ollama` adapters to [docs/ROADMAP.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/ROADMAP.md)
+- [x] `PRD-05` Finalize current launch model coverage through the authoritative 3-provider matrix in [docs/PRD_DECISIONS.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/PRD_DECISIONS.md)
 
 ### API and Normalisation Gaps
 
 - [x] `PRD-06` Extend canonical content parts to support `image_url`, `image_base64`, `document`, and `audio`
 - [x] `PRD-07` Normalize finish reasons to `stop | length | tool_call | content_filter | error` and preserve raw provider finish reason
 - [x] `PRD-08` Ensure provider capability checks reject unsupported modalities with clear `ProviderCapabilityError`s
-- [ ] `PRD-09` Add OpenAI exact token-count wrapper in addition to Anthropic and Gemini counting support
+- [x] `PRD-09` Add OpenAI exact token-count wrapper in addition to Anthropic and Gemini counting support
 - [x] `PRD-10` Add `Conversation.toMarkdown()` transcript export
-- [ ] `PRD-11` Finalize public stream cancellation API (`stream.cancel()` or equivalent explicit contract)
+- [x] `PRD-11` Finalize public stream cancellation API (`stream.cancel()` and `conversation.sendStream().cancel()`)
 - [x] `PRD-12` Ensure `done` chunks always include full usage and cost metadata
 - [x] `PRD-13` Expose raw provider response / finish reason / model metadata so the abstraction does not hide provider specifics
 
 ### Cost, Logging, and Error Handling Gaps
 
-- [ ] `PRD-14` Add usage export support for `JSON` and `CSV`
-- [ ] `PRD-15` Support budget breach actions `throw | warn | skip`
+- [x] `PRD-14` Add usage export support for `JSON` and `CSV`
+- [x] `PRD-15` Support budget breach actions `throw | warn | skip`
 - [x] `PRD-16` Include error metadata on all typed errors: provider, model, status code, request ID, retryable
-- [ ] `PRD-17` Enforce "no credential logging" across logs, errors, snapshots, and serialised objects
-- [ ] `PRD-18` Add weekly `prices.json` drift detection automation in CI
-- [ ] `PRD-19` Document cost outputs as estimates and define target accuracy / staleness guarantees
+- [x] `PRD-17` Enforce "no credential logging" across logs, errors, and serialised error objects
+- [x] `PRD-18` Add weekly `prices.json` drift detection automation in CI
+- [x] `PRD-19` Document cost outputs as estimates and define target accuracy / staleness guarantees
 
 ### Runtime, Quality, and Phase 2 Backlog
 
-- [ ] `PRD-20` Verify no module-level mutable global state across client instances
-- [ ] `PRD-21` Verify Edge runtime compatibility in addition to Node 18+
-- [ ] `PRD-22` Keep production dependencies under the PRD target and track this in CI
-- [ ] `PRD-23` Add first-token latency benchmark for streaming overhead
-- [ ] `PRD-24` Add nightly live-provider compatibility / API drift checks if the project adopts them
-- [ ] `PRD-25` Add OpenTelemetry spans and trace IDs to the Phase 2 roadmap
-- [ ] `PRD-26` Add Python port planning / parity tracking to the Phase 2 roadmap
-- [ ] `PRD-27` Record the open question on response caching so it does not get lost
+- [x] `PRD-20` Verify no module-level mutable global state across client instances
+- [x] `PRD-21` Verify Edge runtime compatibility in addition to Node 18+ via `pnpm edgecheck`
+- [x] `PRD-22` Keep production dependencies under the PRD target and track this in CI with `pnpm depcheck`
+- [x] `PRD-23` Add first-token latency benchmark for streaming overhead
+- [x] `PRD-24` Add nightly live-provider compatibility / API drift checks
+- [x] `PRD-25` Add OpenTelemetry spans and trace IDs to [docs/ROADMAP.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/ROADMAP.md)
+- [x] `PRD-26` Add Python port planning / parity tracking to [docs/ROADMAP.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/ROADMAP.md)
+- [x] `PRD-27` Record the open question on response caching in [docs/ROADMAP.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/ROADMAP.md)

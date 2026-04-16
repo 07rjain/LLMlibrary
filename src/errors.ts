@@ -1,3 +1,5 @@
+import { sanitizeForLogging } from './redaction.js';
+
 import type { CanonicalProvider } from './types.js';
 
 /** Metadata attached to typed LLM errors. */
@@ -36,9 +38,9 @@ export class LLMError extends Error {
 
   toJSON(): Record<string, unknown> {
     return {
-      cause: this.cause,
-      details: this.details,
-      message: this.message,
+      cause: sanitizeForLogging(this.cause),
+      details: sanitizeForLogging(this.details),
+      message: sanitizeForLogging(this.message),
       model: this.model,
       name: this.name,
       provider: this.provider,

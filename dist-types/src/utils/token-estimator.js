@@ -1,3 +1,4 @@
+import { loadOpenAITokenizer } from '../openai-tokenizer-loader.js';
 export function estimateTokens(text) {
     return Math.ceil(text.length / 3.5);
 }
@@ -41,6 +42,28 @@ export async function geminiCountTokens(options) {
     const body = (await response.json());
     return body.totalTokens ?? 0;
 }
+export async function openaiCountTokens(options) {
+    const encoding = await resolveOpenAIEncoding(options.model);
+    const messages = [
+        ...(options.system
+            ? [{ content: options.system, role: 'developer' }]
+            : []),
+        ...options.messages.map(serializeOpenAIMessage),
+    ];
+    let total = 3;
+    for (const message of messages) {
+        total += 3;
+        total += encoding.encode(message.role).length;
+        total += encoding.encode(message.content).length;
+    }
+    if (options.tools && options.tools.length > 0) {
+        total += encoding.encode(JSON.stringify(options.tools.map(serializeOpenAITool))).length;
+    }
+    if (options.toolChoice) {
+        total += encoding.encode(JSON.stringify(options.toolChoice)).length;
+    }
+    return total;
+}
 function estimateMessageContentTokens(content) {
     if (typeof content === 'string') {
         return estimateTokens(content);
@@ -72,5 +95,79 @@ function buildRequestInit(init, signal) {
     return {
         ...init,
         signal,
+    };
+}
+async function resolveOpenAIEncoding(model) {
+    const { encodingForModel, getEncoding } = await loadOpenAITokenizer();
+    try {
+        return encodingForModel(model);
+    }
+    catch {
+        return getEncoding('o200k_base');
+    }
+}
+function serializeOpenAIMessage(message) {
+    if (message.role === 'system') {
+        return {
+            content: serializeOpenAIContent(message.content),
+            role: 'developer',
+        };
+    }
+    const parts = typeof message.content === 'string' ? [] : message.content;
+    const hasToolResults = parts.some((part) => part.type === 'tool_result');
+    if (hasToolResults && parts.length === 1 && parts[0]?.type === 'tool_result') {
+        return {
+            content: JSON.stringify({
+                toolCallId: parts[0].toolCallId,
+                result: parts[0].result,
+            }),
+            role: 'tool',
+        };
+    }
+    return {
+        content: serializeOpenAIContent(message.content),
+        role: message.role,
+    };
+}
+function serializeOpenAIContent(content) {
+    if (typeof content === 'string') {
+        return content;
+    }
+    return content.map(serializeOpenAIPart).join('\n');
+}
+function serializeOpenAIPart(part) {
+    switch (part.type) {
+        case 'audio':
+        case 'document':
+        case 'image_base64':
+        case 'image_url':
+            throw new Error(`OpenAI token counting only supports text and tool message parts. Received "${part.type}".`);
+        case 'text':
+            return part.text;
+        case 'tool_call':
+            return JSON.stringify({
+                args: part.args,
+                id: part.id,
+                name: part.name,
+                type: part.type,
+            });
+        case 'tool_result':
+            return JSON.stringify({
+                isError: part.isError ?? false,
+                name: part.name,
+                result: part.result,
+                toolCallId: part.toolCallId,
+                type: part.type,
+            });
+    }
+}
+function serializeOpenAITool(tool) {
+    return {
+        function: {
+            description: tool.description,
+            name: tool.name,
+            parameters: tool.parameters,
+        },
+        type: 'function',
     };
 }

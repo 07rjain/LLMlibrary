@@ -7,7 +7,7 @@ Provider-agnostic TypeScript client for Anthropic, OpenAI, and Google Gemini wit
 - One `LLMClient` surface for Anthropic, OpenAI, and Gemini
 - Canonical request/response types, including tools and multimodal parts
 - `defineTool()` helper for typed tool definitions
-- Non-streaming and streaming completions
+- Non-streaming and streaming completions with explicit `stream.cancel()`
 - Conversation state with running token and cost totals
 - Automatic tool execution in conversations, including streaming pause/execute/resume
 - Context trimming via sliding window or summarisation strategies
@@ -15,6 +15,9 @@ Provider-agnostic TypeScript client for Anthropic, OpenAI, and Google Gemini wit
 - Automatic Postgres session persistence when `DATABASE_URL` is present
 - Built-in framework-agnostic Session API handler with `Request`/`Response` endpoints
 - Model routing, fallback chains, weighted A/B routing, and usage logging
+- Budget breach policies: `throw`, `warn`, or `skip`
+- Usage aggregation export as JSON or CSV
+- Edge-safe core imports with Node-only Postgres features loaded lazily
 - `LLMClient.mock()` for deterministic tests
 
 ## Install
@@ -82,6 +85,33 @@ const conversation = await client.conversation({
 await conversation.send('Summarise the last user issue.');
 console.log(conversation.totals);
 console.log(conversation.toMarkdown());
+```
+
+## Streaming
+
+```ts
+const stream = client.stream({
+  messages: [{ content: 'Stream one sentence.', role: 'user' }],
+});
+
+for await (const chunk of stream) {
+  if (chunk.type === 'text-delta') {
+    process.stdout.write(chunk.delta);
+  }
+}
+
+// Or cancel explicitly if the caller navigates away.
+stream.cancel(new Error('Request no longer needed.'));
+```
+
+## Usage Export
+
+```ts
+const csv = await client.exportUsage('csv', {
+  tenantId: 'tenant-1',
+});
+
+console.log(csv);
 ```
 
 ## Summarisation Strategy
@@ -187,12 +217,21 @@ Supported endpoints include:
 
 For the full endpoint contract and the OpenAI Responses-style mapping notes, see [SESSION_API.md](/Users/rishabh/Desktop/tryandtested/chatbot101/SESSION_API.md).
 
+## Runtime Support
+
+- Edge/browser-safe core surface: `LLMClient`, `Conversation`, routing, in-memory storage, utilities, and `SessionApi`
+- Node-only persistence: `PostgresSessionStore` and `PostgresUsageLogger`
+- Runtime safety probe: `pnpm edgecheck`
+
 ## Docs
 
 - API reference source: `pnpm docs:api`
 - Session API contract: [SESSION_API.md](/Users/rishabh/Desktop/tryandtested/chatbot101/SESSION_API.md)
+- PRD decisions: [docs/PRD_DECISIONS.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/PRD_DECISIONS.md)
 - Provider comparison: [docs/PROVIDER_COMPARISON.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/PROVIDER_COMPARISON.md)
 - Migration guide: [docs/MIGRATION_GUIDE.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/MIGRATION_GUIDE.md)
+- Cost and pricing policy: [docs/COST_AND_PRICING.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/COST_AND_PRICING.md)
+- Roadmap: [docs/ROADMAP.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/ROADMAP.md)
 - Current project state: [PROJECT_STATUS.md](/Users/rishabh/Desktop/tryandtested/chatbot101/PROJECT_STATUS.md)
 - Validation handoff notes: [TEST_AGENT_HANDOFF.md](/Users/rishabh/Desktop/tryandtested/chatbot101/TEST_AGENT_HANDOFF.md)
 
@@ -200,9 +239,13 @@ For the full endpoint contract and the OpenAI Responses-style mapping notes, see
 
 ```bash
 pnpm sizecheck
+pnpm depcheck
+pnpm edgecheck
 pnpm bench:complete
+pnpm bench:first-token
 pnpm bench:memory
 pnpm bench:concurrency
+pnpm pricecheck
 ```
 
 Optional live-provider smoke tests stay opt-in:

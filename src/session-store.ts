@@ -1,4 +1,5 @@
-import { Pool } from 'pg';
+import { loadPgPoolConstructor } from './node-pg-loader.js';
+import { getEnvironmentVariable } from './runtime.js';
 
 import type { CanonicalProvider } from './types.js';
 
@@ -208,11 +209,10 @@ export class PostgresSessionStore<
   static fromEnv<TSnapshot extends { messages: unknown[]; totalCostUSD: number }>(
     options: Omit<PostgresSessionStoreOptions, 'connectionString'> = {},
   ): PostgresSessionStore<TSnapshot> {
+    const connectionString = getEnvironmentVariable('DATABASE_URL');
     return new PostgresSessionStore<TSnapshot>({
       ...options,
-      ...(process.env.DATABASE_URL
-        ? { connectionString: process.env.DATABASE_URL }
-        : {}),
+      ...(connectionString ? { connectionString } : {}),
     });
   }
 
@@ -228,7 +228,8 @@ export class PostgresSessionStore<
 
   async delete(sessionId: string, tenantId?: string): Promise<void> {
     await this.ensureSchema();
-    await this.getPool().query(
+    const pool = await this.getPool();
+    await pool.query(
       `DELETE FROM ${this.qualifiedTableName()} WHERE tenant_id = $1 AND session_id = $2`,
       [normalizeTenantId(tenantId), sessionId],
     );
@@ -240,7 +241,8 @@ export class PostgresSessionStore<
   ): Promise<null | SessionRecord<TSnapshot>> {
     await this.ensureSchema();
 
-    const result = await this.getPool().query<PostgresSessionStoreRow<TSnapshot>>(
+    const pool = await this.getPool();
+    const result = await pool.query<PostgresSessionStoreRow<TSnapshot>>(
       `SELECT session_id, tenant_id, snapshot, message_count, model, provider, total_cost_usd, created_at, updated_at
        FROM ${this.qualifiedTableName()}
        WHERE tenant_id = $1 AND session_id = $2
@@ -260,7 +262,8 @@ export class PostgresSessionStore<
     await this.ensureSchema();
 
     const filterByTenant = options.tenantId !== undefined;
-    const result = await this.getPool().query<PostgresSessionStoreRow<TSnapshot>>(
+    const pool = await this.getPool();
+    const result = await pool.query<PostgresSessionStoreRow<TSnapshot>>(
       `SELECT session_id, tenant_id, snapshot, message_count, model, provider, total_cost_usd, created_at, updated_at
        FROM ${this.qualifiedTableName()}
        ${filterByTenant ? 'WHERE tenant_id = $1' : ''}
@@ -280,7 +283,8 @@ export class PostgresSessionStore<
 
     const timestamp = this.now().toISOString();
     const tenantId = normalizeTenantId(options.tenantId);
-    const result = await this.getPool().query<PostgresSessionStoreRow<TSnapshot>>(
+    const pool = await this.getPool();
+    const result = await pool.query<PostgresSessionStoreRow<TSnapshot>>(
       `INSERT INTO ${this.qualifiedTableName()} (
          tenant_id,
          session_id,
@@ -335,7 +339,7 @@ export class PostgresSessionStore<
     return `${quoteIdentifier(this.schemaName)}.${quoteIdentifier(this.tableName)}`;
   }
 
-  private getPool(): PostgresSessionStorePool {
+  private async getPool(): Promise<PostgresSessionStorePool> {
     if (this.pool) {
       return this.pool;
     }
@@ -344,13 +348,14 @@ export class PostgresSessionStore<
       return this.internalPool;
     }
 
-    const connectionString = this.connectionString ?? process.env.DATABASE_URL;
+    const connectionString = this.connectionString ?? getEnvironmentVariable('DATABASE_URL');
     if (!connectionString) {
       throw new Error(
         'DATABASE_URL is required for PostgresSessionStore. Set it in .env or pass connectionString explicitly.',
       );
     }
 
+    const Pool = await loadPgPoolConstructor();
     const pool = new Pool({
       connectionString,
     });
@@ -359,7 +364,7 @@ export class PostgresSessionStore<
   }
 
   private async runEnsureSchema(): Promise<void> {
-    const pool = this.getPool();
+    const pool = await this.getPool();
     const qualifiedTableName = this.qualifiedTableName();
     const updatedAtIndexName = quoteIdentifier(
       `${this.tableName}_tenant_updated_at_idx`,

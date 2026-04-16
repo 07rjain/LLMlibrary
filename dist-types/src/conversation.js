@@ -1,4 +1,5 @@
 import { BudgetExceededError, MaxToolRoundsError, ProviderError } from './errors.js';
+import { buildAbortError, createCancelableStream, throwIfAborted, } from './stream-control.js';
 import { formatCost } from './utils/cost.js';
 const DEFAULT_MAX_TOOL_ROUNDS = 5;
 const DEFAULT_TOOL_EXECUTION_TIMEOUT_MS = 30_000;
@@ -17,6 +18,7 @@ const DEFAULT_TOOL_EXECUTION_TIMEOUT_MS = 30_000;
  * ```
  */
 export class Conversation {
+    budgetExceededAction;
     client;
     contextManager;
     createdAt;
@@ -34,12 +36,14 @@ export class Conversation {
     toolExecutionTimeoutMs;
     toolChoice;
     tools;
+    onWarning;
     totalCachedTokens = 0;
     totalCostUSD = 0;
     totalInputTokens = 0;
     totalOutputTokens = 0;
     updatedAt;
     constructor(client, options = {}) {
+        this.budgetExceededAction = options.budgetExceededAction ?? 'throw';
         this.client = client;
         this.contextManager = options.contextManager;
         this.budgetUsd = options.budgetUsd;
@@ -58,6 +62,7 @@ export class Conversation {
             options.toolExecutionTimeoutMs ?? DEFAULT_TOOL_EXECUTION_TIMEOUT_MS;
         this.toolChoice = options.toolChoice;
         this.tools = options.tools ? cloneTools(options.tools) : undefined;
+        this.onWarning = options.onWarning ?? ((message) => console.warn(message));
         this.updatedAt = this.createdAt;
     }
     get cost() {
@@ -86,10 +91,12 @@ export class Conversation {
         return result.response;
     }
     /** Streams a user turn and commits state when the final `done` chunk arrives. */
-    async *sendStream(input, options = {}) {
-        const nextMessages = await this.prepareMessages(buildUserMessage(input));
-        const result = yield* this.runStreamToolLoop(nextMessages, options.signal);
-        await this.finalizeExecution(result);
+    sendStream(input, options = {}) {
+        return createCancelableStream(async function* (signal) {
+            const nextMessages = await this.prepareMessages(buildUserMessage(input));
+            const result = yield* this.runStreamToolLoop(nextMessages, signal);
+            await this.finalizeExecution(result);
+        }.bind(this), options.signal);
     }
     /** Clears non-system history while preserving running totals. */
     clear() {
@@ -226,7 +233,23 @@ export class Conversation {
         let toolRounds = 0;
         while (true) {
             throwIfAborted(signal);
-            const response = await this.client.complete(this.buildRequestOptions(workingMessages, signal, toolRounds, this.resolveRemainingBudgetUsd(aggregateUsage.costUSD)));
+            const remainingBudget = this.resolveRemainingBudgetDecision(aggregateUsage.costUSD);
+            if (remainingBudget.action === 'skip') {
+                const response = buildBudgetSkipResponse(remainingBudget.error, model, provider);
+                aggregateUsage = accumulateUsage(aggregateUsage, response.usage);
+                workingMessages = [...workingMessages, buildAssistantMessage(response)];
+                return {
+                    messages: workingMessages,
+                    model: response.model,
+                    provider: response.provider,
+                    response: {
+                        ...response,
+                        usage: aggregateUsage,
+                    },
+                    usage: aggregateUsage,
+                };
+            }
+            const response = await this.client.complete(this.buildRequestOptions(workingMessages, signal, toolRounds, remainingBudget.budgetUsd));
             model = response.model;
             provider = response.provider;
             aggregateUsage = accumulateUsage(aggregateUsage, response.usage);
@@ -258,7 +281,25 @@ export class Conversation {
         let toolRounds = 0;
         while (true) {
             throwIfAborted(signal);
-            const requestOptions = this.buildRequestOptions(workingMessages, signal, toolRounds, this.resolveRemainingBudgetUsd(aggregateUsage.costUSD));
+            const remainingBudget = this.resolveRemainingBudgetDecision(aggregateUsage.costUSD);
+            if (remainingBudget.action === 'skip') {
+                const response = buildBudgetSkipResponse(remainingBudget.error, model, provider);
+                aggregateUsage = accumulateUsage(aggregateUsage, response.usage);
+                workingMessages = [...workingMessages, buildAssistantMessage(response)];
+                yield { delta: response.text, type: 'text-delta' };
+                yield {
+                    finishReason: response.finishReason,
+                    type: 'done',
+                    usage: aggregateUsage,
+                };
+                return {
+                    messages: workingMessages,
+                    model: response.model,
+                    provider: response.provider,
+                    usage: aggregateUsage,
+                };
+            }
+            const requestOptions = this.buildRequestOptions(workingMessages, signal, toolRounds, remainingBudget.budgetUsd);
             model = requestOptions.model ?? model;
             provider = requestOptions.provider ?? provider;
             const pendingToolCalls = new Map();
@@ -408,6 +449,7 @@ export class Conversation {
     buildRequestOptions(messages, signal, toolRound = 0, budgetUsd = undefined) {
         const toolChoice = resolveToolChoiceForRound(this.toolChoice, toolRound);
         return {
+            budgetExceededAction: this.budgetExceededAction,
             ...(budgetUsd !== undefined ? { budgetUsd } : {}),
             messages,
             ...(this.maxTokens !== undefined ? { maxTokens: this.maxTokens } : {}),
@@ -421,15 +463,21 @@ export class Conversation {
             ...(this.tools !== undefined ? { tools: this.tools } : {}),
         };
     }
-    resolveRemainingBudgetUsd(executionCostUSD) {
+    resolveRemainingBudgetDecision(executionCostUSD) {
         if (this.budgetUsd === undefined) {
-            return undefined;
+            return {
+                action: 'continue',
+                budgetUsd: undefined,
+            };
         }
         const remainingBudgetUsd = this.budgetUsd - (this.totalCostUSD + executionCostUSD);
         if (remainingBudgetUsd > 0) {
-            return remainingBudgetUsd;
+            return {
+                action: 'continue',
+                budgetUsd: remainingBudgetUsd,
+            };
         }
-        throw new BudgetExceededError(`Conversation budget of ${formatCost(this.budgetUsd)} has been exhausted.`, {
+        const error = new BudgetExceededError(`Conversation budget of ${formatCost(this.budgetUsd)} has been exhausted.`, {
             details: {
                 budgetUsd: this.budgetUsd,
                 totalCostUSD: this.totalCostUSD + executionCostUSD,
@@ -437,6 +485,20 @@ export class Conversation {
             ...(this.model !== undefined ? { model: this.model } : {}),
             ...(this.provider !== undefined ? { provider: this.provider } : {}),
         });
+        if (this.budgetExceededAction === 'warn') {
+            this.onWarning(error.message);
+            return {
+                action: 'continue',
+                budgetUsd: undefined,
+            };
+        }
+        if (this.budgetExceededAction === 'skip') {
+            return {
+                action: 'skip',
+                error,
+            };
+        }
+        throw error;
     }
 }
 function buildUserMessage(input) {
@@ -542,6 +604,22 @@ function createEmptyUsage() {
         costUSD: 0,
         inputTokens: 0,
         outputTokens: 0,
+    };
+}
+function buildBudgetSkipResponse(error, model, provider) {
+    return {
+        content: [{ text: error.message, type: 'text' }],
+        finishReason: 'error',
+        model: model ?? 'budget-skip',
+        provider: provider ?? 'mock',
+        raw: {
+            reason: 'budget_exceeded',
+            skipped: true,
+            ...(error.details ? { details: error.details } : {}),
+        },
+        text: error.message,
+        toolCalls: [],
+        usage: createEmptyUsage(),
     };
 }
 function accumulateUsage(total, next) {
@@ -673,18 +751,4 @@ async function executeToolWithGuards(execute, timeoutMs, signal) {
         }
         removeAbortListener?.();
     }
-}
-function throwIfAborted(signal) {
-    if (!signal?.aborted) {
-        return;
-    }
-    throw buildAbortError(signal.reason);
-}
-function buildAbortError(reason) {
-    if (reason instanceof Error) {
-        return reason;
-    }
-    const error = new Error('The operation was aborted.');
-    error.name = 'AbortError';
-    return error;
 }

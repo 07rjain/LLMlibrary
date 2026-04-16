@@ -1,6 +1,6 @@
 # Project Status
 
-Prepared: 2026-04-15
+Prepared: 2026-04-16
 
 ## What Is Done
 
@@ -18,9 +18,9 @@ Prepared: 2026-04-15
   - `ModelRouter` now supports ordered rules, fallback chains, deterministic weighted A/B routing, and `UsageEvent.routingDecision` logging.
 - Phase 5 usage/cost tracking is complete:
   - `UsageLogger`, `ConsoleLogger`, and batched `PostgresUsageLogger` are implemented.
-  - `LLMClient.complete()` / `stream()` enforce per-call estimated budget guards.
-  - `Conversation` enforces per-session budget guards by forwarding remaining budget across tool/model rounds.
-  - `LLMClient.getUsage()` aggregates persisted usage when backed by `PostgresUsageLogger`.
+  - `LLMClient.complete()` / `stream()` enforce per-call estimated budget guards and now support `throw | warn | skip` breach actions.
+  - `Conversation` enforces per-session budget guards by forwarding remaining budget across tool/model rounds and now supports `throw | warn | skip` breach actions.
+  - `LLMClient.getUsage()` aggregates persisted usage when backed by `PostgresUsageLogger`, and `client.exportUsage()` now serializes those aggregates as JSON or CSV.
 - Phase 6 session API work is complete:
   - `createSessionApi()` / `SessionApi` provide framework-agnostic `Request` / `Response` endpoints for session lifecycle operations.
   - Endpoints cover create, message, session get, paginated messages, delete, compact, fork, and session list.
@@ -31,9 +31,11 @@ Prepared: 2026-04-15
   - Provider mock-server coverage now exercises realistic text, tool, stream, and rate-limit flows for Anthropic, OpenAI, and Gemini.
   - Cross-tenant Session API isolation, lifecycle inspection, live-smoke gating, and launch-model cost-accuracy coverage are in place.
   - Public APIs now carry JSDoc, `typedoc.json` generates API docs into `docs/api`, and GitHub Pages publishing is wired for releases.
-  - Provider comparison, migration, and changelog docs are in the repo.
-  - Bundle-size, request-overhead, 10,000-turn memory, and 100-session concurrency checks are implemented as scripts and validated locally.
-- The public client surface supports `complete()`, `stream()`, `conversation()`, `getUsage()`, session API creation, model registry access, price overrides, and `LLMClient.mock()`.
+  - Provider comparison, migration, changelog, PRD decision, cost-policy, and roadmap docs are in the repo.
+  - Bundle-size, dependency-count, edge-compatibility, request-overhead, first-token streaming overhead, 10,000-turn memory, 100-session concurrency, and price-staleness checks are implemented as scripts and validated locally.
+  - Weekly price drift and nightly live-provider workflows are now defined in GitHub Actions.
+- The public client surface supports `complete()`, `stream()`, `conversation()`, `getUsage()`, `exportUsage()`, session API creation, model registry access, price overrides, and `LLMClient.mock()`.
+- OpenAI exact token counting is now available through the `openaiCountTokens()` utility wrapper for text/tool requests.
 
 ## Verified State
 
@@ -42,14 +44,18 @@ Prepared: 2026-04-15
 - `pnpm test` passes
 - `pnpm build` passes
 - `pnpm sizecheck` passes
+- `pnpm depcheck` passes
+- `pnpm edgecheck` passes
 - `pnpm bench:complete` passes
+- `pnpm bench:first-token` passes
 - `pnpm bench:memory` passes
 - `pnpm bench:concurrency` passes
+- `pnpm pricecheck` passes
 - `pnpm docs:api` passes
-- Current automated test count: `170` passing tests, with `4` opt-in live tests skipped unless `LIVE_TESTS=1`
+- Current automated test count: `342` passing tests, with `4` opt-in live tests skipped unless `LIVE_TESTS=1`
 - Current coverage from `pnpm test`:
   - `92.40%` statements / lines
-  - `86.26%` branches
+  - `86.38%` branches
   - `96.80%` functions
 - Previously verified live smoke with the local `.env`:
   - Anthropic text completion
@@ -61,12 +67,12 @@ Prepared: 2026-04-15
 
 ## Remaining Work
 
-- Remaining PRD backlog items such as OpenAI exact token counting, stream cancellation contract, usage export, CI drift checks, and edge-runtime verification
-- Open scope decisions in [todo.md](/Users/rishabh/Desktop/tryandtested/chatbot101/todo.md) around launch-provider breadth and Phase 2 roadmap items
+- No open implementation blockers remain in the tracked PRD backlog.
+- Deferred provider expansion, OpenTelemetry, Python parity, and response caching are tracked in [docs/ROADMAP.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/ROADMAP.md).
 
 ## Suggested Validation For Another Agent
 
-1. Run `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, `pnpm sizecheck`, `pnpm bench:complete`, `pnpm bench:memory`, `pnpm bench:concurrency`, and `pnpm docs:api`.
+1. Run `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, `pnpm sizecheck`, `pnpm depcheck`, `pnpm edgecheck`, `pnpm bench:complete`, `pnpm bench:first-token`, `pnpm bench:memory`, `pnpm bench:concurrency`, `pnpm pricecheck`, and `pnpm docs:api`.
 2. Re-run live smoke tests with the local `.env`, without printing secrets.
 3. Verify default conversation persistence by creating a `LLMClient.fromEnv()` instance and restoring a session via `conversation({ sessionId })`.
 4. Verify `PostgresUsageLogger.fromEnv()` persists a usage row and that `client.getUsage({ sessionId })` returns it.

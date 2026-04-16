@@ -1,3 +1,4 @@
+import { sanitizeForLogging } from './redaction.js';
 /** Base error for provider, capability, budget, and transport failures. */
 export class LLMError extends Error {
     cause;
@@ -21,9 +22,9 @@ export class LLMError extends Error {
     }
     toJSON() {
         return {
-            cause: this.cause,
-            details: this.details,
-            message: this.message,
+            cause: sanitizeForLogging(this.cause),
+            details: sanitizeForLogging(this.details),
+            message: sanitizeForLogging(this.message),
             model: this.model,
             name: this.name,
             provider: this.provider,

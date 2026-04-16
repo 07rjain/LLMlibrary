@@ -1,4 +1,11 @@
-import type { CanonicalMessage, CanonicalPart } from '../types.js';
+import { loadOpenAITokenizer } from '../openai-tokenizer-loader.js';
+
+import type {
+  CanonicalMessage,
+  CanonicalPart,
+  CanonicalTool,
+  CanonicalToolChoice,
+} from '../types.js';
 
 export interface AnthropicCountTokensOptions {
   apiKey: string;
@@ -15,6 +22,14 @@ export interface GeminiCountTokensOptions {
   model: string;
   signal?: AbortSignal;
   url?: string;
+}
+
+export interface OpenAICountTokensOptions {
+  messages: CanonicalMessage[];
+  model: string;
+  system?: string;
+  toolChoice?: CanonicalToolChoice;
+  tools?: CanonicalTool[];
 }
 
 export function estimateTokens(text: string): number {
@@ -85,6 +100,36 @@ export async function geminiCountTokens(
   return body.totalTokens ?? 0;
 }
 
+export async function openaiCountTokens(
+  options: OpenAICountTokensOptions,
+): Promise<number> {
+  const encoding = await resolveOpenAIEncoding(options.model);
+  const messages = [
+    ...(options.system
+      ? [{ content: options.system, role: 'developer' as const }]
+      : []),
+    ...options.messages.map(serializeOpenAIMessage),
+  ];
+
+  let total = 3;
+
+  for (const message of messages) {
+    total += 3;
+    total += encoding.encode(message.role).length;
+    total += encoding.encode(message.content).length;
+  }
+
+  if (options.tools && options.tools.length > 0) {
+    total += encoding.encode(JSON.stringify(options.tools.map(serializeOpenAITool))).length;
+  }
+
+  if (options.toolChoice) {
+    total += encoding.encode(JSON.stringify(options.toolChoice)).length;
+  }
+
+  return total;
+}
+
 function estimateMessageContentTokens(content: CanonicalMessage['content']): number {
   if (typeof content === 'string') {
     return estimateTokens(content);
@@ -125,5 +170,94 @@ function buildRequestInit(
   return {
     ...init,
     signal,
+  };
+}
+
+async function resolveOpenAIEncoding(
+  model: string,
+): Promise<{ encode: (text: string) => number[] }> {
+  const { encodingForModel, getEncoding } = await loadOpenAITokenizer();
+
+  try {
+    return encodingForModel(model as Parameters<typeof encodingForModel>[0]);
+  } catch {
+    return getEncoding('o200k_base');
+  }
+}
+
+function serializeOpenAIMessage(message: CanonicalMessage): {
+  content: string;
+  role: 'assistant' | 'developer' | 'tool' | 'user';
+} {
+  if (message.role === 'system') {
+    return {
+      content: serializeOpenAIContent(message.content),
+      role: 'developer',
+    };
+  }
+
+  const parts = typeof message.content === 'string' ? [] : message.content;
+  const hasToolResults = parts.some((part) => part.type === 'tool_result');
+  if (hasToolResults && parts.length === 1 && parts[0]?.type === 'tool_result') {
+    return {
+      content: JSON.stringify({
+        toolCallId: parts[0].toolCallId,
+        result: parts[0].result,
+      }),
+      role: 'tool',
+    };
+  }
+
+  return {
+    content: serializeOpenAIContent(message.content),
+    role: message.role,
+  };
+}
+
+function serializeOpenAIContent(content: CanonicalMessage['content']): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  return content.map(serializeOpenAIPart).join('\n');
+}
+
+function serializeOpenAIPart(part: CanonicalPart): string {
+  switch (part.type) {
+    case 'audio':
+    case 'document':
+    case 'image_base64':
+    case 'image_url':
+      throw new Error(
+        `OpenAI token counting only supports text and tool message parts. Received "${part.type}".`,
+      );
+    case 'text':
+      return part.text;
+    case 'tool_call':
+      return JSON.stringify({
+        args: part.args,
+        id: part.id,
+        name: part.name,
+        type: part.type,
+      });
+    case 'tool_result':
+      return JSON.stringify({
+        isError: part.isError ?? false,
+        name: part.name,
+        result: part.result,
+        toolCallId: part.toolCallId,
+        type: part.type,
+      });
+  }
+}
+
+function serializeOpenAITool(tool: CanonicalTool): Record<string, unknown> {
+  return {
+    function: {
+      description: tool.description,
+      name: tool.name,
+      parameters: tool.parameters,
+    },
+    type: 'function',
   };
 }

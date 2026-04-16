@@ -29,6 +29,7 @@ export interface UsageSummary {
     totalInputTokens: number;
     totalOutputTokens: number;
 }
+export type UsageExportFormat = 'csv' | 'json';
 /** Contract for development and persistent usage logging backends. */
 export interface UsageLogger {
     close?(): Promise<void>;
@@ -92,4 +93,6 @@ export declare class PostgresUsageLogger implements UsageLogger {
     private qualifiedTableName;
 }
 export type { PostgresSessionStorePool, PostgresSessionStoreQueryResult };
+/** Serializes aggregated usage into either JSON or CSV output. */
+export declare function exportUsageSummary(summary: UsageSummary, format: UsageExportFormat): string;
 //# sourceMappingURL=usage.d.ts.map
