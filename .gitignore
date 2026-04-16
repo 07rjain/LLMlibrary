@@ -3,3 +3,5 @@ dist
 coverage
 node_modules
 *.tsbuildinfo
+chatbot_widget_PRD.docx
+chatbot_widget_report.docx
