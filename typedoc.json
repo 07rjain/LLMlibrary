@@ -8,7 +8,7 @@
   "gitRevision": "main",
   "hideGenerator": true,
   "out": "docs/api",
-  "readme": "README.md",
+  "readme": "none",
   "sort": [
     "source-order"
   ],

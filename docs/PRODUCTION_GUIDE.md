@@ -168,6 +168,6 @@ That gives consumers a pinned dependency instead of tracking `main`.
 ## Supporting Docs
 
 - API reference: [./api/index.html](./api/index.html)
-- Session API contract: [../SESSION_API.md](../SESSION_API.md)
+- Session API contract: [SESSION_API_REFERENCE.md](./SESSION_API_REFERENCE.md)
 - Provider comparison: [PROVIDER_COMPARISON.md](./PROVIDER_COMPARISON.md)
 - Cost policy: [COST_AND_PRICING.md](./COST_AND_PRICING.md)

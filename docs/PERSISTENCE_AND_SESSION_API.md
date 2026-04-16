@@ -185,7 +185,7 @@ The built-in endpoints cover the full session lifecycle:
 - `POST /sessions/{id}/fork`
 - `GET /sessions`
 
-Use the dedicated [../SESSION_API.md](../SESSION_API.md) document for the full request and response contract.
+Use the dedicated [SESSION_API_REFERENCE.md](./SESSION_API_REFERENCE.md) document for the full request and response contract.
 
 ## Add Authentication Or Tenant Context
 

@@ -243,12 +243,15 @@ For the full endpoint contract and the OpenAI Responses-style mapping notes, see
 
 ## Docs
 
+- Documentation website: `https://07rjain.github.io/LLMlibrary/`
 - User guide hub: [docs/README.md](docs/README.md)
 - Getting started: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
 - Completions and streaming: [docs/COMPLETIONS_AND_STREAMING.md](docs/COMPLETIONS_AND_STREAMING.md)
 - Conversations and tools: [docs/CONVERSATIONS_AND_TOOLS.md](docs/CONVERSATIONS_AND_TOOLS.md)
 - Persistence and Session API: [docs/PERSISTENCE_AND_SESSION_API.md](docs/PERSISTENCE_AND_SESSION_API.md)
 - Production guide: [docs/PRODUCTION_GUIDE.md](docs/PRODUCTION_GUIDE.md)
+- Docs local dev server: `pnpm docs:dev`
+- Docs production build: `pnpm docs:build`
 - API reference source: `pnpm docs:api`
 - Session API contract: [SESSION_API.md](SESSION_API.md)
 - PRD decisions: [docs/PRD_DECISIONS.md](docs/PRD_DECISIONS.md)

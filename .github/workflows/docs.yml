@@ -1,9 +1,9 @@
 name: Docs
 
 on:
-  release:
-    types:
-      - published
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -29,11 +29,10 @@ jobs:
           node-version: 20
       - uses: actions/configure-pages@v5
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm docs:api
+      - run: pnpm docs:build
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/api
+          path: docs/.vitepress/dist
 
   deploy:
     environment:

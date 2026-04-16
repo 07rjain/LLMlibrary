@@ -8,7 +8,8 @@ If you are opening the repository for the first time, read the pages below in or
 2. [Completions And Streaming](./COMPLETIONS_AND_STREAMING.md)
 3. [Conversations And Tools](./CONVERSATIONS_AND_TOOLS.md)
 4. [Persistence And Session API](./PERSISTENCE_AND_SESSION_API.md)
-5. [Production Guide](./PRODUCTION_GUIDE.md)
+5. [Session API Reference](./SESSION_API_REFERENCE.md)
+6. [Production Guide](./PRODUCTION_GUIDE.md)
 
 ## What This Library Gives You
 
@@ -37,7 +38,7 @@ If you are opening the repository for the first time, read the pages below in or
 ## Reference Docs
 
 - API reference: [docs/api/index.html](./api/index.html)
-- Session API contract: [../SESSION_API.md](../SESSION_API.md)
+- Session API contract: [SESSION_API_REFERENCE.md](./SESSION_API_REFERENCE.md)
 - Provider comparison: [PROVIDER_COMPARISON.md](./PROVIDER_COMPARISON.md)
 - Migration notes: [MIGRATION_GUIDE.md](./MIGRATION_GUIDE.md)
 - Cost policy and pricing notes: [COST_AND_PRICING.md](./COST_AND_PRICING.md)

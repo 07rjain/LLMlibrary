@@ -6,7 +6,7 @@
     "type": "git",
     "url": "git+https://github.com/07rjain/LLMlibrary.git"
   },
-  "homepage": "https://github.com/07rjain/LLMlibrary#readme",
+  "homepage": "https://07rjain.github.io/LLMlibrary/",
   "bugs": {
     "url": "https://github.com/07rjain/LLMlibrary/issues"
   },
@@ -76,6 +76,9 @@
     "bench:first-token": "node ./scripts/benchmark-first-token-latency.mjs",
     "bench:memory": "node ./scripts/check-conversation-memory.mjs",
     "depcheck": "node ./scripts/check-runtime-deps.mjs",
+    "docs:build": "node ./scripts/build-docs-site.mjs",
+    "docs:dev": "vitepress dev docs",
+    "docs:preview": "vitepress preview docs",
     "edgecheck": "node ./scripts/check-edge-compat.mjs",
     "lint": "eslint .",
     "docs:api": "typedoc --options typedoc.json",
@@ -103,6 +106,7 @@
     "typedoc": "^0.28.19",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.30.1",
+    "vitepress": "^1.6.4",
     "vitest": "^3.1.2"
   },
   "dependencies": {
