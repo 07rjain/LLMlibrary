@@ -21,6 +21,8 @@ features:
     details: Use the same request and response model across providers instead of rewriting app code for each SDK.
   - title: Built for product workflows
     details: Ship one-shot completions, streaming UIs, tool calls, conversation state, and session persistence from the same library.
+  - title: Responses-first OpenAI transport
+    details: OpenAI requests already use the stateless Responses API while library-owned history and session storage stay provider-agnostic.
   - title: Production-oriented primitives
     details: Add budgets, routing, usage logging, Postgres storage, Redis storage, and a framework-agnostic Session API when the app grows up.
 ---
@@ -52,3 +54,7 @@ The fastest path through the docs is:
 5. [Production Guide](./PRODUCTION_GUIDE.md)
 
 If you want the lower-level generated API surface, open [API Reference](./api/index.html).
+
+For provider-specific implementation planning, see [Prompt Caching Report](./PROMPT_CACHING_REPORT.md).
+Prompt caching work is tracked in the repository root as `prompt_caching_todo.md`.
+For the OpenAI transport migration specifically, see [OpenAI Responses Migration Report](./OPENAI_RESPONSES_MIGRATION_REPORT.md).

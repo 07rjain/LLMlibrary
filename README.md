@@ -6,6 +6,7 @@ Provider-agnostic TypeScript client for Anthropic, OpenAI, and Google Gemini wit
 
 - One `LLMClient` surface for Anthropic, OpenAI, and Gemini
 - Canonical request/response types, including tools and multimodal parts
+- OpenAI uses the stateless Responses API under the hood while library-owned conversation state remains the source of truth
 - `defineTool()` helper for typed tool definitions
 - Non-streaming and streaming completions with explicit `stream.cancel()`
 - Conversation state with running token and cost totals
@@ -241,6 +242,13 @@ For the full endpoint contract and the OpenAI Responses-style mapping notes, see
 - Node-only persistence: `PostgresSessionStore` and `PostgresUsageLogger`
 - Runtime safety probe: `pnpm edgecheck`
 
+## Prompt Caching Status
+
+- OpenAI automatic prompt caching works on supported models, but request-side controls such as `prompt_cache_key` and `prompt_cache_retention` are not exposed yet.
+- Anthropic cache-control support exists for text/system content today, but broader cacheable content and tool-definition metadata are still pending.
+- Gemini implicit caching benefits supported models automatically, but explicit `cachedContent` request support and cache-resource lifecycle APIs are still pending.
+- Implementation planning lives in [docs/PROMPT_CACHING_REPORT.md](docs/PROMPT_CACHING_REPORT.md) and the active task tracker lives in [prompt_caching_todo.md](prompt_caching_todo.md).
+
 ## Docs
 
 - Documentation website: `https://07rjain.github.io/LLMlibrary/`
@@ -257,6 +265,7 @@ For the full endpoint contract and the OpenAI Responses-style mapping notes, see
 - PRD decisions: [docs/PRD_DECISIONS.md](docs/PRD_DECISIONS.md)
 - Provider comparison: [docs/PROVIDER_COMPARISON.md](docs/PROVIDER_COMPARISON.md)
 - Prompt caching report: [docs/PROMPT_CACHING_REPORT.md](docs/PROMPT_CACHING_REPORT.md)
+- Prompt caching task tracker: [prompt_caching_todo.md](prompt_caching_todo.md)
 - OpenAI Responses migration report: [docs/OPENAI_RESPONSES_MIGRATION_REPORT.md](docs/OPENAI_RESPONSES_MIGRATION_REPORT.md)
 - Migration guide: [docs/MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md)
 - Cost and pricing policy: [docs/COST_AND_PRICING.md](docs/COST_AND_PRICING.md)

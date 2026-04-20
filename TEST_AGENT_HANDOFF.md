@@ -15,6 +15,9 @@ This file is for a separate testing/validation agent. Use [todo.md](/Users/risha
   - Provider adapters:
     - `T-08` Anthropic complete
     - `T-09` OpenAI complete
+      - transport now uses `POST /v1/responses`
+      - requests are stateless with `store: false`, top-level `instructions`, and full-history `input`
+      - streaming now expects Responses events such as `response.output_text.delta`, `response.function_call_arguments.delta`, `response.output_item.done`, and `response.completed`
     - `T-10` Gemini complete
   - Conversation/session core:
     - `T-11` Conversation complete
@@ -65,9 +68,9 @@ This file is for a separate testing/validation agent. Use [todo.md](/Users/risha
   - End-to-end `PostgresUsageLogger` insert plus `client.getUsage()` aggregation smoke passed against OpenAI plus `DATABASE_URL`
 - Latest verified test count and coverage:
   - `342` passing tests, plus `4` opt-in live tests skipped unless `LIVE_TESTS=1`
-  - `92.40%` statements / lines
-  - `86.38%` branches
-  - `96.80%` functions
+  - `91.81%` statements / lines
+  - `86.23%` branches
+  - `96.35%` functions
 
 ## Key Files
 
@@ -159,9 +162,10 @@ Only run these after the user fills `.env`.
 - Send a simple text completion against `gpt-4o`
 - Send a multimodal request with `image_url`
 - Send a tool-calling request and verify function args are parsed from JSON strings
+- Confirm the request body uses `input` plus `store: false`, with no `conversation` or `previous_response_id`
 - Send a streaming request and verify:
-  - text streaming
-  - tool-call delta reassembly
+  - `response.output_text.delta` is surfaced as canonical `text-delta`
+  - tool-call delta reassembly from Responses events still works
   - final usage in `done`
 
 ### Gemini

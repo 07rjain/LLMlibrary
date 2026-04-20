@@ -16,7 +16,7 @@ const budgets = {
   },
   'dist/providers-openai.js': {
     gzip: 8_000,
-    raw: 32_000,
+    raw: 35_000,
   },
 };
 
