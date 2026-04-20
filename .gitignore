@@ -4,6 +4,8 @@ coverage
 node_modules
 *.tsbuildinfo
 chatbot_widget_PRD.docx
+chatbot_widget_PRD.md
 chatbot_widget_report.docx
+chatbot_widget_report.md
 docs/.vitepress/cache
 docs/.vitepress/dist

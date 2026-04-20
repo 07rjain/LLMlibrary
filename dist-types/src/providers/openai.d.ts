@@ -1,53 +1,69 @@
 import { AuthenticationError, ContextLimitError, ProviderError, RateLimitError } from '../errors.js';
 import { ModelRegistry } from '../models/registry.js';
 import type { CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, StreamChunk } from '../types.js';
+import type { OpenAIUsagePayload } from '../utils/cost.js';
 import type { RetryOptions } from '../utils/retry.js';
-interface OpenAIToolCall {
-    function: {
-        arguments: string;
-        name: string;
-    };
-    id: string;
-    type: 'function';
-}
 interface OpenAIToolDefinition {
-    function: {
-        description: string;
-        name: string;
-        parameters: CanonicalTool['parameters'];
-    };
+    description: string;
+    name: string;
+    parameters: CanonicalTool['parameters'];
+    strict: false;
     type: 'function';
 }
 type OpenAIToolChoice = 'auto' | 'none' | 'required' | {
-    function: {
-        name: string;
-    };
+    name: string;
     type: 'function';
 };
-interface OpenAIUsagePayload {
-    completion_tokens?: number;
-    prompt_tokens?: number;
-    prompt_tokens_details?: {
-        cached_tokens?: number;
-    };
-    total_tokens?: number;
+interface OpenAIResponseErrorPayload {
+    code?: string | null;
+    message?: string | null;
+    param?: string | null;
+    type?: string;
 }
-interface OpenAIChatCompletionPayload {
-    choices: Array<{
-        finish_reason: 'content_filter' | 'function_call' | 'length' | 'stop' | 'tool_calls' | null;
-        index: number;
-        message: {
-            annotations?: unknown[];
-            content: null | string;
-            refusal?: string | null;
-            role: 'assistant';
-            tool_calls?: OpenAIToolCall[];
-        };
-    }>;
-    created: number;
+interface OpenAIOutputTextPart {
+    annotations?: unknown[];
+    text: string;
+    type: 'output_text';
+}
+interface OpenAIRefusalPart {
+    refusal: string;
+    type: 'refusal';
+}
+type OpenAIOutputMessageContentPart = OpenAIOutputTextPart | OpenAIRefusalPart | {
+    type: string;
+    [key: string]: unknown;
+};
+interface OpenAIMessageOutput {
+    content: OpenAIOutputMessageContentPart[];
     id: string;
+    role: string;
+    status?: 'completed' | 'in_progress' | 'incomplete';
+    type: 'message';
+}
+interface OpenAIFunctionCallOutput {
+    arguments: string;
+    call_id: string;
+    id: string;
+    name: string;
+    status?: 'completed' | 'in_progress' | 'incomplete';
+    type: 'function_call';
+}
+type OpenAIOutputItem = OpenAIFunctionCallOutput | OpenAIMessageOutput | {
+    id?: string;
+    type: string;
+    [key: string]: unknown;
+};
+interface OpenAIResponsePayload {
+    created_at?: number;
+    error?: OpenAIResponseErrorPayload | null;
+    id: string;
+    incomplete_details?: {
+        reason?: string | null;
+    } | null;
     model: string;
-    object: 'chat.completion';
+    object: 'response';
+    output?: OpenAIOutputItem[];
+    status: 'completed' | 'failed' | 'in_progress' | 'incomplete';
     usage?: OpenAIUsagePayload;
 }
 export interface OpenAIClientConfig {
@@ -89,7 +105,7 @@ export declare function translateOpenAIToolChoice(toolChoice: CanonicalToolChoic
     parallelToolCalls?: boolean;
     toolChoice: OpenAIToolChoice;
 };
-export declare function translateOpenAIResponse(payload: OpenAIChatCompletionPayload, modelRegistry?: ModelRegistry, requestedModel?: string): CanonicalResponse;
+export declare function translateOpenAIResponse(payload: OpenAIResponsePayload, modelRegistry?: ModelRegistry, requestedModel?: string): CanonicalResponse;
 export declare function mapOpenAIError(response: Response, model?: string): Promise<AuthenticationError | ContextLimitError | ProviderError | RateLimitError>;
 export {};
 //# sourceMappingURL=openai.d.ts.map

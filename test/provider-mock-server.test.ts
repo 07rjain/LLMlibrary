@@ -77,20 +77,21 @@ describe('provider mock servers', () => {
     ]);
 
     expect(server.requests).toHaveLength(4);
-    expect(server.requests[0]?.pathname).toBe('/v1/chat/completions');
+    expect(server.requests[0]?.pathname).toBe('/v1/responses');
     expect(server.requests[0]?.headers.authorization).toBe('Bearer openai-test-key');
     expect(server.requests[1]?.json).toMatchObject({
       tools: [
         {
-          function: {
-            name: 'weather_lookup',
-          },
+          name: 'weather_lookup',
+          strict: false,
+          type: 'function',
         },
       ],
     });
     expect(server.requests[2]?.json).toMatchObject({
+      model: 'gpt-4o',
+      store: false,
       stream: true,
-      stream_options: { include_usage: true },
     });
   });
 
@@ -278,34 +279,49 @@ function handleOpenAIRequest(request: MockHttpRequest) {
   if (body.stream === true) {
     return sseResponse([
       {
-        choices: [
-          {
-            delta: { content: 'OpenAI ' },
-            finish_reason: null,
-            index: 0,
-          },
-        ],
-        created: 1,
-        id: 'chatcmpl_stream_1',
-        model: 'gpt-4o',
-        object: 'chat.completion.chunk',
+        content_index: 0,
+        delta: 'OpenAI ',
+        item_id: 'msg_stream_1',
+        output_index: 0,
+        sequence_number: 1,
+        type: 'response.output_text.delta',
       },
       {
-        choices: [
-          {
-            delta: { content: 'stream mock.' },
-            finish_reason: 'stop',
-            index: 0,
+        content_index: 0,
+        delta: 'stream mock.',
+        item_id: 'msg_stream_1',
+        output_index: 0,
+        sequence_number: 2,
+        type: 'response.output_text.delta',
+      },
+      {
+        response: {
+          id: 'resp_stream_1',
+          model: 'gpt-4o',
+          object: 'response',
+          output: [
+            {
+              content: [
+                {
+                  annotations: [],
+                  text: 'OpenAI stream mock.',
+                  type: 'output_text',
+                },
+              ],
+              id: 'msg_stream_1',
+              role: 'assistant',
+              status: 'completed',
+              type: 'message',
+            },
+          ],
+          status: 'completed',
+          usage: {
+            input_tokens: 12,
+            output_tokens: 4,
           },
-        ],
-        created: 1,
-        id: 'chatcmpl_stream_1',
-        model: 'gpt-4o',
-        object: 'chat.completion.chunk',
-        usage: {
-          completion_tokens: 4,
-          prompt_tokens: 12,
         },
+        sequence_number: 3,
+        type: 'response.completed',
       },
       '[DONE]',
     ]);
@@ -313,55 +329,63 @@ function handleOpenAIRequest(request: MockHttpRequest) {
 
   if (Array.isArray(body.tools) && body.tools.length > 0) {
     return jsonResponse({
-      choices: [
+      id: 'resp_tool_1',
+      model: 'gpt-4o',
+      object: 'response',
+      output: [
         {
-          finish_reason: 'tool_calls',
-          index: 0,
-          message: {
-            content: 'Checking weather.',
-            role: 'assistant',
-            tool_calls: [
-              {
-                function: {
-                  arguments: '{"city":"Berlin"}',
-                  name: 'weather_lookup',
-                },
-                id: 'call_1',
-                type: 'function',
-              },
-            ],
-          },
+          content: [
+            {
+              annotations: [],
+              text: 'Checking weather.',
+              type: 'output_text',
+            },
+          ],
+          id: 'msg_tool_1',
+          role: 'assistant',
+          status: 'completed',
+          type: 'message',
+        },
+        {
+          arguments: '{"city":"Berlin"}',
+          call_id: 'call_1',
+          id: 'fc_1',
+          name: 'weather_lookup',
+          status: 'completed',
+          type: 'function_call',
         },
       ],
-      created: 1,
-      id: 'chatcmpl_tool_1',
-      model: 'gpt-4o',
-      object: 'chat.completion',
+      status: 'completed',
       usage: {
-        completion_tokens: 6,
-        prompt_tokens: 30,
+        input_tokens: 30,
+        output_tokens: 6,
       },
     });
   }
 
   return jsonResponse({
-    choices: [
+    id: 'resp_text_1',
+    model: 'gpt-4o',
+    object: 'response',
+    output: [
       {
-        finish_reason: 'stop',
-        index: 0,
-        message: {
-          content: 'OpenAI mock says hello.',
-          role: 'assistant',
-        },
+        content: [
+          {
+            annotations: [],
+            text: 'OpenAI mock says hello.',
+            type: 'output_text',
+          },
+        ],
+        id: 'msg_text_1',
+        role: 'assistant',
+        status: 'completed',
+        type: 'message',
       },
     ],
-    created: 1,
-    id: 'chatcmpl_text_1',
-    model: 'gpt-4o',
-    object: 'chat.completion',
+    status: 'completed',
     usage: {
-      completion_tokens: 5,
-      prompt_tokens: 14,
+      input_tokens: 14,
+      output_tokens: 5,
     },
   });
 }
@@ -588,11 +612,11 @@ async function startServerOrSkip(
 }
 
 function extractOpenAIUserText(body: Record<string, unknown>): string {
-  const messages = Array.isArray(body.messages) ? body.messages : [];
-  return messages
-    .map((message) => {
-      const entry = asRecord(message);
-      if (entry.role !== 'user') {
+  const input = Array.isArray(body.input) ? body.input : [];
+  return input
+    .map((item) => {
+      const entry = asRecord(item);
+      if (entry.type !== 'message' || entry.role !== 'user') {
         return '';
       }
 
@@ -649,6 +673,10 @@ function extractTextParts(content: unknown): string {
       const normalized = asRecord(part);
       if (typeof normalized.text === 'string') {
         return normalized.text;
+      }
+
+      if (typeof normalized.image_url === 'string') {
+        return normalized.image_url;
       }
 
       const imageUrl = asRecord(normalized.image_url);

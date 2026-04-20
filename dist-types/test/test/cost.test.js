@@ -60,14 +60,24 @@ describe('cost utilities', () => {
             outputTokens: 50,
         });
         expect(openaiUsageToCanonical({
-            completion_tokens: 50,
-            prompt_tokens: 100,
-            prompt_tokens_details: { cached_tokens: 25 },
+            input_tokens: 100,
+            input_tokens_details: { cached_tokens: 25 },
+            output_tokens: 50,
         })).toEqual({
             cachedReadTokens: 25,
             cachedTokens: 25,
             inputTokens: 100,
             outputTokens: 50,
+        });
+        expect(openaiUsageToCanonical({
+            completion_tokens: 20,
+            prompt_tokens: 80,
+            prompt_tokens_details: { cached_tokens: 10 },
+        })).toEqual({
+            cachedReadTokens: 10,
+            cachedTokens: 10,
+            inputTokens: 80,
+            outputTokens: 20,
         });
         expect(geminiUsageToCanonical({
             cachedContentTokenCount: 12,

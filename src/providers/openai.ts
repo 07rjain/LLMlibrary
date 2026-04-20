@@ -22,65 +22,55 @@ import type {
   JsonValue,
   StreamChunk,
 } from '../types.js';
+import type { OpenAIUsagePayload } from '../utils/cost.js';
 import type { RetryOptions } from '../utils/retry.js';
 
-type OpenAIMessage =
-  | OpenAIDeveloperMessage
-  | OpenAIUserMessage
-  | OpenAIAssistantMessage
-  | OpenAIToolMessage;
+type OpenAIInputItem =
+  | OpenAIFunctionCallInput
+  | OpenAIFunctionCallOutputInput
+  | OpenAIMessageInput;
 
-interface OpenAIDeveloperMessage {
-  content: string;
-  role: 'developer';
-}
-
-interface OpenAIUserTextPart {
+interface OpenAIInputTextPart {
   text: string;
-  type: 'text';
+  type: 'input_text';
 }
 
-interface OpenAIUserImagePart {
-  image_url: {
-    url: string;
-  };
-  type: 'image_url';
+interface OpenAIInputImagePart {
+  detail?: 'auto' | 'high' | 'low';
+  image_url: string;
+  type: 'input_image';
 }
 
-type OpenAIUserContentPart = OpenAIUserImagePart | OpenAIUserTextPart;
+type OpenAIInputContentPart = OpenAIInputImagePart | OpenAIInputTextPart;
 
-interface OpenAIUserMessage {
-  content: OpenAIUserContentPart[] | string;
-  role: 'user';
+interface OpenAIMessageInput {
+  content: OpenAIInputContentPart[];
+  role: 'assistant' | 'user';
+  type: 'message';
 }
 
-interface OpenAIToolCall {
-  function: {
-    arguments: string;
-    name: string;
-  };
-  id: string;
-  type: 'function';
+interface OpenAIFunctionCallInput {
+  arguments: string;
+  call_id: string;
+  id?: string;
+  name: string;
+  status?: 'completed' | 'in_progress' | 'incomplete';
+  type: 'function_call';
 }
 
-interface OpenAIAssistantMessage {
-  content: null | string;
-  role: 'assistant';
-  tool_calls?: OpenAIToolCall[];
-}
-
-interface OpenAIToolMessage {
-  content: string;
-  role: 'tool';
-  tool_call_id: string;
+interface OpenAIFunctionCallOutputInput {
+  call_id: string;
+  id?: string;
+  output: string;
+  status?: 'completed' | 'in_progress' | 'incomplete';
+  type: 'function_call_output';
 }
 
 interface OpenAIToolDefinition {
-  function: {
-    description: string;
-    name: string;
-    parameters: CanonicalTool['parameters'];
-  };
+  description: string;
+  name: string;
+  parameters: CanonicalTool['parameters'];
+  strict: false;
   type: 'function';
 }
 
@@ -88,82 +78,135 @@ type OpenAIToolChoice =
   | 'auto'
   | 'none'
   | 'required'
-  | { function: { name: string }; type: 'function' };
+  | { name: string; type: 'function' };
 
-interface OpenAIUsagePayload {
-  completion_tokens?: number;
-  prompt_tokens?: number;
-  prompt_tokens_details?: {
-    cached_tokens?: number;
-  };
-  total_tokens?: number;
+interface OpenAIResponseErrorPayload {
+  code?: string | null;
+  message?: string | null;
+  param?: string | null;
+  type?: string;
 }
 
-interface OpenAIChatCompletionPayload {
-  choices: Array<{
-    finish_reason:
-      | 'content_filter'
-      | 'function_call'
-      | 'length'
-      | 'stop'
-      | 'tool_calls'
-      | null;
-    index: number;
-    message: {
-      annotations?: unknown[];
-      content: null | string;
-      refusal?: string | null;
-      role: 'assistant';
-      tool_calls?: OpenAIToolCall[];
-    };
-  }>;
-  created: number;
+interface OpenAIOutputTextPart {
+  annotations?: unknown[];
+  text: string;
+  type: 'output_text';
+}
+
+interface OpenAIRefusalPart {
+  refusal: string;
+  type: 'refusal';
+}
+
+type OpenAIOutputMessageContentPart =
+  | OpenAIOutputTextPart
+  | OpenAIRefusalPart
+  | { type: string; [key: string]: unknown };
+
+interface OpenAIMessageOutput {
+  content: OpenAIOutputMessageContentPart[];
   id: string;
+  role: string;
+  status?: 'completed' | 'in_progress' | 'incomplete';
+  type: 'message';
+}
+
+interface OpenAIFunctionCallOutput {
+  arguments: string;
+  call_id: string;
+  id: string;
+  name: string;
+  status?: 'completed' | 'in_progress' | 'incomplete';
+  type: 'function_call';
+}
+
+type OpenAIOutputItem =
+  | OpenAIFunctionCallOutput
+  | OpenAIMessageOutput
+  | { id?: string; type: string; [key: string]: unknown };
+
+interface OpenAIResponsePayload {
+  created_at?: number;
+  error?: OpenAIResponseErrorPayload | null;
+  id: string;
+  incomplete_details?: {
+    reason?: string | null;
+  } | null;
   model: string;
-  object: 'chat.completion';
+  object: 'response';
+  output?: OpenAIOutputItem[];
+  status: 'completed' | 'failed' | 'in_progress' | 'incomplete';
   usage?: OpenAIUsagePayload;
 }
 
 interface OpenAIErrorBody {
-  error?: {
-    code?: string | null;
-    message?: string;
-    param?: string | null;
-    type?: string;
-  };
+  error?: OpenAIResponseErrorPayload;
 }
 
-interface OpenAIChunkToolCallDelta {
-  function?: {
-    arguments?: string;
-    name?: string;
-  };
-  id?: string;
-  index: number;
-  type?: 'function';
+interface OpenAIResponseOutputTextDeltaEvent {
+  content_index: number;
+  delta: string;
+  item_id: string;
+  output_index: number;
+  sequence_number: number;
+  type: 'response.output_text.delta';
 }
 
-interface OpenAIChatCompletionChunk {
-  choices: Array<{
-    delta: {
-      content?: string | null;
-      role?: 'assistant';
-      tool_calls?: OpenAIChunkToolCallDelta[];
-    };
-    finish_reason:
-      | 'content_filter'
-      | 'function_call'
-      | 'length'
-      | 'stop'
-      | 'tool_calls'
-      | null;
-    index: number;
-  }>;
-  created: number;
-  id: string;
-  model: string;
-  object: 'chat.completion.chunk';
-  usage?: OpenAIUsagePayload;
+interface OpenAIResponseOutputItemAddedEvent {
+  item: OpenAIOutputItem;
+  output_index: number;
+  sequence_number: number;
+  type: 'response.output_item.added';
+}
+
+interface OpenAIResponseOutputItemDoneEvent {
+  item: OpenAIOutputItem;
+  output_index: number;
+  sequence_number: number;
+  type: 'response.output_item.done';
+}
+
+interface OpenAIResponseFunctionCallArgumentsDeltaEvent {
+  delta: string;
+  item_id: string;
+  output_index: number;
+  sequence_number: number;
+  type: 'response.function_call_arguments.delta';
+}
+
+interface OpenAIResponseFunctionCallArgumentsDoneEvent {
+  arguments: string;
+  call_id?: string;
+  item_id: string;
+  name: string;
+  output_index: number;
+  sequence_number: number;
+  type: 'response.function_call_arguments.done';
+}
+
+interface OpenAIResponseCompletedEvent {
+  response: OpenAIResponsePayload;
+  sequence_number: number;
+  type: 'response.completed';
+}
+
+interface OpenAIResponseFailedEvent {
+  response: OpenAIResponsePayload;
+  sequence_number: number;
+  type: 'response.failed';
+}
+
+interface OpenAIResponseIncompleteEvent {
+  response: OpenAIResponsePayload;
+  sequence_number: number;
+  type: 'response.incomplete';
+}
+
+interface OpenAIResponseErrorEvent {
+  code?: string | null;
+  message?: string;
+  param?: string | null;
+  type: 'error';
 }
 
 export interface OpenAIClientConfig {
@@ -212,7 +255,7 @@ export class OpenAIAdapter {
     const response = await withRetry(
       async () =>
         this.fetchImplementation(
-          `${this.baseUrl}/v1/chat/completions`,
+          `${this.baseUrl}/v1/responses`,
           buildRequestInit(
             {
               body: JSON.stringify(translateOpenAIRequest(options)),
@@ -229,7 +272,7 @@ export class OpenAIAdapter {
       throw await mapOpenAIError(response, options.model);
     }
 
-    const payload = (await response.json()) as OpenAIChatCompletionPayload;
+    const payload = (await response.json()) as OpenAIResponsePayload;
     return translateOpenAIResponse(payload, this.modelRegistry, options.model);
   }
 
@@ -241,13 +284,12 @@ export class OpenAIAdapter {
     const response = await withRetry(
       async () =>
         this.fetchImplementation(
-          `${this.baseUrl}/v1/chat/completions`,
+          `${this.baseUrl}/v1/responses`,
           buildRequestInit(
             {
               body: JSON.stringify({
                 ...translateOpenAIRequest(options),
                 stream: true,
-                stream_options: { include_usage: true },
               }),
               headers: this.buildHeaders(),
               method: 'POST',
@@ -271,8 +313,8 @@ export class OpenAIAdapter {
 
     const assembler = new OpenAIStreamAssembler(options.model, this.modelRegistry);
     for await (const payload of parseSSE(response.body)) {
-      const chunk = JSON.parse(payload) as OpenAIChatCompletionChunk;
-      yield* assembler.consume(chunk);
+      const event = JSON.parse(payload) as { [key: string]: unknown; type?: string };
+      yield* assembler.consume(event);
     }
 
     yield assembler.finish();
@@ -295,7 +337,7 @@ export class OpenAIAdapter {
 
     if (options.messages.some(messageContainsUnsupportedOpenAIParts)) {
       throw new ProviderCapabilityError(
-        `Model "${options.model}" request includes unsupported content parts for the OpenAI chat completions API.`,
+        `Model "${options.model}" request includes unsupported content parts for the OpenAI Responses API.`,
         {
           model: options.model,
           provider: 'openai',
@@ -317,31 +359,34 @@ export class OpenAIAdapter {
 export function translateOpenAIRequest(
   options: OpenAICompletionOptions,
 ): Record<string, unknown> {
-  const messages: OpenAIMessage[] = [];
+  const input: OpenAIInputItem[] = [];
+  const instructions: string[] = [];
 
   if (options.system) {
-    messages.push({
-      content: options.system,
-      role: 'developer',
-    });
+    instructions.push(options.system);
   }
 
   for (const message of options.messages) {
     if (message.role === 'system') {
-      messages.push(translateOpenAISystemMessage(message));
+      instructions.push(translateOpenAISystemMessage(message));
       continue;
     }
 
-    messages.push(...translateOpenAIMessage(message));
+    input.push(...translateOpenAIMessage(message));
   }
 
   const body: Record<string, unknown> = {
-    messages,
+    input,
     model: options.model,
+    store: false,
   };
 
+  if (instructions.length > 0) {
+    body.instructions = instructions.join('\n\n');
+  }
+
   if (options.maxTokens !== undefined) {
-    body.max_completion_tokens = options.maxTokens;
+    body.max_output_tokens = options.maxTokens;
   }
 
   if (options.temperature !== undefined) {
@@ -365,11 +410,10 @@ export function translateOpenAIRequest(
 
 export function translateOpenAITool(tool: CanonicalTool): OpenAIToolDefinition {
   return {
-    function: {
-      description: tool.description,
-      name: tool.name,
-      parameters: tool.parameters,
-    },
+    description: tool.description,
+    name: tool.name,
+    parameters: tool.parameters,
+    strict: false,
     type: 'function',
   };
 }
@@ -390,9 +434,7 @@ export function translateOpenAIToolChoice(toolChoice: CanonicalToolChoice): {
         ? { parallelToolCalls: !toolChoice.disableParallelToolUse }
         : {}),
       toolChoice: {
-        function: {
-          name: toolChoice.name,
-        },
+        name: toolChoice.name,
         type: 'function',
       },
     };
@@ -404,56 +446,67 @@ export function translateOpenAIToolChoice(toolChoice: CanonicalToolChoice): {
 }
 
 export function translateOpenAIResponse(
-  payload: OpenAIChatCompletionPayload,
+  payload: OpenAIResponsePayload,
   modelRegistry: ModelRegistry = new ModelRegistry(),
   requestedModel?: string,
 ): CanonicalResponse {
   const resolvedModelId = resolveOpenAIModelId(payload.model, requestedModel, modelRegistry);
   const model = modelRegistry.get(resolvedModelId);
   const usage = usageWithCost(model, openaiUsageToCanonical(payload.usage));
-  const choice = payload.choices[0];
-  if (!choice) {
-    throw new ProviderError('OpenAI response contained no choices.', {
-      model: payload.model,
-      provider: 'openai',
-    });
-  }
-
   const content: CanonicalPart[] = [];
   const toolCalls: CanonicalToolCall[] = [];
-  if (choice.message.content) {
-    content.push({
-      text: choice.message.content,
-      type: 'text',
-    });
-  }
+  const textSegments: string[] = [];
 
-  for (const toolCall of choice.message.tool_calls ?? []) {
-    const args = parseOpenAIToolArguments(
-      toolCall.function.arguments,
-      payload.model,
-      toolCall.function.name,
-    );
-    content.push({
-      args,
-      id: toolCall.id,
-      name: toolCall.function.name,
-      type: 'tool_call',
-    });
-    toolCalls.push({
-      args,
-      id: toolCall.id,
-      name: toolCall.function.name,
-    });
+  for (const item of payload.output ?? []) {
+    if (isOpenAIMessageOutput(item) && item.role === 'assistant') {
+      for (const part of item.content) {
+        if (isOpenAIOutputTextPart(part)) {
+          content.push({
+            text: part.text,
+            type: 'text',
+          });
+          textSegments.push(part.text);
+          continue;
+        }
+
+        if (isOpenAIRefusalPart(part)) {
+          content.push({
+            text: part.refusal,
+            type: 'text',
+          });
+          textSegments.push(part.refusal);
+        }
+      }
+      continue;
+    }
+
+    if (isOpenAIFunctionCallOutput(item)) {
+      const args = parseOpenAIToolArguments(
+        item.arguments,
+        payload.model,
+        item.name,
+      );
+      content.push({
+        args,
+        id: item.call_id,
+        name: item.name,
+        type: 'tool_call',
+      });
+      toolCalls.push({
+        args,
+        id: item.call_id,
+        name: item.name,
+      });
+    }
   }
 
   return {
     content,
-    finishReason: normalizeOpenAIFinishReason(choice.finish_reason),
+    finishReason: normalizeOpenAIFinishReason(payload),
     model: resolvedModelId,
     provider: 'openai',
     raw: payload,
-    text: choice.message.content ?? '',
+    text: textSegments.join(''),
     toolCalls,
     usage,
   };
@@ -519,110 +572,206 @@ export async function mapOpenAIError(
 }
 
 class OpenAIStreamAssembler {
+  private finalResponse: OpenAIResponsePayload | undefined;
   private finishReason: CanonicalFinishReason = 'stop';
   private readonly model: string;
   private readonly modelRegistry: ModelRegistry;
-  private readonly toolBuffer = new Map<number, { args: string; id: string; name: string }>();
-  private usage: OpenAIUsagePayload | undefined;
+  private readonly toolBuffer = new Map<
+    string,
+    { args: string; callId: string; name: string }
+  >();
 
   constructor(model: string, modelRegistry: ModelRegistry) {
     this.model = model;
     this.modelRegistry = modelRegistry;
   }
 
-  *consume(chunk: OpenAIChatCompletionChunk): Generator<StreamChunk> {
-    if (chunk.usage) {
-      this.usage = chunk.usage;
-    }
-
-    for (const choice of chunk.choices) {
-      if (choice.delta.content) {
-        yield {
-          delta: choice.delta.content,
-          type: 'text-delta',
-        };
-      }
-
-      for (const toolCall of choice.delta.tool_calls ?? []) {
-        const current = this.toolBuffer.get(toolCall.index);
-        if (!current) {
-          const id = toolCall.id ?? `tool_call_${toolCall.index}`;
-          const name = toolCall.function?.name ?? `tool_${toolCall.index}`;
-          this.toolBuffer.set(toolCall.index, {
-            args: '',
-            id,
-            name,
-          });
+  *consume(event: { [key: string]: unknown; type?: string }): Generator<StreamChunk> {
+    switch (event.type) {
+      case 'response.output_text.delta': {
+        const typedEvent = event as unknown as OpenAIResponseOutputTextDeltaEvent;
+        if (typedEvent.delta.length > 0) {
           yield {
-            id,
-            name,
-            type: 'tool-call-start',
-          };
-        } else {
-          if (toolCall.id) {
-            current.id = toolCall.id;
-          }
-          if (toolCall.function?.name) {
-            current.name = toolCall.function.name;
-          }
-        }
-
-        if (toolCall.function?.arguments) {
-          const buffer = this.toolBuffer.get(toolCall.index);
-          if (!buffer) {
-            continue;
-          }
-          buffer.args += toolCall.function.arguments;
-          yield {
-            argsDelta: toolCall.function.arguments,
-            id: buffer.id,
-            type: 'tool-call-delta',
+            delta: typedEvent.delta,
+            type: 'text-delta',
           };
         }
+        return;
       }
-
-      if (choice.finish_reason) {
-        this.finishReason = normalizeOpenAIFinishReason(choice.finish_reason);
-        if (choice.finish_reason === 'tool_calls' || choice.finish_reason === 'function_call') {
-          yield* this.flushToolCalls();
-        }
+      case 'response.output_item.added': {
+        const typedEvent = event as unknown as OpenAIResponseOutputItemAddedEvent;
+        yield* this.handleOutputItemAdded(typedEvent.item, typedEvent.output_index);
+        return;
       }
+      case 'response.function_call_arguments.delta':
+        yield* this.handleFunctionCallArgumentsDelta(
+          event as unknown as OpenAIResponseFunctionCallArgumentsDeltaEvent,
+        );
+        return;
+      case 'response.function_call_arguments.done':
+        this.handleFunctionCallArgumentsDone(
+          event as unknown as OpenAIResponseFunctionCallArgumentsDoneEvent,
+        );
+        return;
+      case 'response.output_item.done': {
+        const typedEvent = event as unknown as OpenAIResponseOutputItemDoneEvent;
+        yield* this.handleOutputItemDone(typedEvent.item, typedEvent.output_index);
+        return;
+      }
+      case 'response.completed':
+      case 'response.incomplete':
+        this.finalResponse = (
+          event as unknown as OpenAIResponseCompletedEvent | OpenAIResponseIncompleteEvent
+        ).response;
+        this.finishReason = normalizeOpenAIFinishReason(this.finalResponse);
+        return;
+      case 'response.failed':
+        this.finalResponse = (event as unknown as OpenAIResponseFailedEvent).response;
+        this.finishReason = normalizeOpenAIFinishReason(this.finalResponse);
+        throw this.buildStreamError(this.finalResponse.error);
+      case 'error':
+        throw this.buildStreamError(event as unknown as OpenAIResponseErrorEvent);
+      default:
+        return;
     }
   }
 
   finish(): StreamChunk {
-    const model = this.modelRegistry.get(this.model);
+    const responseModel = this.finalResponse?.model ?? this.model;
+    const resolvedModelId = resolveOpenAIModelId(
+      responseModel,
+      this.model,
+      this.modelRegistry,
+    );
+    const model = this.modelRegistry.get(resolvedModelId);
     return {
       finishReason: this.finishReason,
       type: 'done',
-      usage: usageWithCost(model, openaiUsageToCanonical(this.usage)),
+      usage: usageWithCost(model, openaiUsageToCanonical(this.finalResponse?.usage)),
     };
   }
 
-  private *flushToolCalls(): Generator<StreamChunk> {
-    for (const [index, tool] of this.toolBuffer.entries()) {
-      this.toolBuffer.delete(index);
+  private buildStreamError(
+    error: OpenAIResponseErrorPayload | null | undefined,
+  ): ProviderError {
+    return new ProviderError(error?.message ?? 'OpenAI streaming request failed.', {
+      model: this.model,
+      provider: 'openai',
+    });
+  }
+
+  private *handleOutputItemAdded(
+    item: OpenAIOutputItem,
+    outputIndex: number,
+  ): Generator<StreamChunk> {
+    if (!isOpenAIFunctionCallOutput(item)) {
+      return;
+    }
+
+    const existing = this.toolBuffer.get(item.id);
+    if (existing) {
+      existing.callId = item.call_id;
+      existing.name = item.name;
+      if (item.arguments.length > existing.args.length) {
+        existing.args = item.arguments;
+      }
+      return;
+    }
+
+    this.toolBuffer.set(item.id, {
+      args: item.arguments,
+      callId: item.call_id,
+      name: item.name,
+    });
+    yield {
+      id: item.call_id,
+      name: item.name,
+      type: 'tool-call-start',
+    };
+
+    if (item.arguments.length > 0) {
       yield {
-        id: tool.id,
-        name: tool.name,
-        result: parseOpenAIToolArguments(tool.args, this.model, tool.name),
-        type: 'tool-call-result',
+        argsDelta: item.arguments,
+        id: item.call_id,
+        type: 'tool-call-delta',
       };
     }
+
+    void outputIndex;
+  }
+
+  private *handleFunctionCallArgumentsDelta(
+    event: OpenAIResponseFunctionCallArgumentsDeltaEvent,
+  ): Generator<StreamChunk> {
+    const tool = this.getOrCreateToolBuffer(event.item_id, event.output_index);
+    tool.args += event.delta;
+    yield {
+      argsDelta: event.delta,
+      id: tool.callId,
+      type: 'tool-call-delta',
+    };
+  }
+
+  private handleFunctionCallArgumentsDone(
+    event: OpenAIResponseFunctionCallArgumentsDoneEvent,
+  ): void {
+    const tool = this.getOrCreateToolBuffer(event.item_id, event.output_index);
+    tool.args = event.arguments;
+    tool.name = event.name;
+    if (event.call_id) {
+      tool.callId = event.call_id;
+    }
+  }
+
+  private *handleOutputItemDone(
+    item: OpenAIOutputItem,
+    outputIndex: number,
+  ): Generator<StreamChunk> {
+    if (!isOpenAIFunctionCallOutput(item)) {
+      return;
+    }
+
+    const tool = this.getOrCreateToolBuffer(item.id, outputIndex);
+    tool.args = item.arguments;
+    tool.callId = item.call_id;
+    tool.name = item.name;
+    this.toolBuffer.delete(item.id);
+    this.finishReason = 'tool_call';
+    yield {
+      id: tool.callId,
+      name: tool.name,
+      result: parseOpenAIToolArguments(tool.args, this.model, tool.name),
+      type: 'tool-call-result',
+    };
+  }
+
+  private getOrCreateToolBuffer(
+    itemId: string,
+    outputIndex: number,
+  ): { args: string; callId: string; name: string } {
+    const existing = this.toolBuffer.get(itemId);
+    if (existing) {
+      return existing;
+    }
+
+    const created = {
+      args: '',
+      callId: itemId,
+      name: `tool_${outputIndex}`,
+    };
+    this.toolBuffer.set(itemId, created);
+    return created;
   }
 }
 
-function translateOpenAISystemMessage(message: CanonicalMessage): OpenAIDeveloperMessage {
+function translateOpenAISystemMessage(message: CanonicalMessage): string {
   if (typeof message.content === 'string') {
-    return {
-      content: message.content,
-      role: 'developer',
-    };
+    return message.content;
   }
 
   if (message.content.some((part) => part.type !== 'text')) {
     throw new ProviderCapabilityError(
-      'OpenAI developer messages currently support text content only.',
+      'OpenAI instructions currently support text content only.',
       {
         provider: 'openai',
       },
@@ -633,66 +782,65 @@ function translateOpenAISystemMessage(message: CanonicalMessage): OpenAIDevelope
     (part): part is Extract<CanonicalPart, { type: 'text' }> => part.type === 'text',
   );
 
-  return {
-    content: textParts.map((part) => part.text).join('\n\n'),
-    role: 'developer',
-  };
+  return textParts.map((part) => part.text).join('\n\n');
 }
 
-function translateOpenAIMessage(message: CanonicalMessage): OpenAIMessage[] {
+function translateOpenAIMessage(message: CanonicalMessage): OpenAIInputItem[] {
   switch (message.role) {
     case 'assistant':
       return translateOpenAIAssistantMessage(message);
     case 'system':
-      return [translateOpenAISystemMessage(message)];
+      return [];
     case 'user':
       return translateOpenAIUserMessage(message);
   }
 }
 
-function translateOpenAIUserMessage(message: CanonicalMessage): OpenAIMessage[] {
+function translateOpenAIUserMessage(message: CanonicalMessage): OpenAIInputItem[] {
   if (typeof message.content === 'string') {
     return [
       {
-        content: message.content,
+        content: [
+          {
+            text: message.content,
+            type: 'input_text',
+          },
+        ],
         role: 'user',
+        type: 'message',
       },
     ];
   }
 
-  const userParts: OpenAIUserContentPart[] = [];
-  const toolMessages: OpenAIToolMessage[] = [];
+  const userParts: OpenAIInputContentPart[] = [];
+  const items: OpenAIInputItem[] = [];
 
   for (const part of message.content) {
     switch (part.type) {
       case 'audio':
       case 'document':
         throw new ProviderCapabilityError(
-          'OpenAI chat completions do not support document or audio canonical parts in this adapter.',
+          'OpenAI Responses do not support document or audio canonical parts in this adapter.',
           {
             provider: 'openai',
           },
         );
       case 'image_base64':
         userParts.push({
-          image_url: {
-            url: `data:${part.mediaType};base64,${part.data}`,
-          },
-          type: 'image_url',
+          image_url: `data:${part.mediaType};base64,${part.data}`,
+          type: 'input_image',
         });
         break;
       case 'image_url':
         userParts.push({
-          image_url: {
-            url: part.url,
-          },
-          type: 'image_url',
+          image_url: part.url,
+          type: 'input_image',
         });
         break;
       case 'text':
         userParts.push({
           text: part.text,
-          type: 'text',
+          type: 'input_text',
         });
         break;
       case 'tool_call':
@@ -703,42 +851,44 @@ function translateOpenAIUserMessage(message: CanonicalMessage): OpenAIMessage[] 
           },
         );
       case 'tool_result':
-        toolMessages.push({
-          content: stringifyToolResult(part.result),
-          role: 'tool',
-          tool_call_id: part.toolCallId,
+        items.push({
+          call_id: part.toolCallId,
+          output: stringifyToolResult(part.result),
+          type: 'function_call_output',
         });
         break;
     }
   }
 
-  const messages: OpenAIMessage[] = [];
   if (userParts.length > 0) {
-    const onlyText = userParts.every((part) => part.type === 'text');
-    messages.push({
-      content: onlyText
-        ? userParts.map((part) => part.text).join('\n\n')
-        : userParts,
+    items.unshift({
+      content: userParts,
       role: 'user',
+      type: 'message',
     });
   }
 
-  messages.push(...toolMessages);
-  return messages;
+  return items;
 }
 
-function translateOpenAIAssistantMessage(message: CanonicalMessage): OpenAIMessage[] {
+function translateOpenAIAssistantMessage(message: CanonicalMessage): OpenAIInputItem[] {
   if (typeof message.content === 'string') {
     return [
       {
-        content: message.content,
+        content: [
+          {
+            text: message.content,
+            type: 'input_text',
+          },
+        ],
         role: 'assistant',
+        type: 'message',
       },
     ];
   }
 
-  const textParts: string[] = [];
-  const toolCalls: OpenAIToolCall[] = [];
+  const items: OpenAIInputItem[] = [];
+  const textParts: OpenAIInputContentPart[] = [];
 
   for (const part of message.content) {
     switch (part.type) {
@@ -754,37 +904,31 @@ function translateOpenAIAssistantMessage(message: CanonicalMessage): OpenAIMessa
           },
         );
       case 'text':
-        textParts.push(part.text);
+        textParts.push({
+          text: part.text,
+          type: 'input_text',
+        });
         break;
       case 'tool_call':
-        toolCalls.push({
-          function: {
-            arguments: JSON.stringify(part.args),
-            name: part.name,
-          },
-          id: part.id,
-          type: 'function',
+        items.push({
+          arguments: JSON.stringify(part.args),
+          call_id: part.id,
+          name: part.name,
+          type: 'function_call',
         });
         break;
     }
   }
 
-  if (toolCalls.length > 0) {
-    return [
-      {
-        content: null,
-        role: 'assistant',
-        tool_calls: toolCalls,
-      },
-    ];
+  if (textParts.length > 0) {
+    items.unshift({
+      content: textParts,
+      role: 'assistant',
+      type: 'message',
+    });
   }
 
-  return [
-    {
-      content: textParts.join('\n\n'),
-      role: 'assistant',
-    },
-  ];
+  return items;
 }
 
 function parseOpenAIToolArguments(
@@ -812,26 +956,52 @@ function parseOpenAIToolArguments(
 }
 
 function normalizeOpenAIFinishReason(
-  finishReason:
-    | 'content_filter'
-    | 'function_call'
-    | 'length'
-    | 'stop'
-    | 'tool_calls'
-    | null,
+  payload: Pick<OpenAIResponsePayload, 'error' | 'incomplete_details' | 'output' | 'status'>,
 ): CanonicalFinishReason {
-  switch (finishReason) {
-    case 'content_filter':
-      return 'content_filter';
-    case 'function_call':
-    case 'tool_calls':
-      return 'tool_call';
-    case 'length':
-      return 'length';
-    case 'stop':
-    case null:
-      return 'stop';
+  if ((payload.output ?? []).some(isOpenAIFunctionCallOutput)) {
+    return 'tool_call';
   }
+
+  if (payload.error || payload.status === 'failed') {
+    return 'error';
+  }
+
+  const reason = payload.incomplete_details?.reason ?? '';
+  if (reason.length > 0) {
+    if (/content|filter|policy|safety/i.test(reason)) {
+      return 'content_filter';
+    }
+
+    if (/length|max|token/i.test(reason)) {
+      return 'length';
+    }
+  }
+
+  if (payload.status === 'incomplete') {
+    return 'length';
+  }
+
+  return 'stop';
+}
+
+function isOpenAIFunctionCallOutput(item: OpenAIOutputItem): item is OpenAIFunctionCallOutput {
+  return item.type === 'function_call';
+}
+
+function isOpenAIMessageOutput(item: OpenAIOutputItem): item is OpenAIMessageOutput {
+  return item.type === 'message';
+}
+
+function isOpenAIOutputTextPart(
+  part: OpenAIOutputMessageContentPart,
+): part is OpenAIOutputTextPart {
+  return part.type === 'output_text';
+}
+
+function isOpenAIRefusalPart(
+  part: OpenAIOutputMessageContentPart,
+): part is OpenAIRefusalPart {
+  return part.type === 'refusal';
 }
 
 function messageContainsUnsupportedOpenAIParts(message: CanonicalMessage): boolean {

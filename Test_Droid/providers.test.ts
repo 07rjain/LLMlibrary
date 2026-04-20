@@ -219,18 +219,26 @@ describe('Provider Adapters', () => {
       const fetchMock = vi.fn(async () =>
         new Response(
           JSON.stringify({
-            choices: [
+            id: 'resp_123',
+            model: 'gpt-4o',
+            object: 'response',
+            output: [
               {
-                finish_reason: 'stop',
-                index: 0,
-                message: { content: 'Hello from GPT!', role: 'assistant' },
+                content: [
+                  {
+                    annotations: [],
+                    text: 'Hello from GPT!',
+                    type: 'output_text',
+                  },
+                ],
+                id: 'msg_1',
+                role: 'assistant',
+                status: 'completed',
+                type: 'message',
               },
             ],
-            created: 1234567890,
-            id: 'chatcmpl_123',
-            model: 'gpt-4o',
-            object: 'chat.completion',
-            usage: { completion_tokens: 5, prompt_tokens: 10 },
+            status: 'completed',
+            usage: { input_tokens: 10, output_tokens: 5 },
           }),
           { headers: { 'content-type': 'application/json' }, status: 200 },
         ),
@@ -265,31 +273,21 @@ describe('Provider Adapters', () => {
       const fetchMock = vi.fn(async () =>
         new Response(
           JSON.stringify({
-            choices: [
+            id: 'resp_123',
+            model: 'gpt-4o',
+            object: 'response',
+            output: [
               {
-                finish_reason: 'tool_calls',
-                index: 0,
-                message: {
-                  content: null,
-                  role: 'assistant',
-                  tool_calls: [
-                    {
-                      function: {
-                        arguments: '{"query":"test"}',
-                        name: 'search',
-                      },
-                      id: 'call_123',
-                      type: 'function',
-                    },
-                  ],
-                },
+                arguments: '{"query":"test"}',
+                call_id: 'call_123',
+                id: 'fc_1',
+                name: 'search',
+                status: 'completed',
+                type: 'function_call',
               },
             ],
-            created: 1234567890,
-            id: 'chatcmpl_123',
-            model: 'gpt-4o',
-            object: 'chat.completion',
-            usage: { completion_tokens: 15, prompt_tokens: 20 },
+            status: 'completed',
+            usage: { input_tokens: 20, output_tokens: 15 },
           }),
           { headers: { 'content-type': 'application/json' }, status: 200 },
         ),
@@ -328,34 +326,42 @@ describe('Provider Adapters', () => {
               controller.enqueue(
                 new TextEncoder().encode(
                   `data: ${JSON.stringify({
-                    choices: [{ delta: { content: 'Hello', role: 'assistant' }, index: 0 }],
-                    created: 1,
-                    id: 'chatcmpl_1',
-                    model: 'gpt-4o',
-                    object: 'chat.completion.chunk',
+                    content_index: 0,
+                    delta: 'Hello',
+                    item_id: 'msg_1',
+                    output_index: 0,
+                    sequence_number: 1,
+                    type: 'response.output_text.delta',
                   })}\n\n`,
                 ),
               );
               controller.enqueue(
                 new TextEncoder().encode(
                   `data: ${JSON.stringify({
-                    choices: [{ delta: {}, finish_reason: 'stop', index: 0 }],
-                    created: 1,
-                    id: 'chatcmpl_1',
-                    model: 'gpt-4o',
-                    object: 'chat.completion.chunk',
-                  })}\n\n`,
-                ),
-              );
-              controller.enqueue(
-                new TextEncoder().encode(
-                  `data: ${JSON.stringify({
-                    choices: [],
-                    created: 1,
-                    id: 'chatcmpl_1',
-                    model: 'gpt-4o',
-                    object: 'chat.completion.chunk',
-                    usage: { completion_tokens: 5, prompt_tokens: 10 },
+                    response: {
+                      id: 'resp_1',
+                      model: 'gpt-4o',
+                      object: 'response',
+                      output: [
+                        {
+                          content: [
+                            {
+                              annotations: [],
+                              text: 'Hello',
+                              type: 'output_text',
+                            },
+                          ],
+                          id: 'msg_1',
+                          role: 'assistant',
+                          status: 'completed',
+                          type: 'message',
+                        },
+                      ],
+                      status: 'completed',
+                      usage: { input_tokens: 10, output_tokens: 5 },
+                    },
+                    sequence_number: 2,
+                    type: 'response.completed',
                   })}\n\n`,
                 ),
               );
@@ -391,14 +397,26 @@ describe('Provider Adapters', () => {
       const fetchMock = vi.fn(async () =>
         new Response(
           JSON.stringify({
-            choices: [
-              { finish_reason: 'stop', index: 0, message: { content: 'OK', role: 'assistant' } },
-            ],
-            created: 1,
-            id: 'chatcmpl_1',
+            id: 'resp_1',
             model: 'gpt-4o',
-            object: 'chat.completion',
-            usage: { completion_tokens: 1, prompt_tokens: 15 },
+            object: 'response',
+            output: [
+              {
+                content: [
+                  {
+                    annotations: [],
+                    text: 'OK',
+                    type: 'output_text',
+                  },
+                ],
+                id: 'msg_1',
+                role: 'assistant',
+                status: 'completed',
+                type: 'message',
+              },
+            ],
+            status: 'completed',
+            usage: { input_tokens: 15, output_tokens: 1 },
           }),
           { headers: { 'content-type': 'application/json' }, status: 200 },
         ),
@@ -419,10 +437,8 @@ describe('Provider Adapters', () => {
       });
 
       const [, init] = fetchMock.mock.calls[0] as [RequestInfo, RequestInit];
-      const body = JSON.parse(init.body as string) as { messages: CanonicalMessage[] };
-      // OpenAI uses 'developer' role instead of 'system' for newer models
-      expect(['system', 'developer']).toContain(body.messages[0]?.role);
-      expect(body.messages[0]?.content).toBe('You are helpful');
+      const body = JSON.parse(init.body as string) as { instructions?: string; input: CanonicalMessage[] };
+      expect(body.instructions).toBe('You are helpful');
     });
   });
 
@@ -637,14 +653,26 @@ describe('Provider Adapters', () => {
       const fetchMock = vi.fn(async () =>
         new Response(
           JSON.stringify({
-            choices: [
-              { finish_reason: 'stop', index: 0, message: { content: 'OK', role: 'assistant' } },
-            ],
-            created: 1,
-            id: 'chatcmpl_1',
+            id: 'resp_1',
             model: 'gpt-4o',
-            object: 'chat.completion',
-            usage: { completion_tokens: 1, prompt_tokens: 20 },
+            object: 'response',
+            output: [
+              {
+                content: [
+                  {
+                    annotations: [],
+                    text: 'OK',
+                    type: 'output_text',
+                  },
+                ],
+                id: 'msg_1',
+                role: 'assistant',
+                status: 'completed',
+                type: 'message',
+              },
+            ],
+            status: 'completed',
+            usage: { input_tokens: 20, output_tokens: 1 },
           }),
           { headers: { 'content-type': 'application/json' }, status: 200 },
         ),
@@ -678,14 +706,26 @@ describe('Provider Adapters', () => {
       const fetchMock = vi.fn(async () =>
         new Response(
           JSON.stringify({
-            choices: [
-              { finish_reason: 'stop', index: 0, message: { content: 'Done', role: 'assistant' } },
-            ],
-            created: 1,
-            id: 'chatcmpl_1',
+            id: 'resp_1',
             model: 'gpt-4o',
-            object: 'chat.completion',
-            usage: { completion_tokens: 1, prompt_tokens: 25 },
+            object: 'response',
+            output: [
+              {
+                content: [
+                  {
+                    annotations: [],
+                    text: 'Done',
+                    type: 'output_text',
+                  },
+                ],
+                id: 'msg_1',
+                role: 'assistant',
+                status: 'completed',
+                type: 'message',
+              },
+            ],
+            status: 'completed',
+            usage: { input_tokens: 25, output_tokens: 1 },
           }),
           { headers: { 'content-type': 'application/json' }, status: 200 },
         ),

@@ -5,7 +5,14 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['Test_Droid/**', 'coverage/**', 'dist/**', 'dist-types/**', 'docs/api/**'],
+    ignores: [
+      'Test_Droid/**',
+      'coverage/**',
+      'dist/**',
+      'dist-types/**',
+      'docs/.vitepress/**',
+      'docs/api/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

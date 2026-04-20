@@ -162,32 +162,45 @@ describe('LLMClient', () => {
             controller.enqueue(
               new TextEncoder().encode(
                 `data: ${JSON.stringify({
-                  choices: [
-                    {
-                      delta: { content: 'Hi', role: 'assistant' },
-                      finish_reason: 'stop',
-                      index: 0,
-                    },
-                  ],
-                  created: 1,
-                  id: 'chatcmpl_1',
-                  model: 'gpt-4o',
-                  object: 'chat.completion.chunk',
+                  content_index: 0,
+                  delta: 'Hi',
+                  item_id: 'msg_1',
+                  output_index: 0,
+                  sequence_number: 1,
+                  type: 'response.output_text.delta',
                 })}\n\n`,
               ),
             );
             controller.enqueue(
               new TextEncoder().encode(
                 `data: ${JSON.stringify({
-                  choices: [],
-                  created: 1,
-                  id: 'chatcmpl_1',
-                  model: 'gpt-4o',
-                  object: 'chat.completion.chunk',
-                  usage: {
-                    completion_tokens: 3,
-                    prompt_tokens: 5,
+                  response: {
+                    id: 'resp_1',
+                    model: 'gpt-4o',
+                    object: 'response',
+                    output: [
+                      {
+                        content: [
+                          {
+                            annotations: [],
+                            text: 'Hi',
+                            type: 'output_text',
+                          },
+                        ],
+                        id: 'msg_1',
+                        role: 'assistant',
+                        status: 'completed',
+                        type: 'message',
+                      },
+                    ],
+                    status: 'completed',
+                    usage: {
+                      input_tokens: 5,
+                      output_tokens: 3,
+                    },
                   },
+                  sequence_number: 2,
+                  type: 'response.completed',
                 })}\n\n`,
               ),
             );
@@ -293,23 +306,28 @@ describe('LLMClient', () => {
       const fetchImplementation = vi.fn(async () =>
         new Response(
           JSON.stringify({
-            choices: [
+            id: 'resp_1',
+            model: 'gpt-4o',
+            object: 'response',
+            output: [
               {
-                finish_reason: 'stop',
-                index: 0,
-                message: {
-                  content: 'Env response',
-                  role: 'assistant',
-                },
+                content: [
+                  {
+                    annotations: [],
+                    text: 'Env response',
+                    type: 'output_text',
+                  },
+                ],
+                id: 'msg_1',
+                role: 'assistant',
+                status: 'completed',
+                type: 'message',
               },
             ],
-            created: 1,
-            id: 'chatcmpl_1',
-            model: 'gpt-4o',
-            object: 'chat.completion',
+            status: 'completed',
             usage: {
-              completion_tokens: 3,
-              prompt_tokens: 5,
+              input_tokens: 5,
+              output_tokens: 3,
             },
           }),
           {
@@ -689,49 +707,45 @@ describe('LLMClient', () => {
             controller.enqueue(
               new TextEncoder().encode(
                 `data: ${JSON.stringify({
-                  choices: [
-                    {
-                      delta: { content: 'Fallback stream', role: 'assistant' },
-                      finish_reason: null,
-                      index: 0,
-                    },
-                  ],
-                  created: 1,
-                  id: 'chatcmpl_1',
-                  model: 'gpt-4o-mini',
-                  object: 'chat.completion.chunk',
+                  content_index: 0,
+                  delta: 'Fallback stream',
+                  item_id: 'msg_1',
+                  output_index: 0,
+                  sequence_number: 1,
+                  type: 'response.output_text.delta',
                 })}\n\n`,
               ),
             );
             controller.enqueue(
               new TextEncoder().encode(
                 `data: ${JSON.stringify({
-                  choices: [
-                    {
-                      delta: {},
-                      finish_reason: 'stop',
-                      index: 0,
+                  response: {
+                    id: 'resp_1',
+                    model: 'gpt-4o-mini',
+                    object: 'response',
+                    output: [
+                      {
+                        content: [
+                          {
+                            annotations: [],
+                            text: 'Fallback stream',
+                            type: 'output_text',
+                          },
+                        ],
+                        id: 'msg_1',
+                        role: 'assistant',
+                        status: 'completed',
+                        type: 'message',
+                      },
+                    ],
+                    status: 'completed',
+                    usage: {
+                      input_tokens: 4,
+                      output_tokens: 2,
                     },
-                  ],
-                  created: 1,
-                  id: 'chatcmpl_1',
-                  model: 'gpt-4o-mini',
-                  object: 'chat.completion.chunk',
-                })}\n\n`,
-              ),
-            );
-            controller.enqueue(
-              new TextEncoder().encode(
-                `data: ${JSON.stringify({
-                  choices: [],
-                  created: 1,
-                  id: 'chatcmpl_1',
-                  model: 'gpt-4o-mini',
-                  object: 'chat.completion.chunk',
-                  usage: {
-                    completion_tokens: 2,
-                    prompt_tokens: 4,
                   },
+                  sequence_number: 2,
+                  type: 'response.completed',
                 })}\n\n`,
               ),
             );
@@ -797,25 +811,20 @@ describe('LLMClient', () => {
       if (body.model === 'gpt-4o') {
         return new Response(
           new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(
-                new TextEncoder().encode(
-                  `data: ${JSON.stringify({
-                    choices: [
-                      {
-                        delta: { content: 'partial', role: 'assistant' },
-                        finish_reason: null,
-                        index: 0,
-                      },
-                    ],
-                    created: 1,
-                    id: 'chatcmpl_1',
-                    model: 'gpt-4o',
-                    object: 'chat.completion.chunk',
-                  })}\n\n`,
-                ),
-              );
-            },
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                `data: ${JSON.stringify({
+                  content_index: 0,
+                  delta: 'partial',
+                  item_id: 'msg_1',
+                  output_index: 0,
+                  sequence_number: 1,
+                  type: 'response.output_text.delta',
+                })}\n\n`,
+              ),
+            );
+          },
             pull(controller) {
               controller.error(new Error('stream exploded'));
             },
@@ -871,23 +880,28 @@ describe('LLMClient', () => {
     const fetchImplementation = vi.fn(async () =>
       new Response(
         JSON.stringify({
-          choices: [
+          id: 'resp_1',
+          model: 'gpt-4o',
+          object: 'response',
+          output: [
             {
-              finish_reason: 'stop',
-              index: 0,
-              message: {
-                content: 'Logged response',
-                role: 'assistant',
-              },
+              content: [
+                {
+                  annotations: [],
+                  text: 'Logged response',
+                  type: 'output_text',
+                },
+              ],
+              id: 'msg_1',
+              role: 'assistant',
+              status: 'completed',
+              type: 'message',
             },
           ],
-          created: 1,
-          id: 'chatcmpl_1',
-          model: 'gpt-4o',
-          object: 'chat.completion',
+          status: 'completed',
           usage: {
-            completion_tokens: 3,
-            prompt_tokens: 5,
+            input_tokens: 5,
+            output_tokens: 3,
           },
         }),
         {
@@ -926,23 +940,28 @@ describe('LLMClient', () => {
     const fetchImplementation = vi.fn(async () =>
       new Response(
         JSON.stringify({
-          choices: [
+          id: 'resp_1',
+          model: 'gpt-4o',
+          object: 'response',
+          output: [
             {
-              finish_reason: 'stop',
-              index: 0,
-              message: {
-                content: 'Still succeeds',
-                role: 'assistant',
-              },
+              content: [
+                {
+                  annotations: [],
+                  text: 'Still succeeds',
+                  type: 'output_text',
+                },
+              ],
+              id: 'msg_1',
+              role: 'assistant',
+              status: 'completed',
+              type: 'message',
             },
           ],
-          created: 1,
-          id: 'chatcmpl_1',
-          model: 'gpt-4o',
-          object: 'chat.completion',
+          status: 'completed',
           usage: {
-            completion_tokens: 2,
-            prompt_tokens: 5,
+            input_tokens: 5,
+            output_tokens: 2,
           },
         }),
         {
@@ -993,23 +1012,28 @@ describe('LLMClient', () => {
     const fetchImplementation = vi.fn(async () =>
       new Response(
         JSON.stringify({
-          choices: [
+          id: 'resp_1',
+          model: 'gpt-4o',
+          object: 'response',
+          output: [
             {
-              finish_reason: 'stop',
-              index: 0,
-              message: {
-                content: 'Allowed with warning',
-                role: 'assistant',
-              },
+              content: [
+                {
+                  annotations: [],
+                  text: 'Allowed with warning',
+                  type: 'output_text',
+                },
+              ],
+              id: 'msg_1',
+              role: 'assistant',
+              status: 'completed',
+              type: 'message',
             },
           ],
-          created: 1,
-          id: 'chatcmpl_1',
-          model: 'gpt-4o',
-          object: 'chat.completion',
+          status: 'completed',
           usage: {
-            completion_tokens: 2,
-            prompt_tokens: 5,
+            input_tokens: 5,
+            output_tokens: 2,
           },
         }),
         {
@@ -1168,6 +1192,77 @@ describe('LLMClient', () => {
     await expect(client.exportUsage('csv')).resolves.toContain(
       'provider,model,requestCount,totalInputTokens,totalOutputTokens,totalCachedTokens,totalCostUSD',
     );
+  });
+
+  it('OpenAI conversation loop: store:false, no previous_response_id, full history re-sent every turn', async () => {
+    const capturedBodies: Record<string, unknown>[] = [];
+
+    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      const turnIndex = capturedBodies.length;
+
+      return new Response(
+        JSON.stringify({
+          id: `resp_${turnIndex}`,
+          model: 'gpt-4o',
+          object: 'response',
+          output: [
+            {
+              content: [
+                {
+                  annotations: [],
+                  text: turnIndex === 1 ? 'First reply' : 'Second reply',
+                  type: 'output_text',
+                },
+              ],
+              id: `msg_${turnIndex}`,
+              role: 'assistant',
+              status: 'completed',
+              type: 'message',
+            },
+          ],
+          status: 'completed',
+          usage: { input_tokens: 10, output_tokens: 5 },
+        }),
+        {
+          headers: { 'content-type': 'application/json' },
+          status: 200,
+        },
+      );
+    });
+
+    const client = new LLMClient({
+      defaultModel: 'gpt-4o',
+      fetchImplementation,
+      openaiApiKey: 'openai-key',
+    });
+
+    const conversation = await client.conversation({ system: 'Be concise.' });
+    await conversation.send('Turn one');
+    await conversation.send('Turn two');
+
+    expect(capturedBodies).toHaveLength(2);
+
+    for (const body of capturedBodies) {
+      expect(body.store).toBe(false);
+      expect(body).not.toHaveProperty('previous_response_id');
+      expect(body).not.toHaveProperty('conversation');
+    }
+
+    const firstInput = capturedBodies[0]?.input as unknown[];
+    const secondInput = capturedBodies[1]?.input as unknown[];
+
+    expect(firstInput).toHaveLength(1);
+
+    expect(secondInput.length).toBeGreaterThan(firstInput.length);
+
+    const firstInputMessages = firstInput.filter(
+      (item) => (item as { role?: string }).role === 'user',
+    );
+    const secondInputMessages = secondInput.filter(
+      (item) => (item as { role?: string }).role === 'user',
+    );
+    expect(secondInputMessages.length).toBeGreaterThan(firstInputMessages.length);
   });
 
   it('keeps model registry state isolated across client instances', () => {

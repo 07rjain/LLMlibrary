@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AuthenticationError, ContextLimitError, ProviderCapabilityError, ProviderError, RateLimitError, } from '../src/errors.js';
 import { ModelRegistry } from '../src/models/registry.js';
-import { OpenAIAdapter, mapOpenAIError, translateOpenAIRequest, translateOpenAIResponse, translateOpenAIToolChoice } from '../src/providers/openai.js';
+import { OpenAIAdapter, mapOpenAIError, translateOpenAIRequest, translateOpenAIResponse, translateOpenAIToolChoice, } from '../src/providers/openai.js';
 describe('OpenAI adapter', () => {
-    it('translates canonical requests into chat completions payloads', () => {
+    it('translates canonical requests into Responses payloads', () => {
         const request = translateOpenAIRequest({
             maxTokens: 256,
             messages: [
@@ -59,45 +59,46 @@ describe('OpenAI adapter', () => {
             ],
         });
         expect(request).toMatchObject({
-            max_completion_tokens: 256,
+            instructions: 'Pinned system\n\nYou are helpful.',
+            max_output_tokens: 256,
             model: 'gpt-4o',
             parallel_tool_calls: false,
+            store: false,
             tool_choice: {
-                function: { name: 'weather_lookup' },
+                name: 'weather_lookup',
                 type: 'function',
             },
+            tools: [
+                {
+                    description: 'Lookup weather',
+                    name: 'weather_lookup',
+                    strict: false,
+                    type: 'function',
+                },
+            ],
         });
-        expect(request.messages).toEqual([
-            { content: 'Pinned system', role: 'developer' },
-            { content: 'You are helpful.', role: 'developer' },
+        expect(request.input).toEqual([
             {
                 content: [
-                    { text: 'Hello', type: 'text' },
+                    { text: 'Hello', type: 'input_text' },
                     {
-                        image_url: { url: 'https://example.com/cat.png' },
-                        type: 'image_url',
+                        image_url: 'https://example.com/cat.png',
+                        type: 'input_image',
                     },
                 ],
                 role: 'user',
+                type: 'message',
             },
             {
-                content: null,
-                role: 'assistant',
-                tool_calls: [
-                    {
-                        function: {
-                            arguments: '{"city":"Berlin"}',
-                            name: 'weather_lookup',
-                        },
-                        id: 'call_1',
-                        type: 'function',
-                    },
-                ],
+                arguments: '{"city":"Berlin"}',
+                call_id: 'call_1',
+                name: 'weather_lookup',
+                type: 'function_call',
             },
             {
-                content: '{"temperature":18}',
-                role: 'tool',
-                tool_call_id: 'call_1',
+                call_id: 'call_1',
+                output: '{"temperature":18}',
+                type: 'function_call_output',
             },
         ]);
     });
@@ -109,36 +110,39 @@ describe('OpenAI adapter', () => {
             toolChoice: 'auto',
         });
     });
-    it('translates responses into canonical responses', () => {
+    it('translates Responses payloads into canonical responses', () => {
         const response = translateOpenAIResponse({
-            choices: [
+            id: 'resp_1',
+            model: 'gpt-4o',
+            object: 'response',
+            output: [
                 {
-                    finish_reason: 'tool_calls',
-                    index: 0,
-                    message: {
-                        content: 'Checking.',
-                        role: 'assistant',
-                        tool_calls: [
-                            {
-                                function: {
-                                    arguments: '{"city":"Berlin"}',
-                                    name: 'weather_lookup',
-                                },
-                                id: 'call_1',
-                                type: 'function',
-                            },
-                        ],
-                    },
+                    content: [
+                        {
+                            annotations: [],
+                            text: 'Checking.',
+                            type: 'output_text',
+                        },
+                    ],
+                    id: 'msg_1',
+                    role: 'assistant',
+                    status: 'completed',
+                    type: 'message',
+                },
+                {
+                    arguments: '{"city":"Berlin"}',
+                    call_id: 'call_1',
+                    id: 'fc_1',
+                    name: 'weather_lookup',
+                    status: 'completed',
+                    type: 'function_call',
                 },
             ],
-            created: 1,
-            id: 'chatcmpl_1',
-            model: 'gpt-4o',
-            object: 'chat.completion',
+            status: 'completed',
             usage: {
-                completion_tokens: 12,
-                prompt_tokens: 40,
-                prompt_tokens_details: { cached_tokens: 10 },
+                input_tokens: 40,
+                input_tokens_details: { cached_tokens: 10 },
+                output_tokens: 12,
             },
         });
         expect(response).toMatchObject({
@@ -154,26 +158,33 @@ describe('OpenAI adapter', () => {
                 },
             ],
         });
+        expect(response.usage.cachedReadTokens).toBe(10);
+        expect(response.usage.inputTokens).toBe(40);
     });
     it('falls back to the requested model when OpenAI returns a versioned model id', () => {
         const response = translateOpenAIResponse({
-            choices: [
+            id: 'resp_1',
+            model: 'gpt-4o-2024-08-06',
+            object: 'response',
+            output: [
                 {
-                    finish_reason: 'stop',
-                    index: 0,
-                    message: {
-                        content: 'Hello',
-                        role: 'assistant',
-                    },
+                    content: [
+                        {
+                            annotations: [],
+                            text: 'Hello',
+                            type: 'output_text',
+                        },
+                    ],
+                    id: 'msg_1',
+                    role: 'assistant',
+                    status: 'completed',
+                    type: 'message',
                 },
             ],
-            created: 1,
-            id: 'chatcmpl_1',
-            model: 'gpt-4o-2024-08-06',
-            object: 'chat.completion',
+            status: 'completed',
             usage: {
-                completion_tokens: 4,
-                prompt_tokens: 8,
+                input_tokens: 8,
+                output_tokens: 4,
             },
         }, new ModelRegistry(), 'gpt-4o');
         expect(response.model).toBe('gpt-4o');
@@ -181,30 +192,20 @@ describe('OpenAI adapter', () => {
     });
     it('throws if a response has invalid tool arguments', () => {
         expect(() => translateOpenAIResponse({
-            choices: [
+            id: 'resp_1',
+            model: 'gpt-4o',
+            object: 'response',
+            output: [
                 {
-                    finish_reason: 'tool_calls',
-                    index: 0,
-                    message: {
-                        content: null,
-                        role: 'assistant',
-                        tool_calls: [
-                            {
-                                function: {
-                                    arguments: 'not-json',
-                                    name: 'weather_lookup',
-                                },
-                                id: 'call_1',
-                                type: 'function',
-                            },
-                        ],
-                    },
+                    arguments: 'not-json',
+                    call_id: 'call_1',
+                    id: 'fc_1',
+                    name: 'weather_lookup',
+                    status: 'completed',
+                    type: 'function_call',
                 },
             ],
-            created: 1,
-            id: 'chatcmpl_1',
-            model: 'gpt-4o',
-            object: 'chat.completion',
+            status: 'completed',
         })).toThrow(ProviderError);
     });
     it('maps OpenAI API errors into typed errors', async () => {
@@ -248,23 +249,28 @@ describe('OpenAI adapter', () => {
     it('performs a complete request with auth headers', async () => {
         const signal = new AbortController().signal;
         const fetchImplementation = vi.fn(async () => new Response(JSON.stringify({
-            choices: [
+            id: 'resp_1',
+            model: 'gpt-4o',
+            object: 'response',
+            output: [
                 {
-                    finish_reason: 'stop',
-                    index: 0,
-                    message: {
-                        content: 'Hello there',
-                        role: 'assistant',
-                    },
+                    content: [
+                        {
+                            annotations: [],
+                            text: 'Hello there',
+                            type: 'output_text',
+                        },
+                    ],
+                    id: 'msg_1',
+                    role: 'assistant',
+                    status: 'completed',
+                    type: 'message',
                 },
             ],
-            created: 1,
-            id: 'chatcmpl_1',
-            model: 'gpt-4o',
-            object: 'chat.completion',
+            status: 'completed',
             usage: {
-                completion_tokens: 10,
-                prompt_tokens: 20,
+                input_tokens: 20,
+                output_tokens: 10,
             },
         }), {
             headers: { 'content-type': 'application/json' },
@@ -285,7 +291,12 @@ describe('OpenAI adapter', () => {
         const request = fetchImplementation.mock.calls[0];
         const headers = request[1].headers;
         expect(result.text).toBe('Hello there');
-        expect(request[0]).toContain('/v1/chat/completions');
+        expect(request[0]).toContain('/v1/responses');
+        expect(JSON.parse(String(request[1].body))).toMatchObject({
+            max_output_tokens: 128,
+            model: 'gpt-4o',
+            store: false,
+        });
         expect(headers.Authorization).toBe('Bearer openai-key');
         expect(headers['OpenAI-Organization']).toBe('org_123');
         expect(headers['OpenAI-Project']).toBe('proj_123');
@@ -296,46 +307,49 @@ describe('OpenAI adapter', () => {
             apiKey: 'openai-key',
             fetchImplementation: vi.fn(async () => new Response(makeSSEStream([
                 {
-                    choices: [
-                        {
-                            delta: {
-                                content: 'Hello ',
+                    content_index: 0,
+                    delta: 'Hello ',
+                    item_id: 'msg_1',
+                    output_index: 0,
+                    sequence_number: 1,
+                    type: 'response.output_text.delta',
+                },
+                {
+                    content_index: 0,
+                    delta: 'world',
+                    item_id: 'msg_1',
+                    output_index: 0,
+                    sequence_number: 2,
+                    type: 'response.output_text.delta',
+                },
+                {
+                    response: {
+                        id: 'resp_1',
+                        model: 'gpt-4o',
+                        object: 'response',
+                        output: [
+                            {
+                                content: [
+                                    {
+                                        annotations: [],
+                                        text: 'Hello world',
+                                        type: 'output_text',
+                                    },
+                                ],
+                                id: 'msg_1',
                                 role: 'assistant',
+                                status: 'completed',
+                                type: 'message',
                             },
-                            finish_reason: null,
-                            index: 0,
+                        ],
+                        status: 'completed',
+                        usage: {
+                            input_tokens: 20,
+                            output_tokens: 12,
                         },
-                    ],
-                    created: 1,
-                    id: 'chatcmpl_1',
-                    model: 'gpt-4o',
-                    object: 'chat.completion.chunk',
-                },
-                {
-                    choices: [
-                        {
-                            delta: {
-                                content: 'world',
-                            },
-                            finish_reason: 'stop',
-                            index: 0,
-                        },
-                    ],
-                    created: 1,
-                    id: 'chatcmpl_1',
-                    model: 'gpt-4o',
-                    object: 'chat.completion.chunk',
-                },
-                {
-                    choices: [],
-                    created: 1,
-                    id: 'chatcmpl_1',
-                    model: 'gpt-4o',
-                    object: 'chat.completion.chunk',
-                    usage: {
-                        completion_tokens: 12,
-                        prompt_tokens: 20,
                     },
+                    sequence_number: 3,
+                    type: 'response.completed',
                 },
             ]), {
                 headers: { 'content-type': 'text/event-stream' },
@@ -364,55 +378,77 @@ describe('OpenAI adapter', () => {
             apiKey: 'openai-key',
             fetchImplementation: vi.fn(async () => new Response(makeSSEStream([
                 {
-                    choices: [
-                        {
-                            delta: {
-                                tool_calls: [
-                                    {
-                                        function: {
-                                            arguments: '{"city":"Ber',
-                                            name: 'weather_lookup',
-                                        },
-                                        id: 'call_1',
-                                        index: 0,
-                                        type: 'function',
-                                    },
-                                ],
-                            },
-                            finish_reason: null,
-                            index: 0,
-                        },
-                    ],
-                    created: 1,
-                    id: 'chatcmpl_1',
-                    model: 'gpt-4o',
-                    object: 'chat.completion.chunk',
+                    item: {
+                        arguments: '',
+                        call_id: 'call_1',
+                        id: 'fc_1',
+                        name: 'weather_lookup',
+                        status: 'in_progress',
+                        type: 'function_call',
+                    },
+                    output_index: 0,
+                    sequence_number: 1,
+                    type: 'response.output_item.added',
                 },
                 {
-                    choices: [
-                        {
-                            delta: {
-                                tool_calls: [
-                                    {
-                                        function: {
-                                            arguments: 'lin"}',
-                                        },
-                                        index: 0,
-                                    },
-                                ],
-                            },
-                            finish_reason: 'tool_calls',
-                            index: 0,
-                        },
-                    ],
-                    created: 1,
-                    id: 'chatcmpl_1',
-                    model: 'gpt-4o',
-                    object: 'chat.completion.chunk',
-                    usage: {
-                        completion_tokens: 12,
-                        prompt_tokens: 20,
+                    delta: '{"city":"Ber',
+                    item_id: 'fc_1',
+                    output_index: 0,
+                    sequence_number: 2,
+                    type: 'response.function_call_arguments.delta',
+                },
+                {
+                    delta: 'lin"}',
+                    item_id: 'fc_1',
+                    output_index: 0,
+                    sequence_number: 3,
+                    type: 'response.function_call_arguments.delta',
+                },
+                {
+                    arguments: '{"city":"Berlin"}',
+                    call_id: 'call_1',
+                    item_id: 'fc_1',
+                    name: 'weather_lookup',
+                    output_index: 0,
+                    sequence_number: 4,
+                    type: 'response.function_call_arguments.done',
+                },
+                {
+                    item: {
+                        arguments: '{"city":"Berlin"}',
+                        call_id: 'call_1',
+                        id: 'fc_1',
+                        name: 'weather_lookup',
+                        status: 'completed',
+                        type: 'function_call',
                     },
+                    output_index: 0,
+                    sequence_number: 5,
+                    type: 'response.output_item.done',
+                },
+                {
+                    response: {
+                        id: 'resp_tool_1',
+                        model: 'gpt-4o',
+                        object: 'response',
+                        output: [
+                            {
+                                arguments: '{"city":"Berlin"}',
+                                call_id: 'call_1',
+                                id: 'fc_1',
+                                name: 'weather_lookup',
+                                status: 'completed',
+                                type: 'function_call',
+                            },
+                        ],
+                        status: 'completed',
+                        usage: {
+                            input_tokens: 20,
+                            output_tokens: 12,
+                        },
+                    },
+                    sequence_number: 6,
+                    type: 'response.completed',
                 },
             ]), {
                 headers: { 'content-type': 'text/event-stream' },
@@ -491,9 +527,7 @@ describe('OpenAI adapter', () => {
         await expect(adapter.complete({
             messages: [
                 {
-                    content: [
-                        { type: 'image_url', url: 'https://example.com/image.png' },
-                    ],
+                    content: [{ type: 'image_url', url: 'https://example.com/image.png' }],
                     role: 'assistant',
                 },
             ],
@@ -504,40 +538,31 @@ describe('OpenAI adapter', () => {
             model: 'gpt-4o',
         }).next()).rejects.toBeInstanceOf(ProviderError);
     });
-    it('throws for empty choices and normalizes additional finish reasons', () => {
-        expect(() => translateOpenAIResponse({
-            choices: [],
-            created: 1,
-            id: 'chatcmpl_1',
-            model: 'gpt-4o',
-            object: 'chat.completion',
-        })).toThrow(ProviderError);
+    it('normalizes incomplete and failed finish reasons', () => {
         expect(translateOpenAIResponse({
-            choices: [
-                {
-                    finish_reason: 'length',
-                    index: 0,
-                    message: { content: 'Truncated', role: 'assistant' },
-                },
-            ],
-            created: 1,
-            id: 'chatcmpl_2',
+            id: 'resp_len',
+            incomplete_details: { reason: 'max_output_tokens' },
             model: 'gpt-4o',
-            object: 'chat.completion',
+            object: 'response',
+            output: [],
+            status: 'incomplete',
         }).finishReason).toBe('length');
         expect(translateOpenAIResponse({
-            choices: [
-                {
-                    finish_reason: 'content_filter',
-                    index: 0,
-                    message: { content: '', role: 'assistant' },
-                },
-            ],
-            created: 1,
-            id: 'chatcmpl_3',
+            id: 'resp_filter',
+            incomplete_details: { reason: 'content_filter' },
             model: 'gpt-4o',
-            object: 'chat.completion',
+            object: 'response',
+            output: [],
+            status: 'incomplete',
         }).finishReason).toBe('content_filter');
+        expect(translateOpenAIResponse({
+            error: { message: 'failed' },
+            id: 'resp_error',
+            model: 'gpt-4o',
+            object: 'response',
+            output: [],
+            status: 'failed',
+        }).finishReason).toBe('error');
     });
     it('rejects unsupported capability combinations before fetch', async () => {
         const modelRegistry = new ModelRegistry();

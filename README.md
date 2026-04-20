@@ -256,6 +256,8 @@ For the full endpoint contract and the OpenAI Responses-style mapping notes, see
 - Session API contract: [SESSION_API.md](SESSION_API.md)
 - PRD decisions: [docs/PRD_DECISIONS.md](docs/PRD_DECISIONS.md)
 - Provider comparison: [docs/PROVIDER_COMPARISON.md](docs/PROVIDER_COMPARISON.md)
+- Prompt caching report: [docs/PROMPT_CACHING_REPORT.md](docs/PROMPT_CACHING_REPORT.md)
+- OpenAI Responses migration report: [docs/OPENAI_RESPONSES_MIGRATION_REPORT.md](docs/OPENAI_RESPONSES_MIGRATION_REPORT.md)
 - Migration guide: [docs/MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md)
 - Cost and pricing policy: [docs/COST_AND_PRICING.md](docs/COST_AND_PRICING.md)
 - Roadmap: [docs/ROADMAP.md](docs/ROADMAP.md)

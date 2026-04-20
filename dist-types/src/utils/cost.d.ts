@@ -16,6 +16,11 @@ export interface CanonicalUsageCounts {
 }
 export interface OpenAIUsagePayload {
     completion_tokens?: number;
+    input_tokens?: number;
+    input_tokens_details?: {
+        cached_tokens?: number;
+    };
+    output_tokens?: number;
     prompt_tokens?: number;
     prompt_tokens_details?: {
         cached_tokens?: number;

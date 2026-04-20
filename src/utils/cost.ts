@@ -20,6 +20,11 @@ export interface CanonicalUsageCounts {
 
 export interface OpenAIUsagePayload {
   completion_tokens?: number;
+  input_tokens?: number;
+  input_tokens_details?: {
+    cached_tokens?: number;
+  };
+  output_tokens?: number;
   prompt_tokens?: number;
   prompt_tokens_details?: {
     cached_tokens?: number;
@@ -92,12 +97,15 @@ export function anthropicUsageToCanonical(
 export function openaiUsageToCanonical(
   usage: OpenAIUsagePayload | undefined,
 ): CanonicalUsageCounts {
-  const cachedReadTokens = usage?.prompt_tokens_details?.cached_tokens ?? 0;
+  const cachedReadTokens =
+    usage?.input_tokens_details?.cached_tokens ??
+    usage?.prompt_tokens_details?.cached_tokens ??
+    0;
   return {
     cachedReadTokens,
     cachedTokens: cachedReadTokens,
-    inputTokens: usage?.prompt_tokens ?? 0,
-    outputTokens: usage?.completion_tokens ?? 0,
+    inputTokens: usage?.input_tokens ?? usage?.prompt_tokens ?? 0,
+    outputTokens: usage?.output_tokens ?? usage?.completion_tokens ?? 0,
   };
 }
 

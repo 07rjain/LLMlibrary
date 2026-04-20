@@ -31,6 +31,7 @@ Prepared: 2026-04-16
 - [x] `T-03` is implemented and verified
 - [x] `T-08` Anthropic adapter is implemented and verified
 - [x] `T-09` OpenAI adapter is implemented and verified
+- [x] OpenAI transport is now migrated to `POST /v1/responses` in stateless mode with `store: false`, `input`-based history replay, Responses streaming events, and Responses usage normalization
 - [x] `T-10` Gemini adapter is implemented and verified
 - [x] `T-11` conversation manager core is implemented and verified
 - [x] `T-12.1` to `T-12.6` context management, including sliding-window and summarisation strategies, is implemented and verified
@@ -46,7 +47,7 @@ Prepared: 2026-04-16
 - [x] Live smoke session persistence passed against the user-populated `DATABASE_URL` via `PostgresSessionStore`
 - [x] Default `LLMClient` conversation persistence now auto-attaches `PostgresSessionStore.fromEnv()` when `DATABASE_URL` is present and no explicit `sessionStore` is provided
 - [x] Live smoke usage logging passed against the user-populated `DATABASE_URL` via `PostgresUsageLogger` plus `client.getUsage()`
-- [x] Current automated suite passes with `342` tests, `4` opt-in live tests skipped unless `LIVE_TESTS=1`, and coverage at `92.40%` statements / lines, `86.38%` branches, and `96.80%` functions
+- [x] Current automated suite passes with `342` tests, `4` opt-in live tests skipped unless `LIVE_TESTS=1`, and coverage at `91.81%` statements / lines, `86.23%` branches, and `96.35%` functions
 - [x] Phase 7 integration, documentation, and performance work in `T-21.1` to `T-23.4` is implemented and verified
 - [x] Next execution slice: PRD addendum backlog is resolved into shipped code, CI, or documented roadmap items
 
@@ -195,6 +196,7 @@ Dependencies: `T-02`, `T-04`, `T-05`, `T-06`
 - [x] `T-09.6` Reassemble streamed tool arguments and emit canonical stream events on `finish_reason: tool_calls`
 - [x] `T-09.7` Map HTTP status and OpenAI `error.code` values to typed errors
 - [x] `T-09.8` Add integration tests for text, tools, streaming, cached tokens, reasoning model use, `429`, and `500`
+- [x] `T-09.9` Replace Chat Completions transport with stateless Responses API transport, including `instructions`, `input`, `parallel_tool_calls`, typed streaming events, and Responses usage fields
 
 ### T-10 Gemini Adapter
 Priority: `P0`  

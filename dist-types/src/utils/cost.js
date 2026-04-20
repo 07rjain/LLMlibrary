@@ -30,12 +30,14 @@ export function anthropicUsageToCanonical(usage) {
     };
 }
 export function openaiUsageToCanonical(usage) {
-    const cachedReadTokens = usage?.prompt_tokens_details?.cached_tokens ?? 0;
+    const cachedReadTokens = usage?.input_tokens_details?.cached_tokens ??
+        usage?.prompt_tokens_details?.cached_tokens ??
+        0;
     return {
         cachedReadTokens,
         cachedTokens: cachedReadTokens,
-        inputTokens: usage?.prompt_tokens ?? 0,
-        outputTokens: usage?.completion_tokens ?? 0,
+        inputTokens: usage?.input_tokens ?? usage?.prompt_tokens ?? 0,
+        outputTokens: usage?.output_tokens ?? usage?.completion_tokens ?? 0,
     };
 }
 export function geminiUsageToCanonical(usage) {
