@@ -9,3 +9,4 @@ chatbot_widget_report.docx
 chatbot_widget_report.md
 docs/.vitepress/cache
 docs/.vitepress/dist
+.DS_Store
