@@ -1,6 +1,6 @@
 import type { ContextManager } from './context-manager.js';
 import type { SessionStore } from './session-store.js';
-import type { BudgetExceededAction, CancelableStream, CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, StreamChunk } from './types.js';
+import type { BudgetExceededAction, CancelableStream, CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, ProviderOptions, StreamChunk } from './types.js';
 /** Minimal client contract consumed by `Conversation`. */
 export interface ConversationClient {
     complete(options: {
@@ -10,6 +10,7 @@ export interface ConversationClient {
         messages: CanonicalMessage[];
         model?: string;
         provider?: CanonicalProvider;
+        providerOptions?: ProviderOptions;
         sessionId?: string;
         signal?: AbortSignal;
         system?: string;
@@ -24,6 +25,7 @@ export interface ConversationClient {
         messages: CanonicalMessage[];
         model?: string;
         provider?: CanonicalProvider;
+        providerOptions?: ProviderOptions;
         sessionId?: string;
         signal?: AbortSignal;
         system?: string;
@@ -42,6 +44,7 @@ export interface ConversationSnapshot {
     messages: CanonicalMessage[];
     model?: string;
     provider?: CanonicalProvider;
+    providerOptions?: ProviderOptions;
     sessionId: string;
     system?: string;
     tenantId?: string;
@@ -65,6 +68,7 @@ export interface ConversationOptions {
     messages?: CanonicalMessage[];
     model?: string;
     provider?: CanonicalProvider;
+    providerOptions?: ProviderOptions;
     sessionId?: string;
     store?: SessionStore<ConversationSnapshot>;
     system?: string;
@@ -100,6 +104,7 @@ export declare class Conversation {
     private messages;
     private model;
     private provider;
+    private readonly providerOptions;
     private readonly sessionId;
     private readonly store;
     private system;

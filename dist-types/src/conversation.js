@@ -29,6 +29,7 @@ export class Conversation {
     messages;
     model;
     provider;
+    providerOptions;
     sessionId;
     store;
     system;
@@ -54,6 +55,7 @@ export class Conversation {
         this.messages = cloneValue(options.messages ?? []);
         this.model = options.model;
         this.provider = options.provider;
+        this.providerOptions = options.providerOptions ? cloneValue(options.providerOptions) : undefined;
         this.sessionId = options.sessionId ?? generateSessionId();
         this.store = options.store;
         this.system = options.system;
@@ -116,6 +118,9 @@ export class Conversation {
             messages: cloneValue(this.messages),
             ...(this.model !== undefined ? { model: this.model } : {}),
             ...(this.provider !== undefined ? { provider: this.provider } : {}),
+            ...(this.providerOptions !== undefined
+                ? { providerOptions: cloneValue(this.providerOptions) }
+                : {}),
             sessionId: this.sessionId,
             ...(this.system !== undefined ? { system: this.system } : {}),
             ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
@@ -183,6 +188,9 @@ export class Conversation {
             messages: snapshot.messages,
             ...(snapshot.model !== undefined ? { model: snapshot.model } : {}),
             ...(snapshot.provider !== undefined ? { provider: snapshot.provider } : {}),
+            ...(snapshot.providerOptions !== undefined
+                ? { providerOptions: snapshot.providerOptions }
+                : {}),
             sessionId: snapshot.sessionId,
             ...(options.store !== undefined ? { store: options.store } : {}),
             ...(snapshot.system !== undefined ? { system: snapshot.system } : {}),
@@ -455,6 +463,7 @@ export class Conversation {
             ...(this.maxTokens !== undefined ? { maxTokens: this.maxTokens } : {}),
             ...(this.model !== undefined ? { model: this.model } : {}),
             ...(this.provider !== undefined ? { provider: this.provider } : {}),
+            ...(this.providerOptions !== undefined ? { providerOptions: this.providerOptions } : {}),
             sessionId: this.sessionId,
             ...(signal !== undefined ? { signal } : {}),
             ...(this.system !== undefined ? { system: this.system } : {}),

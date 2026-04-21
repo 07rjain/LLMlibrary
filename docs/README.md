@@ -49,8 +49,49 @@ If you are opening the repository for the first time, read the pages below in or
 ## Current Provider Notes
 
 - OpenAI requests now use the Responses API in stateless mode with library-owned history replay.
-- Prompt caching is not yet exposed as a public request option across the providers; use [PROMPT_CACHING_REPORT.md](./PROMPT_CACHING_REPORT.md) for the current gap analysis.
+- Prompt caching is exposed through provider-specific options rather than one artificial cross-provider abstraction.
+- OpenAI uses `providerOptions.openai.promptCaching`.
+- Anthropic uses part-level `cacheControl`, tool-level `cacheControl`, and request-level `providerOptions.anthropic.cacheControl`.
+- Gemini uses `providerOptions.google.promptCaching.cachedContent`, and explicit cache resources can be managed with `client.googleCaches`.
 - The active implementation tracker is stored in the repository root as `prompt_caching_todo.md`.
+
+## Prompt Caching Quick Start
+
+```ts
+const client = LLMClient.fromEnv({ defaultModel: 'gpt-4o' });
+
+await client.complete({
+  messages: [{ content: 'Summarize the FAQ.', role: 'user' }],
+  providerOptions: {
+    openai: {
+      promptCaching: {
+        key: 'faq-v1',
+        retention: '24h',
+      },
+    },
+  },
+});
+
+const cache = await client.googleCaches.create({
+  model: 'gemini-2.5-flash',
+  messages: [{ content: 'Refunds are available for 30 days.', role: 'user' }],
+  ttl: '3600s',
+});
+
+await client.complete({
+  model: 'gemini-2.5-flash',
+  messages: [{ content: 'What is the refund window?', role: 'user' }],
+  providerOptions: {
+    google: {
+      promptCaching: {
+        cachedContent: cache.name,
+      },
+    },
+  },
+});
+```
+
+`client.googleCaches.create()` returns cache names in the provider format `cachedContents/{id}`. Pass that name directly into `providerOptions.google.promptCaching.cachedContent` when you want to reuse the cache.
 
 ## Typical Adoption Path
 

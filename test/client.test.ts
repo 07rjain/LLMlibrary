@@ -154,6 +154,165 @@ describe('LLMClient', () => {
     expect(response.text).toBe('Gemini response');
   });
 
+  it('passes OpenAI prompt caching hints through complete() routing', async () => {
+    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+
+      expect(body.prompt_cache_key).toBe('support-faq-v1');
+      expect(body.prompt_cache_retention).toBe('24h');
+
+      return new Response(
+        JSON.stringify({
+          id: 'resp_1',
+          model: 'gpt-4o',
+          object: 'response',
+          output: [
+            {
+              content: [{ annotations: [], text: 'Cached OpenAI response', type: 'output_text' }],
+              id: 'msg_1',
+              role: 'assistant',
+              status: 'completed',
+              type: 'message',
+            },
+          ],
+          status: 'completed',
+          usage: {
+            input_tokens: 10,
+            output_tokens: 5,
+          },
+        }),
+        {
+          headers: { 'content-type': 'application/json' },
+          status: 200,
+        },
+      );
+    });
+
+    const client = new LLMClient({
+      defaultModel: 'gpt-4o',
+      fetchImplementation,
+      openaiApiKey: 'openai-key',
+    });
+
+    const response = await client.complete({
+      messages: [{ content: 'Hello', role: 'user' }],
+      providerOptions: {
+        openai: {
+          promptCaching: {
+            key: 'support-faq-v1',
+            retention: '24h',
+          },
+        },
+      },
+    });
+
+    expect(response.text).toBe('Cached OpenAI response');
+  });
+
+  it('passes Gemini cachedContent references through complete() routing', async () => {
+    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+
+      expect(body.cachedContent).toBe('cachedContents/support-faq-v1');
+
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: 'Cached Gemini response' }],
+                role: 'model',
+              },
+              finishReason: 'STOP',
+              index: 0,
+            },
+          ],
+          usageMetadata: {
+            candidatesTokenCount: 5,
+            promptTokenCount: 10,
+          },
+        }),
+        {
+          headers: { 'content-type': 'application/json' },
+          status: 200,
+        },
+      );
+    });
+
+    const client = new LLMClient({
+      defaultModel: 'gemini-2.5-flash',
+      fetchImplementation,
+      geminiApiKey: 'gemini-key',
+    });
+
+    const response = await client.complete({
+      messages: [{ content: 'Hello', role: 'user' }],
+      providerOptions: {
+        google: {
+          promptCaching: {
+            cachedContent: 'cachedContents/support-faq-v1',
+          },
+        },
+      },
+    });
+
+    expect(response.text).toBe('Cached Gemini response');
+  });
+
+  it('routes googleCaches lifecycle methods through the Gemini adapter', async () => {
+    const fetchImplementation = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: 'models/gemini-2.5-flash',
+            name: 'cachedContents/cache_1',
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: 'models/gemini-2.5-flash',
+            name: 'cachedContents/cache_1',
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+          },
+        ),
+      );
+
+    const client = new LLMClient({
+      fetchImplementation,
+      geminiApiKey: 'gemini-key',
+    });
+
+    const created = await client.googleCaches.create({
+      messages: [{ content: 'FAQ body', role: 'user' }],
+      model: 'gemini-2.5-flash',
+      ttl: '600s',
+    });
+    const fetched = await client.googleCaches.get('cache_1');
+    const firstCall = fetchImplementation.mock.calls[0] as unknown as [
+      RequestInfo | URL,
+      RequestInit?,
+    ];
+    const secondCall = fetchImplementation.mock.calls[1] as unknown as [
+      RequestInfo | URL,
+      RequestInit?,
+    ];
+
+    expect(created.name).toBe('cachedContents/cache_1');
+    expect(fetched.name).toBe('cachedContents/cache_1');
+    expect(String(firstCall[0])).toContain('/v1beta/cachedContents');
+    expect(String(secondCall[0])).toContain('/v1beta/cachedContents/cache_1');
+  });
+
   it('routes stream() calls to OpenAI by model', async () => {
     const fetchImplementation = vi.fn(async () =>
       new Response(

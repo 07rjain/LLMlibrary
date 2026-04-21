@@ -21,6 +21,7 @@ import type {
   CanonicalToolSchema,
   JsonObject,
   JsonValue,
+  ProviderOptions,
   StreamChunk,
 } from '../types.js';
 import type { GeminiErrorDetail, RetryOptions } from '../utils/retry.js';
@@ -138,6 +139,26 @@ interface GeminiGenerateContentResponse {
   usageMetadata?: GeminiUsageMetadata;
 }
 
+export interface GeminiCachedContent {
+  contents?: GeminiContent[];
+  createTime?: string;
+  displayName?: string;
+  expireTime?: string;
+  model: string;
+  name: string;
+  systemInstruction?: GeminiContent;
+  toolConfig?: GeminiToolConfig;
+  tools?: GeminiToolDefinition[];
+  ttl?: string;
+  updateTime?: string;
+  usageMetadata?: GeminiUsageMetadata;
+}
+
+export interface GeminiCachedContentPage {
+  cachedContents: GeminiCachedContent[];
+  nextPageToken?: string;
+}
+
 interface GeminiErrorBody {
   error?: {
     code?: number;
@@ -159,11 +180,33 @@ export interface GeminiCompletionOptions {
   maxTokens?: number;
   messages: CanonicalMessage[];
   model: string;
+  providerOptions?: ProviderOptions;
   signal?: AbortSignal;
   system?: string;
   temperature?: number;
   toolChoice?: CanonicalToolChoice;
   tools?: CanonicalTool[];
+}
+
+export interface GeminiCreateCacheOptions {
+  displayName?: string;
+  expireTime?: string;
+  messages?: CanonicalMessage[];
+  model: string;
+  system?: string;
+  toolChoice?: CanonicalToolChoice;
+  tools?: CanonicalTool[];
+  ttl?: string;
+}
+
+export interface GeminiListCachesOptions {
+  pageSize?: number;
+  pageToken?: string;
+}
+
+export interface GeminiUpdateCacheOptions {
+  expireTime?: string;
+  ttl?: string;
 }
 
 export class GeminiAdapter {
@@ -249,6 +292,142 @@ export class GeminiAdapter {
     yield assembler.finish();
   }
 
+  async createCache(options: GeminiCreateCacheOptions): Promise<GeminiCachedContent> {
+    const response = await withRetry(
+      async () =>
+        this.fetchImplementation(
+          `${this.baseUrl}/v1beta/cachedContents`,
+          buildRequestInit(
+            {
+              body: JSON.stringify(translateGeminiCacheCreateRequest(options)),
+              headers: this.buildHeaders(),
+              method: 'POST',
+            },
+            undefined,
+          ),
+        ),
+      this.retryOptions,
+    );
+
+    if (!response.ok) {
+      throw await mapGeminiError(response, options.model);
+    }
+
+    return (await response.json()) as GeminiCachedContent;
+  }
+
+  async getCache(name: string): Promise<GeminiCachedContent> {
+    const normalizedName = normalizeGeminiCachedContentName(name);
+    const response = await withRetry(
+      async () =>
+        this.fetchImplementation(
+          `${this.baseUrl}/v1beta/${normalizedName}`,
+          buildRequestInit(
+            {
+              headers: this.buildHeaders(),
+              method: 'GET',
+            },
+            undefined,
+          ),
+        ),
+      this.retryOptions,
+    );
+
+    if (!response.ok) {
+      throw await mapGeminiError(response);
+    }
+
+    return (await response.json()) as GeminiCachedContent;
+  }
+
+  async listCaches(
+    options: GeminiListCachesOptions = {},
+  ): Promise<GeminiCachedContentPage> {
+    const searchParams = new URLSearchParams();
+    if (options.pageSize !== undefined) {
+      searchParams.set('pageSize', String(options.pageSize));
+    }
+    if (options.pageToken) {
+      searchParams.set('pageToken', options.pageToken);
+    }
+
+    const suffix = searchParams.size > 0 ? `?${searchParams.toString()}` : '';
+    const response = await withRetry(
+      async () =>
+        this.fetchImplementation(
+          `${this.baseUrl}/v1beta/cachedContents${suffix}`,
+          buildRequestInit(
+            {
+              headers: this.buildHeaders(),
+              method: 'GET',
+            },
+            undefined,
+          ),
+        ),
+      this.retryOptions,
+    );
+
+    if (!response.ok) {
+      throw await mapGeminiError(response);
+    }
+
+    return (await response.json()) as GeminiCachedContentPage;
+  }
+
+  async updateCache(
+    name: string,
+    options: GeminiUpdateCacheOptions,
+  ): Promise<GeminiCachedContent> {
+    const normalizedName = normalizeGeminiCachedContentName(name);
+    const translated = translateGeminiCacheUpdateRequest(options);
+    const searchParams = new URLSearchParams({
+      updateMask: translated.updateMask,
+    });
+    const response = await withRetry(
+      async () =>
+        this.fetchImplementation(
+          `${this.baseUrl}/v1beta/${normalizedName}?${searchParams.toString()}`,
+          buildRequestInit(
+            {
+              body: JSON.stringify(translated.body),
+              headers: this.buildHeaders(),
+              method: 'PATCH',
+            },
+            undefined,
+          ),
+        ),
+      this.retryOptions,
+    );
+
+    if (!response.ok) {
+      throw await mapGeminiError(response);
+    }
+
+    return (await response.json()) as GeminiCachedContent;
+  }
+
+  async deleteCache(name: string): Promise<void> {
+    const normalizedName = normalizeGeminiCachedContentName(name);
+    const response = await withRetry(
+      async () =>
+        this.fetchImplementation(
+          `${this.baseUrl}/v1beta/${normalizedName}`,
+          buildRequestInit(
+            {
+              headers: this.buildHeaders(),
+              method: 'DELETE',
+            },
+            undefined,
+          ),
+        ),
+      this.retryOptions,
+    );
+
+    if (!response.ok) {
+      throw await mapGeminiError(response);
+    }
+  }
+
   private assertCapabilities(
     options: GeminiCompletionOptions & { stream?: boolean },
   ): void {
@@ -278,6 +457,7 @@ export function translateGeminiRequest(
 ): Record<string, unknown> {
   const systemMessages = options.messages.filter((message) => message.role === 'system');
   const nonSystemMessages = options.messages.filter((message) => message.role !== 'system');
+  const cachedContent = options.providerOptions?.google?.promptCaching?.cachedContent;
 
   const body: Record<string, unknown> = {
     contents: nonSystemMessages.map(translateGeminiMessage),
@@ -310,7 +490,83 @@ export function translateGeminiRequest(
     body.toolConfig = translateGeminiToolChoice(options.toolChoice);
   }
 
+  if (cachedContent) {
+    body.cachedContent = cachedContent;
+  }
+
   return body;
+}
+
+export function translateGeminiCacheCreateRequest(
+  options: GeminiCreateCacheOptions,
+): Record<string, unknown> {
+  const messages = options.messages ?? [];
+  const systemMessages = messages.filter((message) => message.role === 'system');
+  const nonSystemMessages = messages.filter((message) => message.role !== 'system');
+  const body: Record<string, unknown> = {
+    model: normalizeGeminiCacheModelName(options.model),
+  };
+
+  if (nonSystemMessages.length > 0) {
+    body.contents = nonSystemMessages.map(translateGeminiMessage);
+  }
+
+  const systemInstruction = translateGeminiSystemInstruction(
+    systemMessages,
+    options.system,
+  );
+  if (systemInstruction) {
+    body.systemInstruction = systemInstruction;
+  }
+
+  if (options.tools && options.tools.length > 0) {
+    body.tools = [translateGeminiTools(options.tools)];
+  }
+
+  if (options.toolChoice) {
+    body.toolConfig = translateGeminiToolChoice(options.toolChoice);
+  }
+
+  if (options.displayName) {
+    body.displayName = options.displayName;
+  }
+
+  applyGeminiCacheExpiration(body, options.ttl, options.expireTime);
+  return body;
+}
+
+export function translateGeminiCacheUpdateRequest(
+  options: GeminiUpdateCacheOptions,
+): { body: Record<string, string>; updateMask: 'expireTime' | 'ttl' } {
+  if (options.ttl && options.expireTime) {
+    throw new ProviderError(
+      'Gemini cache updates accept either ttl or expireTime, not both.',
+      {
+        provider: 'google',
+      },
+    );
+  }
+
+  if (options.ttl) {
+    return {
+      body: { ttl: options.ttl },
+      updateMask: 'ttl',
+    };
+  }
+
+  if (options.expireTime) {
+    return {
+      body: { expireTime: options.expireTime },
+      updateMask: 'expireTime',
+    };
+  }
+
+  throw new ProviderError(
+    'Gemini cache updates require ttl or expireTime.',
+    {
+      provider: 'google',
+    },
+  );
 }
 
 export function translateGeminiTools(
@@ -678,6 +934,37 @@ function translateGeminiSystemInstruction(
   }
 
   return { parts };
+}
+
+function applyGeminiCacheExpiration(
+  body: Record<string, unknown>,
+  ttl: string | undefined,
+  expireTime: string | undefined,
+): void {
+  if (ttl && expireTime) {
+    throw new ProviderError(
+      'Gemini cache requests accept either ttl or expireTime, not both.',
+      {
+        provider: 'google',
+      },
+    );
+  }
+
+  if (ttl) {
+    body.ttl = ttl;
+  }
+
+  if (expireTime) {
+    body.expireTime = expireTime;
+  }
+}
+
+function normalizeGeminiCacheModelName(model: string): string {
+  return model.startsWith('models/') ? model : `models/${model}`;
+}
+
+function normalizeGeminiCachedContentName(name: string): string {
+  return name.startsWith('cachedContents/') ? name : `cachedContents/${name}`;
 }
 
 function translateGeminiSchema(schema: CanonicalToolSchema): GeminiToolSchema {

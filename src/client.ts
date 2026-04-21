@@ -19,6 +19,13 @@ import { exportUsageSummary } from './usage.js';
 
 import type { ModelRegistryOptions, ModelPriceOverrides } from './models/index.js';
 import type { ConversationOptions, ConversationSnapshot } from './conversation.js';
+import type {
+  GeminiCachedContent,
+  GeminiCachedContentPage,
+  GeminiCreateCacheOptions,
+  GeminiListCachesOptions,
+  GeminiUpdateCacheOptions,
+} from './providers/gemini.js';
 import type { SessionStore } from './session-store.js';
 import type { ModelRouter, ResolvedModelRoute, RouterContext } from './router.js';
 import type {
@@ -30,6 +37,7 @@ import type {
   CanonicalToolChoice,
   BudgetExceededAction,
   CancelableStream,
+  ProviderOptions,
   StreamChunk,
   UsageEvent,
   UsageMetrics,
@@ -71,6 +79,7 @@ export interface LLMRequestOptions {
   messages: CanonicalMessage[];
   model?: string;
   provider?: CanonicalProvider;
+  providerOptions?: ProviderOptions;
   sessionId?: string;
   signal?: AbortSignal;
   system?: string;
@@ -145,6 +154,16 @@ export class LLMClient {
     list: ModelRegistry['list'];
     register: ModelRegistry['register'];
   };
+  readonly googleCaches: {
+    create: (options: GeminiCreateCacheOptions) => Promise<GeminiCachedContent>;
+    delete: (name: string) => Promise<void>;
+    get: (name: string) => Promise<GeminiCachedContent>;
+    list: (options?: GeminiListCachesOptions) => Promise<GeminiCachedContentPage>;
+    update: (
+      name: string,
+      options: GeminiUpdateCacheOptions,
+    ) => Promise<GeminiCachedContent>;
+  };
 
   constructor(options: LLMClientOptions = {}) {
     const modelRegistry =
@@ -204,6 +223,15 @@ export class LLMClient {
       get: this.modelRegistry.get.bind(this.modelRegistry),
       list: this.modelRegistry.list.bind(this.modelRegistry),
       register: this.modelRegistry.register.bind(this.modelRegistry),
+    };
+    this.googleCaches = {
+      create: (cacheOptions) =>
+        this.getGeminiAdapter(cacheOptions.model).createCache(cacheOptions),
+      delete: (name) => this.getGeminiCacheAdapter().deleteCache(name),
+      get: (name) => this.getGeminiCacheAdapter().getCache(name),
+      list: (cacheOptions) => this.getGeminiCacheAdapter().listCaches(cacheOptions),
+      update: (name, cacheOptions) =>
+        this.getGeminiCacheAdapter().updateCache(name, cacheOptions),
     };
   }
 
@@ -385,6 +413,19 @@ export class LLMClient {
         'Gemini API key is missing. Populate GEMINI_API_KEY in .env or pass geminiApiKey to LLMClient.',
         {
           model,
+          provider: 'google',
+        },
+      );
+    }
+
+    return this.geminiAdapter;
+  }
+
+  private getGeminiCacheAdapter(): GeminiAdapter {
+    if (!this.geminiAdapter) {
+      throw new AuthenticationError(
+        'Gemini API key is missing. Populate GEMINI_API_KEY in .env or pass geminiApiKey to LLMClient.',
+        {
           provider: 'google',
         },
       );

@@ -21,6 +21,7 @@ import type {
   CanonicalToolChoice,
   JsonObject,
   JsonValue,
+  ProviderOptions,
   StreamChunk,
 } from '../types.js';
 import type { RetryOptions } from '../utils/retry.js';
@@ -41,6 +42,7 @@ interface AnthropicTextBlock {
 }
 
 interface AnthropicImageBlock {
+  cache_control?: CacheControl;
   source:
     | { type: 'url'; url: string }
     | { data: string; media_type: string; type: 'base64' };
@@ -48,6 +50,7 @@ interface AnthropicImageBlock {
 }
 
 interface AnthropicDocumentBlock {
+  cache_control?: CacheControl;
   source:
     | { type: 'url'; url: string }
     | { data: string; media_type: string; type: 'base64' };
@@ -56,6 +59,7 @@ interface AnthropicDocumentBlock {
 }
 
 interface AnthropicToolUseBlock {
+  cache_control?: CacheControl;
   id: string;
   input: JsonObject;
   name: string;
@@ -63,6 +67,7 @@ interface AnthropicToolUseBlock {
 }
 
 interface AnthropicToolResultBlock {
+  cache_control?: CacheControl;
   content: string;
   is_error?: boolean;
   tool_use_id: string;
@@ -75,6 +80,7 @@ interface AnthropicMessage {
 }
 
 interface AnthropicToolDefinition {
+  cache_control?: CacheControl;
   description: string;
   input_schema: CanonicalTool['parameters'];
   name: string;
@@ -140,6 +146,7 @@ export interface AnthropicCompletionOptions {
   maxTokens: number;
   messages: CanonicalMessage[];
   model: string;
+  providerOptions?: ProviderOptions;
   signal?: AbortSignal;
   system?: string;
   temperature?: number;
@@ -190,7 +197,7 @@ export class AnthropicAdapter {
     }
 
     const payload = (await response.json()) as AnthropicResponsePayload;
-    return translateAnthropicResponse(payload, this.modelRegistry);
+    return translateAnthropicResponse(payload, this.modelRegistry, options.model);
   }
 
   async *stream(
@@ -280,6 +287,7 @@ export function translateAnthropicRequest(
 ): Record<string, unknown> {
   const systemMessages = options.messages.filter((message) => message.role === 'system');
   const nonSystemMessages = options.messages.filter((message) => message.role !== 'system');
+  const cacheControl = options.providerOptions?.anthropic?.cacheControl;
 
   const body: Record<string, unknown> = {
     max_tokens: options.maxTokens,
@@ -304,6 +312,10 @@ export function translateAnthropicRequest(
     body.tool_choice = translateAnthropicToolChoice(options.toolChoice);
   }
 
+  if (cacheControl) {
+    body.cache_control = cacheControl;
+  }
+
   return body;
 }
 
@@ -311,6 +323,7 @@ export function translateAnthropicTool(
   tool: CanonicalTool,
 ): AnthropicToolDefinition {
   return {
+    ...(tool.cacheControl !== undefined ? { cache_control: tool.cacheControl } : {}),
     description: tool.description,
     input_schema: tool.parameters,
     name: tool.name,
@@ -337,8 +350,14 @@ export function translateAnthropicToolChoice(
 export function translateAnthropicResponse(
   payload: AnthropicResponsePayload,
   modelRegistry: ModelRegistry = new ModelRegistry(),
+  requestedModel?: string,
 ): CanonicalResponse {
-  const model = modelRegistry.get(payload.model);
+  const resolvedModelId = resolveAnthropicModelId(
+    payload.model,
+    requestedModel,
+    modelRegistry,
+  );
+  const model = modelRegistry.get(resolvedModelId);
   const usage = usageWithCost(model, anthropicUsageToCanonical(payload.usage));
   const toolCalls: CanonicalToolCall[] = [];
   const content: CanonicalPart[] = [];
@@ -369,13 +388,33 @@ export function translateAnthropicResponse(
   return {
     content,
     finishReason: normalizeAnthropicFinishReason(payload.stop_reason),
-    model: payload.model,
+    model: resolvedModelId,
     provider: 'anthropic',
     raw: payload,
     text,
     toolCalls,
     usage,
   };
+}
+
+function resolveAnthropicModelId(
+  responseModel: string,
+  requestedModel: string | undefined,
+  modelRegistry: ModelRegistry,
+): string {
+  if (modelRegistry.isSupported(responseModel)) {
+    return responseModel;
+  }
+
+  if (
+    requestedModel &&
+    modelRegistry.isSupported(requestedModel) &&
+    responseModel.startsWith(`${requestedModel}-`)
+  ) {
+    return requestedModel;
+  }
+
+  return responseModel;
 }
 
 export async function mapAnthropicError(
@@ -561,6 +600,7 @@ function translateAnthropicPart(
     case 'document': {
       if (part.url) {
         const documentBlock: AnthropicDocumentBlock = {
+          ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
           source: {
             type: 'url',
             url: part.url,
@@ -580,6 +620,7 @@ function translateAnthropicPart(
       }
 
       const documentBlock: AnthropicDocumentBlock = {
+        ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
         source: {
           data: part.data,
           media_type: part.mediaType,
@@ -594,6 +635,7 @@ function translateAnthropicPart(
     }
     case 'image_base64': {
       return {
+        ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
         source: {
           data: part.data,
           media_type: part.mediaType,
@@ -604,6 +646,7 @@ function translateAnthropicPart(
     }
     case 'image_url': {
       return {
+        ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
         source: {
           type: 'url',
           url: part.url,
@@ -624,6 +667,7 @@ function translateAnthropicPart(
         );
       }
       return {
+        ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
         id: part.id,
         input: part.args,
         name: part.name,
@@ -640,6 +684,7 @@ function translateAnthropicPart(
         );
       }
       const toolResultBlock: AnthropicToolResultBlock = {
+        ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
         content: stringifyToolResult(part.result),
         tool_use_id: part.toolCallId,
         type: 'tool_result',

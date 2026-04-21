@@ -20,11 +20,13 @@ Planned direction:
 - [x] Anthropic already supports `cache_control` on text parts and system text
 - [x] Gemini usage normalization already reads `cachedContentTokenCount`
 - [x] Prompt caching research is documented in [docs/PROMPT_CACHING_REPORT.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/PROMPT_CACHING_REPORT.md)
-- [ ] OpenAI request-side prompt caching controls are not exposed yet
-- [ ] OpenAI cached-token cost accounting likely still double-counts cached reads
-- [ ] Anthropic cache metadata is still too narrow in the canonical type system
-- [ ] Gemini request-side `cachedContent` support is not exposed yet
-- [ ] Gemini cache lifecycle APIs do not exist yet
+- [x] OpenAI request-side prompt caching controls are exposed via `providerOptions.openai.promptCaching`
+- [x] OpenAI cached-token cost accounting no longer double-counts cached reads
+- [x] Gemini request-side `cachedContent` support is exposed via `providerOptions.google.promptCaching.cachedContent`
+- [x] Anthropic top-level request `cache_control` can be passed via `providerOptions.anthropic.cacheControl`
+- [x] Anthropic cache metadata now covers text, image, document, tool-call, tool-result, and tool-definition cache controls
+- [x] Gemini cache lifecycle APIs exist through `client.googleCaches`
+- [x] Dedicated cross-provider live prompt caching tests exist under `test/prompt_caching_test`
 
 ## Design Constraints
 
@@ -38,91 +40,100 @@ Planned direction:
 ### PC-01 Provider-specific caching option carrier
 Priority: `P0`
 
-- [ ] Decide the shared request-type location for provider-specific caching options
-- [ ] Add types for:
-  - [ ] `openai.promptCaching.key`
-  - [ ] `openai.promptCaching.retention`
-  - [ ] `anthropic.cacheControl`
-  - [ ] `google.promptCaching.cachedContent`
-- [ ] Thread the new provider-specific options through `LLMClient.complete()`, `stream()`, and conversation entry points
+- [x] Decide the shared request-type location for provider-specific caching options
+- [x] Add types for:
+  - [x] `openai.promptCaching.key`
+  - [x] `openai.promptCaching.retention`
+  - [x] `anthropic.cacheControl`
+  - [x] `google.promptCaching.cachedContent`
+- [x] Thread the new provider-specific options through `LLMClient.complete()`, `stream()`, and conversation entry points
 
 ### PC-02 OpenAI cached-token accounting
 Priority: `P0`
 
-- [ ] Confirm the current OpenAI cost math does not bill cached tokens twice
-- [ ] Adjust cost calculation so cached OpenAI input tokens are not charged once at full input price and again at cache-read price
-- [ ] Add unit coverage for OpenAI cached-token billing scenarios
-- [ ] Document any assumptions that still depend on live billing validation
+- [x] Confirm the current OpenAI cost math does not bill cached tokens twice
+- [x] Adjust cost calculation so cached OpenAI input tokens are not charged once at full input price and again at cache-read price
+- [x] Add unit coverage for OpenAI cached-token billing scenarios
+- [x] Document any assumptions that still depend on live billing validation
+
+Current implementation note:
+
+- OpenAI cost accounting now treats cached reads as a subset of total input tokens by billing `inputTokens - cachedReadTokens` at normal input price plus `cachedReadTokens` at cache-read price. Live billing validation is still pending.
 
 ### PC-03 Gemini cached-token accounting limits
 Priority: `P0`
 
-- [ ] Decide how to represent Gemini cached-read discounts in current per-request usage cost
-- [ ] Document the limit that explicit Gemini cache creation/persistence cost is not available from `GenerateContent` responses alone
-- [ ] Add tests that lock the chosen behavior
+- [x] Decide how to represent Gemini cached-read discounts in current per-request usage cost
+- [x] Document the limit that explicit Gemini cache creation/persistence cost is not available from `GenerateContent` responses alone
+- [x] Add tests that lock the chosen behavior
+
+Current implementation note:
+
+- Gemini cost accounting now treats `cachedContentTokenCount` as cached-read usage by billing `promptTokenCount - cachedContentTokenCount` at normal input price plus `cachedContentTokenCount` at cache-read price.
+- Explicit cache creation and persistence cost are still not included in per-request generation cost because Gemini does not return those costs on normal `generateContent` responses.
 
 ## Phase 2 - OpenAI Prompt Caching
 
 ### PC-04 OpenAI request mapping
 Priority: `P0`
 
-- [ ] Add OpenAI prompt caching options to the public request surface
-- [ ] Map `openai.promptCaching.key` to `prompt_cache_key`
-- [ ] Map `openai.promptCaching.retention` to `prompt_cache_retention`
-- [ ] Keep the current stateless Responses request shape with `store: false`
+- [x] Add OpenAI prompt caching options to the public request surface
+- [x] Map `openai.promptCaching.key` to `prompt_cache_key`
+- [x] Map `openai.promptCaching.retention` to `prompt_cache_retention`
+- [x] Keep the current stateless Responses request shape with `store: false`
 
 ### PC-05 OpenAI verification
 Priority: `P0`
 
-- [ ] Add adapter tests for `prompt_cache_key`
-- [ ] Add adapter tests for `prompt_cache_retention`
-- [ ] Add client-level tests that provider-specific options survive routing
-- [ ] Add documentation/examples for OpenAI prompt caching usage
+- [x] Add adapter tests for `prompt_cache_key`
+- [x] Add adapter tests for `prompt_cache_retention`
+- [x] Add client-level tests that provider-specific options survive routing
+- [x] Add documentation/examples for OpenAI prompt caching usage
 
 ## Phase 3 - Anthropic Prompt Caching
 
 ### PC-06 Broaden cache metadata in canonical types
 Priority: `P1`
 
-- [ ] Move `cacheControl` from text-only placement into a reusable cacheable-part base type
-- [ ] Extend cache metadata support to:
-  - [ ] image parts
-  - [ ] document parts
-  - [ ] tool-call parts where valid
-  - [ ] tool-result parts where valid
-- [ ] Decide whether `CanonicalTool` should also support Anthropic-specific cache metadata
+- [x] Move `cacheControl` from text-only placement into a reusable cacheable-part base type
+- [x] Extend cache metadata support to:
+  - [x] image parts
+  - [x] document parts
+  - [x] tool-call parts where valid
+  - [x] tool-result parts where valid
+- [x] Decide whether `CanonicalTool` should also support Anthropic-specific cache metadata
 
 ### PC-07 Anthropic adapter expansion
 Priority: `P1`
 
-- [ ] Map broader cacheable canonical parts into Anthropic `cache_control`
-- [ ] Add request-level Anthropic caching options where useful
-- [ ] Add tests for non-text cacheable blocks
-- [ ] Add tests for request-level Anthropic cache controls
-- [ ] Document Anthropic-specific cache semantics and limits
+- [x] Map broader cacheable canonical parts into Anthropic `cache_control`
+- [x] Add request-level Anthropic caching options where useful
+- [x] Add tests for non-text cacheable blocks
+- [x] Add tests for request-level Anthropic cache controls
+- [x] Document Anthropic-specific cache semantics and limits
 
 ## Phase 4 - Gemini Prompt Caching
 
 ### PC-08 Request-side `cachedContent`
 Priority: `P1`
 
-- [ ] Add Gemini prompt caching request options to the public request surface
-- [ ] Map `google.promptCaching.cachedContent` to the Gemini request body
-- [ ] Add adapter tests for `cachedContent`
-- [ ] Add examples that separate implicit and explicit caching
+- [x] Add Gemini prompt caching request options to the public request surface
+- [x] Map `google.promptCaching.cachedContent` to the Gemini request body
+- [x] Add adapter tests for `cachedContent`
+- [x] Add examples that separate implicit and explicit caching
 
 ### PC-09 Gemini cache lifecycle API
 Priority: `P1`
 
-- [ ] Choose the public API shape for Gemini cache management
-- [ ] Implement:
-  - [ ] `createCache`
-  - [ ] `getCache`
-  - [ ] `listCaches`
-  - [ ] `updateCache`
-  - [ ] `deleteCache`
-- [ ] Add tests for cache lifecycle methods
-- [ ] Document TTL expectations, identifiers, and usage boundaries
+- [x] Choose the public API shape for Gemini cache management
+- [x] Implement:
+  - [x] `createCache`
+  - [x] `getCache`
+  - [x] `listCaches`
+  - [x] `updateCache`
+  - [x] `deleteCache`
+- [x] Add tests for cache lifecycle methods
+- [x] Document TTL expectations, identifiers, and usage boundaries
 
 ## Phase 5 - Docs, Examples, And Validation
 
@@ -131,30 +142,37 @@ Priority: `P0`
 
 - [x] Update README and docs to reflect the current OpenAI Responses transport
 - [x] Update the prompt caching report so it matches the current codebase
-- [ ] Add user-facing examples for OpenAI, Anthropic, and Gemini caching
-- [ ] Update provider comparison docs after request-side caching features ship
+- [x] Add user-facing examples for OpenAI, Anthropic, and Gemini caching
+- [x] Update provider comparison docs after request-side caching features ship
 
 ### PC-11 Validation
 Priority: `P1`
 
-- [ ] Run live validation with real provider keys after each provider slice lands
+- [x] Run live validation with real provider keys after each provider slice lands
 - [ ] Compare cached-token usage outputs against provider dashboards/billing where possible
-- [ ] Record known accuracy limits for cache-related cost reporting
+- [x] Record known accuracy limits for cache-related cost reporting
+
+Current validation note:
+
+- `LIVE_TESTS=1 pnpm test:live` now covers OpenAI request-side prompt caching hints, Anthropic cache-control requests, Gemini explicit cache lifecycle and reuse, and the Postgres-backed persistence path.
+- `pnpm test:prompt-caching:live` now runs the dedicated cache-validation suite under `test/prompt_caching_test`, including automatic loading of `test/prompt_caching_test/.env`.
+- Dashboard and invoice comparison still requires manual access outside this repository.
 
 ## Recommended Delivery Order
 
-1. [ ] PC-01 provider-specific option carrier
-2. [ ] PC-02 OpenAI cached-token cost fix
-3. [ ] PC-04 and PC-05 OpenAI request-side prompt caching support
-4. [ ] PC-06 and PC-07 Anthropic cache metadata expansion
-5. [ ] PC-03 Gemini cached-token accounting decision
-6. [ ] PC-08 Gemini request-side `cachedContent`
-7. [ ] PC-09 Gemini cache lifecycle API
-8. [ ] PC-10 and PC-11 docs/examples/live validation
+1. [x] PC-01 provider-specific option carrier
+2. [x] PC-02 OpenAI cached-token cost fix
+3. [x] PC-04 and PC-05 OpenAI request-side prompt caching support
+4. [x] PC-06 and PC-07 Anthropic cache metadata expansion
+5. [x] PC-03 Gemini cached-token accounting decision
+6. [x] PC-08 Gemini request-side `cachedContent`
+7. [x] PC-09 Gemini cache lifecycle API
+8. [ ] PC-11 dashboard comparison and ongoing billing validation
 
 ## Open Questions
 
-- [ ] Should `CanonicalTool` carry cache metadata, or should that stay provider-specific?
-- [ ] Should provider-specific caching options live directly on completion params or inside a dedicated `providerOptions` object?
+- [x] `CanonicalTool` now carries cache metadata for Anthropic tool-definition caching.
+- [x] Provider-specific caching options now live inside the dedicated `providerOptions` object.
 - [ ] How should Gemini cache creation costs be surfaced if the provider does not return them on normal generation requests?
-- [ ] Do we want live smoke tests for cache behavior behind a separate opt-in flag in addition to `LIVE_TESTS=1`?
+- [x] Cache-related live smoke tests now run under the existing `LIVE_TESTS=1` gate.
+- [x] A focused prompt-caching live runner now exists for cross-provider validation.

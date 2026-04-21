@@ -88,6 +88,7 @@ export class OpenAIAdapter {
 export function translateOpenAIRequest(options) {
     const input = [];
     const instructions = [];
+    const promptCaching = options.providerOptions?.openai?.promptCaching;
     if (options.system) {
         instructions.push(options.system);
     }
@@ -121,6 +122,12 @@ export function translateOpenAIRequest(options) {
         if (mappedChoice.parallelToolCalls !== undefined) {
             body.parallel_tool_calls = mappedChoice.parallelToolCalls;
         }
+    }
+    if (promptCaching?.key) {
+        body.prompt_cache_key = promptCaching.key;
+    }
+    if (promptCaching?.retention) {
+        body.prompt_cache_retention = promptCaching.retention;
     }
     return body;
 }

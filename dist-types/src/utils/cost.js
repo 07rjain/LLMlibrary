@@ -4,7 +4,8 @@ export function calcCostUSD(input, registry = new ModelRegistry()) {
         return 0;
     }
     const model = registry.get(input.model);
-    return roundUsd(costForTokens(input.inputTokens, model.inputPrice) +
+    const billedInputTokens = input.billedInputTokens ?? input.inputTokens;
+    return roundUsd(costForTokens(billedInputTokens, model.inputPrice) +
         costForTokens(input.outputTokens, model.outputPrice) +
         costForTokens(input.cachedReadTokens ?? 0, model.cacheReadPrice ?? model.inputPrice * 0.1) +
         costForTokens(input.cachedWriteTokens ?? 0, model.cacheWritePrice ?? model.inputPrice * 1.25));
@@ -30,21 +31,26 @@ export function anthropicUsageToCanonical(usage) {
     };
 }
 export function openaiUsageToCanonical(usage) {
+    const inputTokens = usage?.input_tokens ?? usage?.prompt_tokens ?? 0;
     const cachedReadTokens = usage?.input_tokens_details?.cached_tokens ??
         usage?.prompt_tokens_details?.cached_tokens ??
         0;
     return {
+        billedInputTokens: Math.max(inputTokens - cachedReadTokens, 0),
         cachedReadTokens,
         cachedTokens: cachedReadTokens,
-        inputTokens: usage?.input_tokens ?? usage?.prompt_tokens ?? 0,
+        inputTokens,
         outputTokens: usage?.output_tokens ?? usage?.completion_tokens ?? 0,
     };
 }
 export function geminiUsageToCanonical(usage) {
+    const inputTokens = usage?.promptTokenCount ?? 0;
     const cachedTokens = usage?.cachedContentTokenCount ?? 0;
     return {
+        billedInputTokens: Math.max(inputTokens - cachedTokens, 0),
+        cachedReadTokens: cachedTokens,
         cachedTokens,
-        inputTokens: usage?.promptTokenCount ?? 0,
+        inputTokens,
         outputTokens: usage?.candidatesTokenCount ?? 0,
     };
 }
@@ -57,6 +63,9 @@ export function usageWithCost(model, usage) {
         model: model.id,
         outputTokens: usage.outputTokens,
     };
+    if (usage.billedInputTokens !== undefined) {
+        costInput.billedInputTokens = usage.billedInputTokens;
+    }
     if (usage.cachedReadTokens !== undefined) {
         costInput.cachedReadTokens = usage.cachedReadTokens;
     }

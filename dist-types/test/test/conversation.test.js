@@ -924,6 +924,66 @@ describe('Conversation', () => {
         ]);
         expect(conversation.totals.costUSD).toBe(0.25);
     });
+    it('preserves providerOptions through conversation sends and persistence', async () => {
+        const store = new InMemorySessionStore({
+            now: () => new Date('2026-04-15T10:00:00.000Z'),
+        });
+        const client = LLMClient.mock({
+            defaultModel: 'gpt-4o',
+            defaultProvider: 'openai',
+            responses: [
+                async (options) => {
+                    expect(options.providerOptions).toEqual({
+                        openai: {
+                            promptCaching: {
+                                key: 'support-faq-v1',
+                                retention: '24h',
+                            },
+                        },
+                    });
+                    return {
+                        content: [{ text: 'Stored with caching hints.', type: 'text' }],
+                        finishReason: 'stop',
+                        model: 'gpt-4o',
+                        provider: 'openai',
+                        raw: {},
+                        text: 'Stored with caching hints.',
+                        toolCalls: [],
+                        usage: {
+                            cachedTokens: 5,
+                            cost: '$0.0010',
+                            costUSD: 0.001,
+                            inputTokens: 10,
+                            outputTokens: 5,
+                        },
+                    };
+                },
+            ],
+            sessionStore: store,
+        });
+        const conversation = await client.conversation({
+            providerOptions: {
+                openai: {
+                    promptCaching: {
+                        key: 'support-faq-v1',
+                        retention: '24h',
+                    },
+                },
+            },
+            sessionId: 'cache-session',
+            system: 'Be concise.',
+        });
+        await conversation.send('Hello');
+        const stored = await store.get('cache-session');
+        expect(stored?.snapshot.providerOptions).toEqual({
+            openai: {
+                promptCaching: {
+                    key: 'support-faq-v1',
+                    retention: '24h',
+                },
+            },
+        });
+    });
     it('creates a fresh conversation when the session store has no record', async () => {
         const client = new LLMClient({
             sessionStore: new InMemorySessionStore(),

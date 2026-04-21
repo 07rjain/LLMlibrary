@@ -20,6 +20,7 @@ import type {
   CanonicalToolChoice,
   JsonObject,
   JsonValue,
+  ProviderOptions,
   StreamChunk,
 } from '../types.js';
 import type { OpenAIUsagePayload } from '../utils/cost.js';
@@ -223,6 +224,7 @@ export interface OpenAICompletionOptions {
   maxTokens?: number;
   messages: CanonicalMessage[];
   model: string;
+  providerOptions?: ProviderOptions;
   signal?: AbortSignal;
   system?: string;
   temperature?: number;
@@ -361,6 +363,7 @@ export function translateOpenAIRequest(
 ): Record<string, unknown> {
   const input: OpenAIInputItem[] = [];
   const instructions: string[] = [];
+  const promptCaching = options.providerOptions?.openai?.promptCaching;
 
   if (options.system) {
     instructions.push(options.system);
@@ -403,6 +406,14 @@ export function translateOpenAIRequest(
     if (mappedChoice.parallelToolCalls !== undefined) {
       body.parallel_tool_calls = mappedChoice.parallelToolCalls;
     }
+  }
+
+  if (promptCaching?.key) {
+    body.prompt_cache_key = promptCaching.key;
+  }
+
+  if (promptCaching?.retention) {
+    body.prompt_cache_retention = promptCaching.retention;
   }
 
   return body;

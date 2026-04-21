@@ -127,6 +127,26 @@ describe('OpenAI adapter', () => {
     });
   });
 
+  it('maps OpenAI prompt caching options into Responses request hints', () => {
+    const request = translateOpenAIRequest({
+      messages: [{ content: 'Hello', role: 'user' }],
+      model: 'gpt-4o',
+      providerOptions: {
+        openai: {
+          promptCaching: {
+            key: 'support-faq-v1',
+            retention: '24h',
+          },
+        },
+      },
+    });
+
+    expect(request).toMatchObject({
+      prompt_cache_key: 'support-faq-v1',
+      prompt_cache_retention: '24h',
+    });
+  });
+
   it('translates Responses payloads into canonical responses', () => {
     const response = translateOpenAIResponse({
       id: 'resp_1',

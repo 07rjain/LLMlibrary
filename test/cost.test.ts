@@ -96,6 +96,7 @@ describe('cost utilities', () => {
         output_tokens: 50,
       }),
     ).toEqual({
+      billedInputTokens: 75,
       cachedReadTokens: 25,
       cachedTokens: 25,
       inputTokens: 100,
@@ -109,6 +110,7 @@ describe('cost utilities', () => {
         prompt_tokens_details: { cached_tokens: 10 },
       }),
     ).toEqual({
+      billedInputTokens: 70,
       cachedReadTokens: 10,
       cachedTokens: 10,
       inputTokens: 80,
@@ -122,6 +124,8 @@ describe('cost utilities', () => {
         promptTokenCount: 100,
       }),
     ).toEqual({
+      billedInputTokens: 88,
+      cachedReadTokens: 12,
       cachedTokens: 12,
       inputTokens: 100,
       outputTokens: 50,
@@ -135,12 +139,15 @@ describe('cost utilities', () => {
       outputTokens: 0,
     });
     expect(openaiUsageToCanonical(undefined)).toEqual({
+      billedInputTokens: 0,
       cachedReadTokens: 0,
       cachedTokens: 0,
       inputTokens: 0,
       outputTokens: 0,
     });
     expect(geminiUsageToCanonical(undefined)).toEqual({
+      billedInputTokens: 0,
+      cachedReadTokens: 0,
       cachedTokens: 0,
       inputTokens: 0,
       outputTokens: 0,
@@ -191,5 +198,35 @@ describe('cost utilities', () => {
         outputTokens: 500,
       }).costUSD,
     ).toBeGreaterThan(0);
+  });
+
+  it('does not double-count cached OpenAI input tokens', () => {
+    const openai = registry.get('gpt-4o');
+    const usage = openaiUsageToCanonical({
+      input_tokens: 100,
+      input_tokens_details: { cached_tokens: 25 },
+      output_tokens: 50,
+    });
+    const expected =
+      (75 / 1_000_000) * openai.inputPrice +
+      (25 / 1_000_000) * (openai.cacheReadPrice ?? openai.inputPrice * 0.1) +
+      (50 / 1_000_000) * openai.outputPrice;
+
+    expect(usageWithCost(openai, usage).costUSD).toBeCloseTo(expected, 9);
+  });
+
+  it('does not double-count cached Gemini input tokens', () => {
+    const gemini = registry.get('gemini-2.5-flash');
+    const usage = geminiUsageToCanonical({
+      cachedContentTokenCount: 12,
+      candidatesTokenCount: 50,
+      promptTokenCount: 100,
+    });
+    const expected =
+      (88 / 1_000_000) * gemini.inputPrice +
+      (12 / 1_000_000) * (gemini.cacheReadPrice ?? gemini.inputPrice * 0.1) +
+      (50 / 1_000_000) * gemini.outputPrice;
+
+    expect(usageWithCost(gemini, usage).costUSD).toBeCloseTo(expected, 9);
   });
 });

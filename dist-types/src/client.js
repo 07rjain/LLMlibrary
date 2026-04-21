@@ -37,6 +37,7 @@ export class LLMClient {
     sessionStore;
     usageLogger;
     models;
+    googleCaches;
     constructor(options = {}) {
         const modelRegistry = options.modelRegistry ??
             new ModelRegistry(undefined, options.modelRegistryOptions);
@@ -66,6 +67,13 @@ export class LLMClient {
             get: this.modelRegistry.get.bind(this.modelRegistry),
             list: this.modelRegistry.list.bind(this.modelRegistry),
             register: this.modelRegistry.register.bind(this.modelRegistry),
+        };
+        this.googleCaches = {
+            create: (cacheOptions) => this.getGeminiAdapter(cacheOptions.model).createCache(cacheOptions),
+            delete: (name) => this.getGeminiCacheAdapter().deleteCache(name),
+            get: (name) => this.getGeminiCacheAdapter().getCache(name),
+            list: (cacheOptions) => this.getGeminiCacheAdapter().listCaches(cacheOptions),
+            update: (name, cacheOptions) => this.getGeminiCacheAdapter().updateCache(name, cacheOptions),
         };
     }
     /**
@@ -198,6 +206,14 @@ export class LLMClient {
         if (!this.geminiAdapter) {
             throw new AuthenticationError('Gemini API key is missing. Populate GEMINI_API_KEY in .env or pass geminiApiKey to LLMClient.', {
                 model,
+                provider: 'google',
+            });
+        }
+        return this.geminiAdapter;
+    }
+    getGeminiCacheAdapter() {
+        if (!this.geminiAdapter) {
+            throw new AuthenticationError('Gemini API key is missing. Populate GEMINI_API_KEY in .env or pass geminiApiKey to LLMClient.', {
                 provider: 'google',
             });
         }
