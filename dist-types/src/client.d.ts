@@ -2,9 +2,10 @@ import { ModelRegistry } from './models/registry.js';
 import { Conversation } from './conversation.js';
 import type { ModelRegistryOptions, ModelPriceOverrides } from './models/index.js';
 import type { ConversationOptions, ConversationSnapshot } from './conversation.js';
+import type { GeminiCachedContent, GeminiCachedContentPage, GeminiCreateCacheOptions, GeminiListCachesOptions, GeminiUpdateCacheOptions } from './providers/gemini.js';
 import type { SessionStore } from './session-store.js';
 import type { ModelRouter } from './router.js';
-import type { CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, BudgetExceededAction, CancelableStream, StreamChunk } from './types.js';
+import type { CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, BudgetExceededAction, CancelableStream, ProviderOptions, StreamChunk } from './types.js';
 import type { UsageExportFormat, UsageLogger, UsageQuery, UsageSummary } from './usage.js';
 import type { RetryOptions } from './utils/retry.js';
 /** Constructor options for `LLMClient`. */
@@ -35,6 +36,7 @@ export interface LLMRequestOptions {
     messages: CanonicalMessage[];
     model?: string;
     provider?: CanonicalProvider;
+    providerOptions?: ProviderOptions;
     sessionId?: string;
     signal?: AbortSignal;
     system?: string;
@@ -88,6 +90,13 @@ export declare class LLMClient {
         list: ModelRegistry['list'];
         register: ModelRegistry['register'];
     };
+    readonly googleCaches: {
+        create: (options: GeminiCreateCacheOptions) => Promise<GeminiCachedContent>;
+        delete: (name: string) => Promise<void>;
+        get: (name: string) => Promise<GeminiCachedContent>;
+        list: (options?: GeminiListCachesOptions) => Promise<GeminiCachedContentPage>;
+        update: (name: string, options: GeminiUpdateCacheOptions) => Promise<GeminiCachedContent>;
+    };
     constructor(options?: LLMClientOptions);
     /**
      * Creates a client that reads provider credentials from the current
@@ -115,6 +124,7 @@ export declare class LLMClient {
     getSessionStore(): SessionStore<ConversationSnapshot> | undefined;
     private getAnthropicAdapter;
     private getGeminiAdapter;
+    private getGeminiCacheAdapter;
     private getOpenAIAdapter;
     private dispatchComplete;
     private dispatchStream;

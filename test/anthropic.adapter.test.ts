@@ -111,6 +111,143 @@ describe('Anthropic adapter', () => {
     });
   });
 
+  it('maps top-level Anthropic cache control options into requests', () => {
+    const request = translateAnthropicRequest({
+      maxTokens: 64,
+      messages: [{ content: 'Hi', role: 'user' }],
+      model: 'claude-sonnet-4-6',
+      providerOptions: {
+        anthropic: {
+          cacheControl: {
+            ttl: '1h',
+            type: 'ephemeral',
+          },
+        },
+      },
+    });
+
+    expect(request).toMatchObject({
+      cache_control: {
+        ttl: '1h',
+        type: 'ephemeral',
+      },
+    });
+  });
+
+  it('maps cache_control onto cacheable Anthropic content blocks and tool definitions', () => {
+    const request = translateAnthropicRequest({
+      maxTokens: 64,
+      messages: [
+        {
+          content: [
+            {
+              cacheControl: { type: 'ephemeral' },
+              type: 'image_url',
+              url: 'https://example.com/image.png',
+            },
+            {
+              cacheControl: { ttl: '5m', type: 'ephemeral' },
+              mediaType: 'application/pdf',
+              type: 'document',
+              url: 'https://example.com/doc.pdf',
+            },
+          ],
+          role: 'user',
+        },
+        {
+          content: [
+            {
+              args: { city: 'Berlin' },
+              cacheControl: { type: 'ephemeral' },
+              id: 'tool_1',
+              name: 'weather_lookup',
+              type: 'tool_call',
+            },
+          ],
+          role: 'assistant',
+        },
+        {
+          content: [
+            {
+              cacheControl: { ttl: '5m', type: 'ephemeral' },
+              result: { temperature: 18 },
+              toolCallId: 'tool_1',
+              type: 'tool_result',
+            },
+          ],
+          role: 'user',
+        },
+      ],
+      model: 'claude-sonnet-4-6',
+      tools: [
+        {
+          cacheControl: { type: 'ephemeral' },
+          description: 'Look up weather.',
+          name: 'weather_lookup',
+          parameters: {
+            properties: {
+              city: { type: 'string' },
+            },
+            required: ['city'],
+            type: 'object',
+          },
+        },
+      ],
+    });
+
+    expect(request.tools).toEqual([
+      {
+        cache_control: { type: 'ephemeral' },
+        description: 'Look up weather.',
+        input_schema: {
+          properties: {
+            city: { type: 'string' },
+          },
+          required: ['city'],
+          type: 'object',
+        },
+        name: 'weather_lookup',
+      },
+    ]);
+    expect(request.messages).toMatchObject([
+      {
+        content: [
+          {
+            cache_control: { type: 'ephemeral' },
+            source: { type: 'url', url: 'https://example.com/image.png' },
+            type: 'image',
+          },
+          {
+            cache_control: { ttl: '5m', type: 'ephemeral' },
+            source: { type: 'url', url: 'https://example.com/doc.pdf' },
+            type: 'document',
+          },
+        ],
+      },
+      {
+        content: [
+          {
+            cache_control: { type: 'ephemeral' },
+            id: 'tool_1',
+            input: { city: 'Berlin' },
+            name: 'weather_lookup',
+            type: 'tool_use',
+          },
+        ],
+      },
+      {
+        content: [
+          {
+            cache_control: { ttl: '5m', type: 'ephemeral' },
+            content: '{"temperature":18}',
+            tool_use_id: 'tool_1',
+            type: 'tool_result',
+          },
+        ],
+      },
+    ]);
+  });
+
   it('keeps cached system prompts as Anthropic system blocks', () => {
     const request = translateAnthropicRequest({
       maxTokens: 64,
@@ -189,6 +326,27 @@ describe('Anthropic adapter', () => {
         },
       ],
     });
+  });
+
+  it('falls back to the requested model when Anthropic returns a versioned model id', () => {
+    const response = translateAnthropicResponse(
+      {
+        content: [{ text: 'Hello', type: 'text' }],
+        id: 'msg_2',
+        model: 'claude-haiku-4-5-20251001',
+        role: 'assistant',
+        stop_reason: 'end_turn',
+        usage: {
+          input_tokens: 8,
+          output_tokens: 4,
+        },
+      },
+      new ModelRegistry(),
+      'claude-haiku-4-5',
+    );
+
+    expect(response.model).toBe('claude-haiku-4-5');
+    expect(response.usage.inputTokens).toBe(8);
   });
 
   it('normalizes non-tool finish reasons', () => {

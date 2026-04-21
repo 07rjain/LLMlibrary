@@ -6,9 +6,9 @@ This library currently ships first-party adapters for Anthropic, OpenAI, and Goo
 
 | Provider | Models seeded in registry | Streaming | Tool calling | Vision inputs | Session persistence | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Anthropic | `claude-sonnet-4-6`, `claude-haiku-3-5` | Yes | Yes | Yes | Via `Conversation` + session stores | Anthropic cache read/write pricing is modeled separately. |
+| Anthropic | `claude-sonnet-4-6`, `claude-haiku-3-5` | Yes | Yes | Yes | Via `Conversation` + session stores | Anthropic cache read/write pricing is modeled separately, including block-level `cache_control`. |
 | OpenAI | `gpt-4o`, `gpt-4o-mini`, `o1-mini` | Yes | Yes | Yes | Via `Conversation` + session stores | Uses the stateless Responses API today with `store: false` and library-owned history replay. |
-| Google Gemini | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` | Yes | Yes | Yes | Via `Conversation` + session stores | Streaming uses the dedicated `streamGenerateContent` endpoint. |
+| Google Gemini | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` | Yes | Yes | Yes | Via `Conversation` + session stores | Streaming uses the dedicated `streamGenerateContent` endpoint, and explicit caches are managed with `client.googleCaches`. |
 
 ## Translation Differences
 
@@ -30,4 +30,5 @@ This library currently ships first-party adapters for Anthropic, OpenAI, and Goo
 
 - All three adapters normalize token usage into a shared `UsageMetrics` shape and estimate cost from the model registry.
 - All three adapters map auth, rate-limit, context-window, and generic provider failures into typed `LLMError` subclasses.
+- OpenAI and Gemini cached-read usage is priced separately from uncached input when the provider returns cached-token counts.
 - Live-provider smoke tests can be executed with `LIVE_TESTS=1 pnpm test:live` after populating `.env`.

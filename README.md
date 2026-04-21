@@ -244,10 +244,98 @@ For the full endpoint contract and the OpenAI Responses-style mapping notes, see
 
 ## Prompt Caching Status
 
-- OpenAI automatic prompt caching works on supported models, but request-side controls such as `prompt_cache_key` and `prompt_cache_retention` are not exposed yet.
-- Anthropic cache-control support exists for text/system content today, but broader cacheable content and tool-definition metadata are still pending.
-- Gemini implicit caching benefits supported models automatically, but explicit `cachedContent` request support and cache-resource lifecycle APIs are still pending.
+- OpenAI automatic prompt caching works on supported models, and request-side hints are exposed via `providerOptions.openai.promptCaching`.
+- Anthropic block-level and top-level `cache_control` are exposed for cacheable content and tool definitions.
+- Gemini implicit caching benefits supported models automatically, and explicit cache usage is exposed via `providerOptions.google.promptCaching.cachedContent` plus `client.googleCaches`.
 - Implementation planning lives in [docs/PROMPT_CACHING_REPORT.md](docs/PROMPT_CACHING_REPORT.md) and the active task tracker lives in [prompt_caching_todo.md](prompt_caching_todo.md).
+
+## Prompt Caching Examples
+
+OpenAI request hints:
+
+```ts
+const openaiResponse = await client.complete({
+  model: 'gpt-4o',
+  messages: [{ content: 'Summarize the support FAQ.', role: 'user' }],
+  providerOptions: {
+    openai: {
+      promptCaching: {
+        key: 'support-faq-v1',
+        retention: '24h',
+      },
+    },
+  },
+});
+```
+
+Anthropic block and tool cache control:
+
+```ts
+const anthropicResponse = await client.complete({
+  model: 'claude-sonnet-4-6',
+  messages: [
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'document',
+          url: 'https://example.com/policy.pdf',
+          mediaType: 'application/pdf',
+          cacheControl: { type: 'ephemeral', ttl: '1h' },
+        },
+        {
+          type: 'text',
+          text: 'Answer using the cached policy document.',
+        },
+      ],
+    },
+  ],
+  providerOptions: {
+    anthropic: {
+      cacheControl: { type: 'ephemeral' },
+    },
+  },
+  tools: [
+    {
+      name: 'lookup_policy',
+      description: 'Look up policy details',
+      cacheControl: { type: 'ephemeral' },
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string' },
+        },
+        required: ['topic'],
+      },
+    },
+  ],
+});
+```
+
+Gemini explicit cache lifecycle plus reuse:
+
+```ts
+const cache = await client.googleCaches.create({
+  model: 'gemini-2.5-flash',
+  displayName: 'Support FAQ',
+  messages: [{ content: 'Refunds are available for 30 days.', role: 'user' }],
+  ttl: '3600s',
+});
+
+const geminiResponse = await client.complete({
+  model: 'gemini-2.5-flash',
+  messages: [{ content: 'What is the refund window?', role: 'user' }],
+  providerOptions: {
+    google: {
+      promptCaching: {
+        cachedContent: cache.name,
+      },
+    },
+  },
+});
+```
+
+Gemini cache names are returned in the provider format `cachedContents/{id}` and can be passed back directly as `cachedContent`. Cache creation accepts the normal library model id such as `gemini-2.5-flash`; the Gemini adapter normalizes it to `models/{model}` for the cache API. Per-request generation cost includes cached-read discounts when `cachedContentTokenCount` is returned, but it does not include cache creation or persistence cost.
 
 ## Docs
 

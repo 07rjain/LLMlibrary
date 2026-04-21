@@ -1,6 +1,6 @@
 import { AuthenticationError, ContextLimitError, ProviderError, RateLimitError } from '../errors.js';
 import { ModelRegistry } from '../models/registry.js';
-import type { CacheControl, CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, JsonObject, StreamChunk } from '../types.js';
+import type { CacheControl, CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, JsonObject, ProviderOptions, StreamChunk } from '../types.js';
 import type { RetryOptions } from '../utils/retry.js';
 type AnthropicContentBlock = AnthropicTextBlock | AnthropicImageBlock | AnthropicDocumentBlock | AnthropicToolUseBlock | AnthropicToolResultBlock;
 interface AnthropicTextBlock {
@@ -9,6 +9,7 @@ interface AnthropicTextBlock {
     type: 'text';
 }
 interface AnthropicImageBlock {
+    cache_control?: CacheControl;
     source: {
         type: 'url';
         url: string;
@@ -20,6 +21,7 @@ interface AnthropicImageBlock {
     type: 'image';
 }
 interface AnthropicDocumentBlock {
+    cache_control?: CacheControl;
     source: {
         type: 'url';
         url: string;
@@ -32,18 +34,21 @@ interface AnthropicDocumentBlock {
     type: 'document';
 }
 interface AnthropicToolUseBlock {
+    cache_control?: CacheControl;
     id: string;
     input: JsonObject;
     name: string;
     type: 'tool_use';
 }
 interface AnthropicToolResultBlock {
+    cache_control?: CacheControl;
     content: string;
     is_error?: boolean;
     tool_use_id: string;
     type: 'tool_result';
 }
 interface AnthropicToolDefinition {
+    cache_control?: CacheControl;
     description: string;
     input_schema: CanonicalTool['parameters'];
     name: string;
@@ -80,6 +85,7 @@ export interface AnthropicCompletionOptions {
     maxTokens: number;
     messages: CanonicalMessage[];
     model: string;
+    providerOptions?: ProviderOptions;
     signal?: AbortSignal;
     system?: string;
     temperature?: number;

@@ -24,6 +24,37 @@ export interface CacheControl {
   type: 'ephemeral';
 }
 
+export interface AnthropicProviderOptions {
+  cacheControl?: CacheControl;
+}
+
+export interface OpenAIPromptCachingOptions {
+  key?: string;
+  retention?: '24h' | 'in_memory';
+}
+
+export interface OpenAIProviderOptions {
+  promptCaching?: OpenAIPromptCachingOptions;
+}
+
+export interface GooglePromptCachingOptions {
+  cachedContent?: string;
+}
+
+export interface GoogleProviderOptions {
+  promptCaching?: GooglePromptCachingOptions;
+}
+
+export interface ProviderOptions {
+  anthropic?: AnthropicProviderOptions;
+  google?: GoogleProviderOptions;
+  openai?: OpenAIProviderOptions;
+}
+
+export interface CacheablePartBase {
+  cacheControl?: CacheControl;
+}
+
 export type JsonPrimitive = boolean | null | number | string;
 export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
 export interface JsonObject {
@@ -31,25 +62,24 @@ export interface JsonObject {
 }
 export type JsonArray = JsonValue[];
 
-export interface TextPart {
-  cacheControl?: CacheControl;
+export interface TextPart extends CacheablePartBase {
   type: 'text';
   text: string;
 }
 
-export interface ImageUrlPart {
+export interface ImageUrlPart extends CacheablePartBase {
   type: 'image_url';
   url: string;
   mediaType?: string;
 }
 
-export interface ImageBase64Part {
+export interface ImageBase64Part extends CacheablePartBase {
   type: 'image_base64';
   data: string;
   mediaType: string;
 }
 
-export interface DocumentPart {
+export interface DocumentPart extends CacheablePartBase {
   type: 'document';
   data?: string;
   mediaType: string;
@@ -64,14 +94,14 @@ export interface AudioPart {
   url?: string;
 }
 
-export interface CanonicalToolCallPart {
+export interface CanonicalToolCallPart extends CacheablePartBase {
   type: 'tool_call';
   args: JsonObject;
   id: string;
   name: string;
 }
 
-export interface CanonicalToolResultPart {
+export interface CanonicalToolResultPart extends CacheablePartBase {
   type: 'tool_result';
   isError?: boolean;
   name?: string;
@@ -113,6 +143,7 @@ export interface ToolExecutionContext {
 }
 
 export interface CanonicalTool<TArgs extends JsonObject = JsonObject> {
+  cacheControl?: CacheControl;
   description: string;
   execute?: (
     args: TArgs,

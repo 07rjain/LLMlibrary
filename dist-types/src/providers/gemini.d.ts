@@ -1,6 +1,6 @@
 import { AuthenticationError, ContextLimitError, ProviderError, RateLimitError } from '../errors.js';
 import { ModelRegistry } from '../models/registry.js';
-import type { CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, CanonicalToolSchema, JsonObject, StreamChunk } from '../types.js';
+import type { CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, CanonicalToolSchema, JsonObject, ProviderOptions, StreamChunk } from '../types.js';
 import type { RetryOptions } from '../utils/retry.js';
 type GeminiRole = 'model' | 'user';
 type GeminiPart = GeminiTextPart | GeminiInlineDataPart | GeminiFileDataPart | GeminiFunctionCallPart | GeminiFunctionResponsePart;
@@ -83,6 +83,24 @@ interface GeminiGenerateContentResponse {
     };
     usageMetadata?: GeminiUsageMetadata;
 }
+export interface GeminiCachedContent {
+    contents?: GeminiContent[];
+    createTime?: string;
+    displayName?: string;
+    expireTime?: string;
+    model: string;
+    name: string;
+    systemInstruction?: GeminiContent;
+    toolConfig?: GeminiToolConfig;
+    tools?: GeminiToolDefinition[];
+    ttl?: string;
+    updateTime?: string;
+    usageMetadata?: GeminiUsageMetadata;
+}
+export interface GeminiCachedContentPage {
+    cachedContents: GeminiCachedContent[];
+    nextPageToken?: string;
+}
 export interface GeminiClientConfig {
     apiKey: string;
     baseUrl?: string;
@@ -94,11 +112,30 @@ export interface GeminiCompletionOptions {
     maxTokens?: number;
     messages: CanonicalMessage[];
     model: string;
+    providerOptions?: ProviderOptions;
     signal?: AbortSignal;
     system?: string;
     temperature?: number;
     toolChoice?: CanonicalToolChoice;
     tools?: CanonicalTool[];
+}
+export interface GeminiCreateCacheOptions {
+    displayName?: string;
+    expireTime?: string;
+    messages?: CanonicalMessage[];
+    model: string;
+    system?: string;
+    toolChoice?: CanonicalToolChoice;
+    tools?: CanonicalTool[];
+    ttl?: string;
+}
+export interface GeminiListCachesOptions {
+    pageSize?: number;
+    pageToken?: string;
+}
+export interface GeminiUpdateCacheOptions {
+    expireTime?: string;
+    ttl?: string;
 }
 export declare class GeminiAdapter {
     private readonly apiKey;
@@ -109,10 +146,20 @@ export declare class GeminiAdapter {
     constructor(config: GeminiClientConfig);
     complete(options: GeminiCompletionOptions): Promise<CanonicalResponse>;
     stream(options: GeminiCompletionOptions): AsyncGenerator<StreamChunk, void, void>;
+    createCache(options: GeminiCreateCacheOptions): Promise<GeminiCachedContent>;
+    getCache(name: string): Promise<GeminiCachedContent>;
+    listCaches(options?: GeminiListCachesOptions): Promise<GeminiCachedContentPage>;
+    updateCache(name: string, options: GeminiUpdateCacheOptions): Promise<GeminiCachedContent>;
+    deleteCache(name: string): Promise<void>;
     private assertCapabilities;
     private buildHeaders;
 }
 export declare function translateGeminiRequest(options: GeminiCompletionOptions): Record<string, unknown>;
+export declare function translateGeminiCacheCreateRequest(options: GeminiCreateCacheOptions): Record<string, unknown>;
+export declare function translateGeminiCacheUpdateRequest(options: GeminiUpdateCacheOptions): {
+    body: Record<string, string>;
+    updateMask: 'expireTime' | 'ttl';
+};
 export declare function translateGeminiTools(tools: CanonicalTool[]): GeminiToolDefinition;
 export declare function translateGeminiTool(tool: CanonicalTool): GeminiFunctionDeclaration;
 export declare function translateGeminiToolChoice(toolChoice: CanonicalToolChoice): GeminiToolConfig;

@@ -1,6 +1,7 @@
 import { ModelRegistry } from '../models/registry.js';
 import type { ModelInfo, UsageMetrics } from '../types.js';
 export interface CostCalculationInput {
+    billedInputTokens?: number;
     cachedReadTokens?: number;
     cachedWriteTokens?: number;
     inputTokens: number;
@@ -8,6 +9,7 @@ export interface CostCalculationInput {
     outputTokens: number;
 }
 export interface CanonicalUsageCounts {
+    billedInputTokens?: number;
     cachedReadTokens?: number;
     cachedTokens: number;
     cachedWriteTokens?: number;

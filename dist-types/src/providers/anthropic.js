@@ -87,6 +87,7 @@ export class AnthropicAdapter {
 export function translateAnthropicRequest(options) {
     const systemMessages = options.messages.filter((message) => message.role === 'system');
     const nonSystemMessages = options.messages.filter((message) => message.role !== 'system');
+    const cacheControl = options.providerOptions?.anthropic?.cacheControl;
     const body = {
         max_tokens: options.maxTokens,
         messages: nonSystemMessages.map(translateAnthropicMessage),
@@ -105,10 +106,14 @@ export function translateAnthropicRequest(options) {
     if (options.toolChoice) {
         body.tool_choice = translateAnthropicToolChoice(options.toolChoice);
     }
+    if (cacheControl) {
+        body.cache_control = cacheControl;
+    }
     return body;
 }
 export function translateAnthropicTool(tool) {
     return {
+        ...(tool.cacheControl !== undefined ? { cache_control: tool.cacheControl } : {}),
         description: tool.description,
         input_schema: tool.parameters,
         name: tool.name,
@@ -308,6 +313,7 @@ function translateAnthropicPart(role, part) {
         case 'document': {
             if (part.url) {
                 const documentBlock = {
+                    ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
                     source: {
                         type: 'url',
                         url: part.url,
@@ -325,6 +331,7 @@ function translateAnthropicPart(role, part) {
                 });
             }
             const documentBlock = {
+                ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
                 source: {
                     data: part.data,
                     media_type: part.mediaType,
@@ -339,6 +346,7 @@ function translateAnthropicPart(role, part) {
         }
         case 'image_base64': {
             return {
+                ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
                 source: {
                     data: part.data,
                     media_type: part.mediaType,
@@ -349,6 +357,7 @@ function translateAnthropicPart(role, part) {
         }
         case 'image_url': {
             return {
+                ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
                 source: {
                     type: 'url',
                     url: part.url,
@@ -366,6 +375,7 @@ function translateAnthropicPart(role, part) {
                 });
             }
             return {
+                ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
                 id: part.id,
                 input: part.args,
                 name: part.name,
@@ -379,6 +389,7 @@ function translateAnthropicPart(role, part) {
                 });
             }
             const toolResultBlock = {
+                ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
                 content: stringifyToolResult(part.result),
                 tool_use_id: part.toolCallId,
                 type: 'tool_result',

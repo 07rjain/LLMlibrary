@@ -11,6 +11,8 @@ import { ModelRegistry } from '../src/models/registry.js';
 import {
   GeminiAdapter,
   mapGeminiError,
+  translateGeminiCacheCreateRequest,
+  translateGeminiCacheUpdateRequest,
   translateGeminiRequest,
   translateGeminiResponse,
   translateGeminiToolChoice,
@@ -190,6 +192,99 @@ describe('Gemini adapter', () => {
         },
       ],
     });
+  });
+
+  it('maps Gemini cachedContent references into generateContent payloads', () => {
+    const request = translateGeminiRequest({
+      messages: [{ content: 'Hello', role: 'user' }],
+      model: 'gemini-2.5-flash',
+      providerOptions: {
+        google: {
+          promptCaching: {
+            cachedContent: 'cachedContents/support-faq-v1',
+          },
+        },
+      },
+    });
+
+    expect(request).toMatchObject({
+      cachedContent: 'cachedContents/support-faq-v1',
+    });
+  });
+
+  it('translates Gemini cache creation payloads', () => {
+    const request = translateGeminiCacheCreateRequest({
+      displayName: 'Support FAQ',
+      messages: [{ content: 'FAQ body', role: 'user' }],
+      model: 'gemini-2.5-flash',
+      system: 'Be concise.',
+      toolChoice: { type: 'auto' },
+      tools: [
+        {
+          description: 'Lookup weather',
+          name: 'weather_lookup',
+          parameters: {
+            properties: {
+              city: { type: 'string' },
+            },
+            required: ['city'],
+            type: 'object',
+          },
+        },
+      ],
+      ttl: '600s',
+    });
+
+    expect(request).toMatchObject({
+      contents: [{ parts: [{ text: 'FAQ body' }], role: 'user' }],
+      displayName: 'Support FAQ',
+      model: 'models/gemini-2.5-flash',
+      systemInstruction: {
+        parts: [{ text: 'Be concise.' }],
+      },
+      toolConfig: {
+        functionCallingConfig: {
+          mode: 'AUTO',
+        },
+      },
+      tools: [
+        {
+          functionDeclarations: [
+            expect.objectContaining({ name: 'weather_lookup' }),
+          ],
+        },
+      ],
+      ttl: '600s',
+    });
+  });
+
+  it('translates Gemini cache update payloads', () => {
+    expect(
+      translateGeminiCacheUpdateRequest({
+        ttl: '1200s',
+      }),
+    ).toEqual({
+      body: { ttl: '1200s' },
+      updateMask: 'ttl',
+    });
+
+    expect(
+      translateGeminiCacheUpdateRequest({
+        expireTime: '2026-04-21T12:00:00Z',
+      }),
+    ).toEqual({
+      body: { expireTime: '2026-04-21T12:00:00Z' },
+      updateMask: 'expireTime',
+    });
+
+    expect(() =>
+      translateGeminiCacheUpdateRequest({
+        expireTime: '2026-04-21T12:00:00Z',
+        ttl: '1200s',
+      }),
+    ).toThrow(ProviderError);
+
+    expect(() => translateGeminiCacheUpdateRequest({})).toThrow(ProviderError);
   });
 
   it('translates multimodal inputs and primitive tool results', () => {
@@ -952,6 +1047,116 @@ describe('Gemini adapter', () => {
     ).rejects.toBeInstanceOf(ProviderError);
 
     expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it('supports Gemini cache lifecycle requests', async () => {
+    const fetchImplementation = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            displayName: 'Support FAQ',
+            model: 'models/gemini-2.5-flash',
+            name: 'cachedContents/cache_1',
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            displayName: 'Support FAQ',
+            model: 'models/gemini-2.5-flash',
+            name: 'cachedContents/cache_1',
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            cachedContents: [
+              {
+                model: 'models/gemini-2.5-flash',
+                name: 'cachedContents/cache_1',
+              },
+            ],
+            nextPageToken: 'next-token',
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            expireTime: '2026-04-21T12:00:00Z',
+            model: 'models/gemini-2.5-flash',
+            name: 'cachedContents/cache_1',
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response('{}', {
+          headers: { 'content-type': 'application/json' },
+          status: 200,
+        }),
+      );
+    const adapter = new GeminiAdapter({
+      apiKey: 'gemini-key',
+      fetchImplementation,
+    });
+
+    const created = await adapter.createCache({
+      displayName: 'Support FAQ',
+      messages: [{ content: 'FAQ body', role: 'user' }],
+      model: 'gemini-2.5-flash',
+      ttl: '600s',
+    });
+    const fetched = await adapter.getCache('cache_1');
+    const listed = await adapter.listCaches({ pageSize: 10, pageToken: 'cursor-1' });
+    const updated = await adapter.updateCache('cache_1', {
+      expireTime: '2026-04-21T12:00:00Z',
+    });
+    await adapter.deleteCache('cache_1');
+
+    expect(created.name).toBe('cachedContents/cache_1');
+    expect(fetched.name).toBe('cachedContents/cache_1');
+    expect(listed.nextPageToken).toBe('next-token');
+    expect(updated.expireTime).toBe('2026-04-21T12:00:00Z');
+
+    const createRequest = fetchImplementation.mock.calls[0] as unknown as [string, RequestInit];
+    const getRequest = fetchImplementation.mock.calls[1] as unknown as [string, RequestInit];
+    const listRequest = fetchImplementation.mock.calls[2] as unknown as [string, RequestInit];
+    const updateRequest = fetchImplementation.mock.calls[3] as unknown as [string, RequestInit];
+    const deleteRequest = fetchImplementation.mock.calls[4] as unknown as [string, RequestInit];
+
+    expect(createRequest[0]).toContain('/v1beta/cachedContents');
+    expect(JSON.parse(String(createRequest[1].body))).toMatchObject({
+      model: 'models/gemini-2.5-flash',
+      ttl: '600s',
+    });
+    expect(getRequest[0]).toContain('/v1beta/cachedContents/cache_1');
+    expect(listRequest[0]).toContain('/v1beta/cachedContents?pageSize=10&pageToken=cursor-1');
+    expect(updateRequest[0]).toContain(
+      '/v1beta/cachedContents/cache_1?updateMask=expireTime',
+    );
+    expect(JSON.parse(String(updateRequest[1].body))).toEqual({
+      expireTime: '2026-04-21T12:00:00Z',
+    });
+    expect(deleteRequest[0]).toContain('/v1beta/cachedContents/cache_1');
   });
 });
 

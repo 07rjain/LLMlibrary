@@ -6,28 +6,25 @@ This report compares how prompt or context caching works for OpenAI, Anthropic, 
 
 ## Executive Summary
 
-- OpenAI is the easiest provider to finish for request-side support. Prompt caching is automatic on supported models, and the main library work is exposing request knobs such as `prompt_cache_key` and `prompt_cache_retention`.
-- Anthropic already has the closest adapter implementation in this repo, but it is incomplete. The code supports `cache_control` on text parts and cached system text, while Anthropic's API supports broader explicit caching and automatic caching semantics.
-- Gemini is the largest gap. Implicit caching needs no request change, but explicit caching requires a separate cached-content resource lifecycle plus request-time `cachedContent` references.
-- Cost accounting needs review before shipping this as a feature. OpenAI is likely double-counted today, and Gemini explicit caching cannot be modeled correctly from `generateContent` usage alone without also tracking cache-creation events.
+- OpenAI request hints and cached-read pricing are implemented. The remaining OpenAI work is live billing validation.
+- Anthropic block-level and tool-definition cache control are implemented across the cacheable canonical parts used by this library.
+- Gemini request-side `cachedContent`, cached-read pricing, and explicit cache lifecycle APIs are implemented. The remaining Gemini gap is that cache creation and persistence cost cannot be inferred from normal generation responses alone.
+- The main unfinished work is validation against real provider billing and dashboards, not missing core transport features.
 
 ## Current State In This Repo
 
 ### What already exists
 
-- `src/types.ts` defines `CacheControl`, but only `TextPart` can carry `cacheControl`.
-- `src/providers/anthropic.ts` already maps text-part and system-text `cacheControl` to Anthropic `cache_control`.
+- `src/types.ts` defines `CacheControl` and a reusable cacheable-part base that now covers text, image, document, tool-call, and tool-result parts.
+- `src/providers/anthropic.ts` maps cache control on cacheable content blocks, tool definitions, and top-level requests.
 - `src/providers/openai.ts` already parses OpenAI cached-token usage from Responses fields and still accepts the legacy Chat Completions usage shape.
-- `src/providers/gemini.ts` already parses `usageMetadata.cachedContentTokenCount`.
-- `src/utils/cost.ts` already normalizes cached-token fields for all three providers.
+- `src/providers/gemini.ts` parses `usageMetadata.cachedContentTokenCount`, accepts `cachedContent` on requests, and exposes explicit cache lifecycle methods.
+- `src/utils/cost.ts` normalizes cached-token fields for all three providers and prices cached reads separately for OpenAI and Gemini.
 
 ### What is missing
 
-- OpenAI request translation does not expose any prompt caching controls.
-- Gemini request translation does not expose `cachedContent`.
-- There is no cache lifecycle API for Gemini cached-content resources.
-- Anthropic request support is text-only, even though the provider supports a broader set of cacheable content.
-- `CanonicalTool` and most non-text parts cannot carry cache metadata today.
+- Live validation against provider billing and usage dashboards is still pending.
+- Gemini cache creation and persistence cost are still not visible on normal `generateContent` responses, so per-request cost excludes those lifecycle costs.
 
 ## OpenAI
 
@@ -43,8 +40,8 @@ This report compares how prompt or context caching works for OpenAI, Anthropic, 
 
 ### What that means for this library
 
-- The current OpenAI adapter already reads cache-hit usage, but it does not let callers influence caching behavior.
-- This library already uses `/v1/responses` in stateless mode, so the missing work is request-surface support plus cost-accounting fixes rather than a transport migration.
+- The current OpenAI adapter already reads cache-hit usage and now exposes request hints for `prompt_cache_key` and `prompt_cache_retention`.
+- This library already uses `/v1/responses` in stateless mode, so the remaining OpenAI work is documentation, examples, and live billing validation rather than transport work.
 
 ### Recommended implementation
 
@@ -75,12 +72,12 @@ body.prompt_cache_retention = options.openai?.promptCaching?.retention;
 
 ### Important accounting note
 
-OpenAI returns `cached_tokens` inside the input-usage details. That strongly suggests cached tokens are a subset of total input tokens, not an extra bucket. Based on that, the current cost logic is likely overstating OpenAI request cost by charging:
+OpenAI returns `cached_tokens` inside the input-usage details. That strongly suggests cached tokens are a subset of total input tokens, not an extra bucket. The library now prices OpenAI usage by charging:
 
-- full `input_tokens` at normal input price
-- plus `cached_tokens` again at cache-read price
+- `input_tokens - cached_tokens` at normal input price
+- `cached_tokens` at cache-read price
 
-This is an inference from OpenAI's usage shape and should be verified against real billing data, but it is the correct implementation direction unless OpenAI documents otherwise.
+This remains an inference from OpenAI's usage shape and should still be verified against real billing data.
 
 ## Anthropic
 
@@ -96,10 +93,9 @@ This is an inference from OpenAI's usage shape and should be verified against re
 
 ### What that means for this library
 
-- This repo already implements the most important Anthropic primitive: `cache_control` on text blocks.
-- The current implementation is still narrower than the provider surface because only `TextPart` can carry `cacheControl`.
-- Tool definitions are not cache-aware in the canonical model today.
-- The request surface does not currently expose Anthropic's broader automatic caching controls directly.
+- This repo now implements cache control on the cacheable Anthropic primitives exposed by the canonical request model.
+- Tool definitions are cache-aware in the canonical model via `CanonicalTool.cacheControl`.
+- The remaining Anthropic work is documentation detail and live validation, not missing request translation primitives.
 
 ### Recommended implementation
 
@@ -169,6 +165,8 @@ interface GeminiPromptCachingOptions {
 body.cachedContent = options.google?.promptCaching?.cachedContent;
 ```
 
+This request-side piece is now implemented in the library.
+
 Phase 2:
 
 - Add a small cache management API for Gemini:
@@ -200,7 +198,10 @@ client.providers.google.caches.create(...)
 
 ### Important accounting note
 
-Gemini explicitly states that `promptTokenCount` still includes cached content when `cachedContent` is used. The current `geminiUsageToCanonical()` implementation stores `cachedContentTokenCount`, but cost calculation still treats all prompt tokens as normal input tokens. That means cached-read discounts are not modeled today.
+Gemini explicitly states that `promptTokenCount` still includes cached content when `cachedContent` is used. The library now prices Gemini usage by charging:
+
+- `promptTokenCount - cachedContentTokenCount` at normal input price
+- `cachedContentTokenCount` at cache-read price
 
 There is a second issue for explicit Gemini caching: cache creation and TTL-related persistence costs do not come from the `GenerateContent` response alone. If the library wants accurate Gemini cache economics, it needs either:
 
@@ -246,12 +247,9 @@ interface ProviderOptions {
 
 ## Recommended Delivery Order
 
-1. Fix cached-token accounting for OpenAI and Gemini.
-2. Add OpenAI request-side prompt caching options.
-3. Finish Anthropic cache metadata support beyond text parts.
-4. Add Gemini request-side `cachedContent` support.
-5. Add Gemini cache lifecycle APIs.
-6. Add docs and examples for each provider.
+1. Run live validation against OpenAI, Anthropic, and Gemini with real billing checks.
+2. Record known cost-accounting limits for Gemini cache creation and persistence.
+3. Expand user-facing guides if the public API surface changes again.
 
 ## Test Plan
 
@@ -270,6 +268,17 @@ interface ProviderOptions {
 - Anthropic completion of cache controls: medium
 - Gemini explicit caching support: high
 - Correct cross-provider cost accounting: medium
+
+## Validation Status
+
+- The repository now includes live smoke coverage behind `LIVE_TESTS=1` for:
+  - OpenAI request-side prompt caching hints
+  - Anthropic cache-control requests
+  - Gemini explicit cache creation, reuse, update, list, and delete
+  - Postgres-backed persistence alongside the caching-enabled client surface
+- OpenAI and Gemini cached-read pricing are modeled from the provider usage fields returned on generation responses.
+- Gemini cache creation and persistence cost are still excluded from per-request generation cost because those lifecycle costs are not returned by normal `generateContent` responses.
+- Dashboard and invoice comparison remain manual follow-up tasks outside this repository.
 
 ## Source Links
 

@@ -52,6 +52,72 @@ export class GeminiAdapter {
         }
         yield assembler.finish();
     }
+    async createCache(options) {
+        const response = await withRetry(async () => this.fetchImplementation(`${this.baseUrl}/v1beta/cachedContents`, buildRequestInit({
+            body: JSON.stringify(translateGeminiCacheCreateRequest(options)),
+            headers: this.buildHeaders(),
+            method: 'POST',
+        }, undefined)), this.retryOptions);
+        if (!response.ok) {
+            throw await mapGeminiError(response, options.model);
+        }
+        return (await response.json());
+    }
+    async getCache(name) {
+        const normalizedName = normalizeGeminiCachedContentName(name);
+        const response = await withRetry(async () => this.fetchImplementation(`${this.baseUrl}/v1beta/${normalizedName}`, buildRequestInit({
+            headers: this.buildHeaders(),
+            method: 'GET',
+        }, undefined)), this.retryOptions);
+        if (!response.ok) {
+            throw await mapGeminiError(response);
+        }
+        return (await response.json());
+    }
+    async listCaches(options = {}) {
+        const searchParams = new URLSearchParams();
+        if (options.pageSize !== undefined) {
+            searchParams.set('pageSize', String(options.pageSize));
+        }
+        if (options.pageToken) {
+            searchParams.set('pageToken', options.pageToken);
+        }
+        const suffix = searchParams.size > 0 ? `?${searchParams.toString()}` : '';
+        const response = await withRetry(async () => this.fetchImplementation(`${this.baseUrl}/v1beta/cachedContents${suffix}`, buildRequestInit({
+            headers: this.buildHeaders(),
+            method: 'GET',
+        }, undefined)), this.retryOptions);
+        if (!response.ok) {
+            throw await mapGeminiError(response);
+        }
+        return (await response.json());
+    }
+    async updateCache(name, options) {
+        const normalizedName = normalizeGeminiCachedContentName(name);
+        const translated = translateGeminiCacheUpdateRequest(options);
+        const searchParams = new URLSearchParams({
+            updateMask: translated.updateMask,
+        });
+        const response = await withRetry(async () => this.fetchImplementation(`${this.baseUrl}/v1beta/${normalizedName}?${searchParams.toString()}`, buildRequestInit({
+            body: JSON.stringify(translated.body),
+            headers: this.buildHeaders(),
+            method: 'PATCH',
+        }, undefined)), this.retryOptions);
+        if (!response.ok) {
+            throw await mapGeminiError(response);
+        }
+        return (await response.json());
+    }
+    async deleteCache(name) {
+        const normalizedName = normalizeGeminiCachedContentName(name);
+        const response = await withRetry(async () => this.fetchImplementation(`${this.baseUrl}/v1beta/${normalizedName}`, buildRequestInit({
+            headers: this.buildHeaders(),
+            method: 'DELETE',
+        }, undefined)), this.retryOptions);
+        if (!response.ok) {
+            throw await mapGeminiError(response);
+        }
+    }
     assertCapabilities(options) {
         if (options.tools && options.tools.length > 0) {
             this.modelRegistry.assertCapability(options.model, 'supportsTools', 'tool calling');
@@ -73,6 +139,7 @@ export class GeminiAdapter {
 export function translateGeminiRequest(options) {
     const systemMessages = options.messages.filter((message) => message.role === 'system');
     const nonSystemMessages = options.messages.filter((message) => message.role !== 'system');
+    const cachedContent = options.providerOptions?.google?.promptCaching?.cachedContent;
     const body = {
         contents: nonSystemMessages.map(translateGeminiMessage),
     };
@@ -96,7 +163,58 @@ export function translateGeminiRequest(options) {
     if (options.toolChoice) {
         body.toolConfig = translateGeminiToolChoice(options.toolChoice);
     }
+    if (cachedContent) {
+        body.cachedContent = cachedContent;
+    }
     return body;
+}
+export function translateGeminiCacheCreateRequest(options) {
+    const messages = options.messages ?? [];
+    const systemMessages = messages.filter((message) => message.role === 'system');
+    const nonSystemMessages = messages.filter((message) => message.role !== 'system');
+    const body = {
+        model: normalizeGeminiCacheModelName(options.model),
+    };
+    if (nonSystemMessages.length > 0) {
+        body.contents = nonSystemMessages.map(translateGeminiMessage);
+    }
+    const systemInstruction = translateGeminiSystemInstruction(systemMessages, options.system);
+    if (systemInstruction) {
+        body.systemInstruction = systemInstruction;
+    }
+    if (options.tools && options.tools.length > 0) {
+        body.tools = [translateGeminiTools(options.tools)];
+    }
+    if (options.toolChoice) {
+        body.toolConfig = translateGeminiToolChoice(options.toolChoice);
+    }
+    if (options.displayName) {
+        body.displayName = options.displayName;
+    }
+    applyGeminiCacheExpiration(body, options.ttl, options.expireTime);
+    return body;
+}
+export function translateGeminiCacheUpdateRequest(options) {
+    if (options.ttl && options.expireTime) {
+        throw new ProviderError('Gemini cache updates accept either ttl or expireTime, not both.', {
+            provider: 'google',
+        });
+    }
+    if (options.ttl) {
+        return {
+            body: { ttl: options.ttl },
+            updateMask: 'ttl',
+        };
+    }
+    if (options.expireTime) {
+        return {
+            body: { expireTime: options.expireTime },
+            updateMask: 'expireTime',
+        };
+    }
+    throw new ProviderError('Gemini cache updates require ttl or expireTime.', {
+        provider: 'google',
+    });
 }
 export function translateGeminiTools(tools) {
     return {
@@ -368,6 +486,25 @@ function translateGeminiSystemInstruction(systemMessages, explicitSystem) {
         }
     }
     return { parts };
+}
+function applyGeminiCacheExpiration(body, ttl, expireTime) {
+    if (ttl && expireTime) {
+        throw new ProviderError('Gemini cache requests accept either ttl or expireTime, not both.', {
+            provider: 'google',
+        });
+    }
+    if (ttl) {
+        body.ttl = ttl;
+    }
+    if (expireTime) {
+        body.expireTime = expireTime;
+    }
+}
+function normalizeGeminiCacheModelName(model) {
+    return model.startsWith('models/') ? model : `models/${model}`;
+}
+function normalizeGeminiCachedContentName(name) {
+    return name.startsWith('cachedContents/') ? name : `cachedContents/${name}`;
 }
 function translateGeminiSchema(schema) {
     const translated = {

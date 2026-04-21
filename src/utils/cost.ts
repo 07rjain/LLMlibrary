@@ -3,6 +3,7 @@ import { ModelRegistry } from '../models/registry.js';
 import type { ModelInfo, UsageMetrics } from '../types.js';
 
 export interface CostCalculationInput {
+  billedInputTokens?: number;
   cachedReadTokens?: number;
   cachedWriteTokens?: number;
   inputTokens: number;
@@ -11,6 +12,7 @@ export interface CostCalculationInput {
 }
 
 export interface CanonicalUsageCounts {
+  billedInputTokens?: number;
   cachedReadTokens?: number;
   cachedTokens: number;
   cachedWriteTokens?: number;
@@ -53,9 +55,10 @@ export function calcCostUSD(
   }
 
   const model = registry.get(input.model);
+  const billedInputTokens = input.billedInputTokens ?? input.inputTokens;
 
   return roundUsd(
-    costForTokens(input.inputTokens, model.inputPrice) +
+    costForTokens(billedInputTokens, model.inputPrice) +
       costForTokens(input.outputTokens, model.outputPrice) +
       costForTokens(
         input.cachedReadTokens ?? 0,
@@ -97,14 +100,16 @@ export function anthropicUsageToCanonical(
 export function openaiUsageToCanonical(
   usage: OpenAIUsagePayload | undefined,
 ): CanonicalUsageCounts {
+  const inputTokens = usage?.input_tokens ?? usage?.prompt_tokens ?? 0;
   const cachedReadTokens =
     usage?.input_tokens_details?.cached_tokens ??
     usage?.prompt_tokens_details?.cached_tokens ??
     0;
   return {
+    billedInputTokens: Math.max(inputTokens - cachedReadTokens, 0),
     cachedReadTokens,
     cachedTokens: cachedReadTokens,
-    inputTokens: usage?.input_tokens ?? usage?.prompt_tokens ?? 0,
+    inputTokens,
     outputTokens: usage?.output_tokens ?? usage?.completion_tokens ?? 0,
   };
 }
@@ -112,10 +117,13 @@ export function openaiUsageToCanonical(
 export function geminiUsageToCanonical(
   usage: GeminiUsagePayload | undefined,
 ): CanonicalUsageCounts {
+  const inputTokens = usage?.promptTokenCount ?? 0;
   const cachedTokens = usage?.cachedContentTokenCount ?? 0;
   return {
+    billedInputTokens: Math.max(inputTokens - cachedTokens, 0),
+    cachedReadTokens: cachedTokens,
     cachedTokens,
-    inputTokens: usage?.promptTokenCount ?? 0,
+    inputTokens,
     outputTokens: usage?.candidatesTokenCount ?? 0,
   };
 }
@@ -132,6 +140,10 @@ export function usageWithCost(
     model: model.id,
     outputTokens: usage.outputTokens,
   };
+
+  if (usage.billedInputTokens !== undefined) {
+    costInput.billedInputTokens = usage.billedInputTokens;
+  }
 
   if (usage.cachedReadTokens !== undefined) {
     costInput.cachedReadTokens = usage.cachedReadTokens;
