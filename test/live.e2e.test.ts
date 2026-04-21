@@ -36,38 +36,6 @@ liveDescribe('live smoke', () => {
     },
   );
 
-  liveIt(Boolean(process.env.OPENAI_API_KEY))(
-    'accepts OpenAI prompt caching hints on a live request',
-    async () => {
-      const client = LLMClient.fromEnv();
-      const cachedPrefix = 'Support FAQ: Refunds are available within 30 days.\n'.repeat(80);
-      const response = await client.complete({
-        maxTokens: 32,
-        messages: [
-          {
-            content: `${cachedPrefix}\nReply with exactly LIVE_OPENAI_CACHE_OK.`,
-            role: 'user',
-          },
-        ],
-        model: 'gpt-4o-mini',
-        provider: 'openai',
-        providerOptions: {
-          openai: {
-            promptCaching: {
-              key: `live-openai-cache-${Date.now()}`,
-              retention: 'in_memory',
-            },
-          },
-        },
-        temperature: 0,
-      });
-
-      expect(response.provider).toBe('openai');
-      expect(response.text.length).toBeGreaterThan(0);
-      expect(response.usage.cachedTokens).toBeGreaterThanOrEqual(0);
-    },
-  );
-
   liveIt(Boolean(process.env.ANTHROPIC_API_KEY))(
     'completes a minimal request against Anthropic',
     async () => {
@@ -86,45 +54,6 @@ liveDescribe('live smoke', () => {
     },
   );
 
-  liveIt(Boolean(process.env.ANTHROPIC_API_KEY))(
-    'accepts Anthropic cache-control hints on a live request',
-    async () => {
-      const client = LLMClient.fromEnv();
-      const cachedPolicy = 'Policy excerpt: Refunds are available within 30 days.\n'.repeat(80);
-      const response = await client.complete({
-        maxTokens: 32,
-        messages: [
-          {
-            content: [
-              {
-                cacheControl: { type: 'ephemeral' },
-                text: cachedPolicy,
-                type: 'text',
-              },
-              {
-                text: 'Reply with exactly LIVE_ANTHROPIC_CACHE_OK.',
-                type: 'text',
-              },
-            ],
-            role: 'user',
-          },
-        ],
-        model: 'claude-haiku-4-5',
-        provider: 'anthropic',
-        providerOptions: {
-          anthropic: {
-            cacheControl: { type: 'ephemeral' },
-          },
-        },
-        temperature: 0,
-      });
-
-      expect(response.provider).toBe('anthropic');
-      expect(response.text.length).toBeGreaterThan(0);
-      expect(response.usage.cachedTokens).toBeGreaterThanOrEqual(0);
-    },
-  );
-
   liveIt(Boolean(process.env.GEMINI_API_KEY))(
     'completes a minimal request against Gemini',
     async () => {
@@ -140,61 +69,6 @@ liveDescribe('live smoke', () => {
       expect(response.provider).toBe('google');
       expect(response.usage.costUSD).toBeGreaterThanOrEqual(0);
     },
-  );
-
-  liveIt(Boolean(process.env.GEMINI_API_KEY))(
-    'creates, reuses, updates, lists, and deletes a Gemini explicit cache',
-    async () => {
-      const client = LLMClient.fromEnv();
-      const cache = await client.googleCaches.create({
-        displayName: `live-cache-${Date.now()}`,
-        messages: [
-          {
-            content: 'Support FAQ: Refunds are available within 30 days.\n'.repeat(80),
-            role: 'user',
-          },
-        ],
-        model: 'gemini-2.5-flash',
-        ttl: '600s',
-      });
-
-      cleanup.push(async () => {
-        try {
-          await client.googleCaches.delete(cache.name);
-        } catch {
-          return;
-        }
-      });
-
-      const fetched = await client.googleCaches.get(cache.name);
-      const updated = await client.googleCaches.update(cache.name, {
-        ttl: '900s',
-      });
-      const listed = await client.googleCaches.list({ pageSize: 100 });
-      const response = await client.complete({
-        maxTokens: 32,
-        messages: [{ content: 'Reply with exactly LIVE_GEMINI_CACHE_OK.', role: 'user' }],
-        model: 'gemini-2.5-flash',
-        provider: 'google',
-        providerOptions: {
-          google: {
-            promptCaching: {
-              cachedContent: cache.name,
-            },
-          },
-        },
-        temperature: 0,
-      });
-
-      expect(cache.name).toMatch(/^cachedContents\//);
-      expect(fetched.name).toBe(cache.name);
-      expect(updated.name).toBe(cache.name);
-      expect(listed.cachedContents.some((item) => item.name === cache.name)).toBe(true);
-      expect(response.provider).toBe('google');
-      expect(response.text.length).toBeGreaterThan(0);
-      expect(response.usage.cachedTokens).toBeGreaterThan(0);
-    },
-    30_000,
   );
 
   liveIt(Boolean(process.env.OPENAI_API_KEY) && Boolean(process.env.DATABASE_URL))(

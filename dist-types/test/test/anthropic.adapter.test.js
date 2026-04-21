@@ -302,6 +302,21 @@ describe('Anthropic adapter', () => {
             ],
         });
     });
+    it('falls back to the requested model when Anthropic returns a versioned model id', () => {
+        const response = translateAnthropicResponse({
+            content: [{ text: 'Hello', type: 'text' }],
+            id: 'msg_2',
+            model: 'claude-haiku-4-5-20251001',
+            role: 'assistant',
+            stop_reason: 'end_turn',
+            usage: {
+                input_tokens: 8,
+                output_tokens: 4,
+            },
+        }, new ModelRegistry(), 'claude-haiku-4-5');
+        expect(response.model).toBe('claude-haiku-4-5');
+        expect(response.usage.inputTokens).toBe(8);
+    });
     it('normalizes non-tool finish reasons', () => {
         expect(translateAnthropicResponse({
             content: [{ text: 'Truncated', type: 'text' }],

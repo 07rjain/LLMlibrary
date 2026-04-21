@@ -378,6 +378,7 @@ Optional live-provider smoke tests stay opt-in:
 
 ```bash
 LIVE_TESTS=1 pnpm test:live
+pnpm test:prompt-caching:live
 ```
 
 ## Testing

@@ -106,7 +106,7 @@ export declare class AnthropicAdapter {
 export declare function translateAnthropicRequest(options: AnthropicCompletionOptions): Record<string, unknown>;
 export declare function translateAnthropicTool(tool: CanonicalTool): AnthropicToolDefinition;
 export declare function translateAnthropicToolChoice(toolChoice: CanonicalToolChoice): AnthropicToolChoice;
-export declare function translateAnthropicResponse(payload: AnthropicResponsePayload, modelRegistry?: ModelRegistry): CanonicalResponse;
+export declare function translateAnthropicResponse(payload: AnthropicResponsePayload, modelRegistry?: ModelRegistry, requestedModel?: string): CanonicalResponse;
 export declare function mapAnthropicError(response: Response, model?: string): Promise<AuthenticationError | ContextLimitError | ProviderError | RateLimitError>;
 export {};
 //# sourceMappingURL=anthropic.d.ts.map

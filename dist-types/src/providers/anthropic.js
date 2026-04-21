@@ -31,7 +31,7 @@ export class AnthropicAdapter {
             throw await mapAnthropicError(response, options.model);
         }
         const payload = (await response.json());
-        return translateAnthropicResponse(payload, this.modelRegistry);
+        return translateAnthropicResponse(payload, this.modelRegistry, options.model);
     }
     async *stream(options) {
         this.assertCapabilities({ ...options, stream: true });
@@ -132,8 +132,9 @@ export function translateAnthropicToolChoice(toolChoice) {
     }
     return toolChoice;
 }
-export function translateAnthropicResponse(payload, modelRegistry = new ModelRegistry()) {
-    const model = modelRegistry.get(payload.model);
+export function translateAnthropicResponse(payload, modelRegistry = new ModelRegistry(), requestedModel) {
+    const resolvedModelId = resolveAnthropicModelId(payload.model, requestedModel, modelRegistry);
+    const model = modelRegistry.get(resolvedModelId);
     const usage = usageWithCost(model, anthropicUsageToCanonical(payload.usage));
     const toolCalls = [];
     const content = [];
@@ -161,13 +162,24 @@ export function translateAnthropicResponse(payload, modelRegistry = new ModelReg
     return {
         content,
         finishReason: normalizeAnthropicFinishReason(payload.stop_reason),
-        model: payload.model,
+        model: resolvedModelId,
         provider: 'anthropic',
         raw: payload,
         text,
         toolCalls,
         usage,
     };
+}
+function resolveAnthropicModelId(responseModel, requestedModel, modelRegistry) {
+    if (modelRegistry.isSupported(responseModel)) {
+        return responseModel;
+    }
+    if (requestedModel &&
+        modelRegistry.isSupported(requestedModel) &&
+        responseModel.startsWith(`${requestedModel}-`)) {
+        return requestedModel;
+    }
+    return responseModel;
 }
 export async function mapAnthropicError(response, model) {
     const requestId = response.headers.get('anthropic-request-id') ?? response.headers.get('request-id') ?? undefined;

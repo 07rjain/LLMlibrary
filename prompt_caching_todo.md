@@ -26,6 +26,7 @@ Planned direction:
 - [x] Anthropic top-level request `cache_control` can be passed via `providerOptions.anthropic.cacheControl`
 - [x] Anthropic cache metadata now covers text, image, document, tool-call, tool-result, and tool-definition cache controls
 - [x] Gemini cache lifecycle APIs exist through `client.googleCaches`
+- [x] Dedicated cross-provider live prompt caching tests exist under `test/prompt_caching_test`
 
 ## Design Constraints
 
@@ -154,6 +155,7 @@ Priority: `P1`
 Current validation note:
 
 - `LIVE_TESTS=1 pnpm test:live` now covers OpenAI request-side prompt caching hints, Anthropic cache-control requests, Gemini explicit cache lifecycle and reuse, and the Postgres-backed persistence path.
+- `pnpm test:prompt-caching:live` now runs the dedicated cache-validation suite under `test/prompt_caching_test`, including automatic loading of `test/prompt_caching_test/.env`.
 - Dashboard and invoice comparison still requires manual access outside this repository.
 
 ## Recommended Delivery Order
@@ -173,3 +175,4 @@ Current validation note:
 - [x] Provider-specific caching options now live inside the dedicated `providerOptions` object.
 - [ ] How should Gemini cache creation costs be surfaced if the provider does not return them on normal generation requests?
 - [x] Cache-related live smoke tests now run under the existing `LIVE_TESTS=1` gate.
+- [x] A focused prompt-caching live runner now exists for cross-provider validation.

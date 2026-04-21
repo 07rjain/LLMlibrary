@@ -88,7 +88,8 @@
     "prepack": "pnpm build",
     "sizecheck": "node ./scripts/check-bundle-size.mjs",
     "test": "vitest run --coverage",
-    "test:live": "LIVE_TESTS=1 vitest run test/live.e2e.test.ts",
+    "test:live": "LIVE_TESTS=1 vitest run test/live.e2e.test.ts test/prompt_caching_test/prompt-caching.live.test.ts",
+    "test:prompt-caching:live": "node ./test/prompt_caching_test/run-live.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc -b",
     "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
