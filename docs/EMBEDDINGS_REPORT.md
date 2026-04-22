@@ -2,11 +2,11 @@
 
 Prepared: `2026-04-22`
 
-This report describes how embeddings should be added to `unified-llm-client` to support the chatbot widget product defined in [chatbot_widget_PRD.md](./chatbot_widget_PRD.md).
+This report describes how embeddings should be added to `unified-llm-client` to support the chatbot widget product defined in `chatbot_widget_PRD.md`.
 
 ## Executive Summary
 
-- The chatbot widget PRD already assumes runtime query embeddings and `pgvector` retrieval in the chat path, especially in the request lifecycle around [docs/chatbot_widget_PRD.md](./chatbot_widget_PRD.md).
+- The chatbot widget PRD already assumes runtime query embeddings and `pgvector` retrieval in the chat path, especially in the request lifecycle described in `chatbot_widget_PRD.md`.
 - The current library has no embeddings surface. It only exposes completion, streaming, conversations, usage logging, session APIs, and Gemini cache management.
 - OpenAI and Google Gemini both have first-party embeddings APIs today.
 - Anthropic still does not offer a first-party embeddings API. Anthropic’s official embeddings guide points users to external providers such as Voyage AI.
@@ -21,7 +21,7 @@ This report describes how embeddings should be added to `unified-llm-client` to 
 The PRD already depends on embeddings in two important places:
 
 - Query-time retrieval:
-  [chatbot_widget_PRD.md](./chatbot_widget_PRD.md) describes embedding the user message, running `pgvector` similarity search, and then assembling the final Anthropic prompt from retrieved chunks and live context.
+  `chatbot_widget_PRD.md` describes embedding the user message, running `pgvector` similarity search, and then assembling the final Anthropic prompt from retrieved chunks and live context.
 - Provider fallback:
   the assumptions section currently says “Gemini Embedding 2 API” is the primary path and `text-embedding-3-large` is the fallback.
 
@@ -80,7 +80,7 @@ Implication for this library:
 
 Important PRD correction:
 
-- the PRD currently says “Gemini Embedding 2 API” in [chatbot_widget_PRD.md](./chatbot_widget_PRD.md)
+- the PRD currently says “Gemini Embedding 2 API” in `chatbot_widget_PRD.md`
 - the current official stable Gemini embedding model is `gemini-embedding-001`
 
 ### Anthropic
