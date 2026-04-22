@@ -51,6 +51,173 @@ describe('LLMClient', () => {
         expect(client.models.get('custom-model').provider).toBe('mock');
         expect(client.models.list().some((model) => model.id === 'custom-model')).toBe(true);
     });
+    it('lists remote OpenAI models through the public client API', async () => {
+        const created = 1_710_000_000;
+        const fetchImplementation = vi.fn(async () => new Response(JSON.stringify({
+            data: [
+                {
+                    created,
+                    id: 'gpt-5.4',
+                    object: 'model',
+                    owned_by: 'system',
+                },
+            ],
+            object: 'list',
+        }), {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+        }));
+        const client = new LLMClient({
+            fetchImplementation,
+            openaiApiKey: 'openai-key',
+        });
+        const models = await client.models.listRemote({ provider: 'openai' });
+        const request = fetchImplementation.mock.calls[0];
+        const headers = request[1].headers;
+        expect(String(request[0])).toBe('https://api.openai.com/v1/models');
+        expect(headers.Authorization).toBe('Bearer openai-key');
+        expect(models).toEqual([
+            {
+                createdAt: new Date(created * 1000).toISOString(),
+                displayName: 'gpt-5.4',
+                id: 'gpt-5.4',
+                ownedBy: 'system',
+                provider: 'openai',
+                raw: {
+                    created,
+                    id: 'gpt-5.4',
+                    object: 'model',
+                    owned_by: 'system',
+                },
+            },
+        ]);
+    });
+    it('paginates Anthropic remote model discovery', async () => {
+        const fetchImplementation = vi
+            .fn()
+            .mockResolvedValueOnce(new Response(JSON.stringify({
+            data: [
+                {
+                    created_at: '2026-04-14T00:00:00Z',
+                    display_name: 'Claude Opus 4.7',
+                    id: 'claude-opus-4-7',
+                    type: 'model',
+                },
+            ],
+            has_more: true,
+            last_id: 'claude-opus-4-7',
+        }), {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+        }))
+            .mockResolvedValueOnce(new Response(JSON.stringify({
+            data: [
+                {
+                    created_at: '2026-02-17T00:00:00Z',
+                    display_name: 'Claude Sonnet 4.6',
+                    id: 'claude-sonnet-4-6',
+                    type: 'model',
+                },
+            ],
+            has_more: false,
+            last_id: 'claude-sonnet-4-6',
+        }), {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+        }));
+        const client = new LLMClient({
+            anthropicApiKey: 'anthropic-key',
+            fetchImplementation,
+        });
+        const models = await client.models.listRemote({ provider: 'anthropic' });
+        const firstRequest = fetchImplementation.mock.calls[0];
+        const secondRequest = fetchImplementation.mock.calls[1];
+        const headers = firstRequest[1].headers;
+        expect(String(firstRequest[0])).toBe('https://api.anthropic.com/v1/models?limit=100');
+        expect(String(secondRequest[0])).toContain('after_id=claude-opus-4-7');
+        expect(headers['anthropic-version']).toBe('2023-06-01');
+        expect(headers['x-api-key']).toBe('anthropic-key');
+        expect(models).toMatchObject([
+            {
+                createdAt: '2026-04-14T00:00:00Z',
+                displayName: 'Claude Opus 4.7',
+                id: 'claude-opus-4-7',
+                provider: 'anthropic',
+            },
+            {
+                createdAt: '2026-02-17T00:00:00Z',
+                displayName: 'Claude Sonnet 4.6',
+                id: 'claude-sonnet-4-6',
+                provider: 'anthropic',
+            },
+        ]);
+    });
+    it('paginates Gemini remote model discovery and normalizes ids', async () => {
+        const fetchImplementation = vi
+            .fn()
+            .mockResolvedValueOnce(new Response(JSON.stringify({
+            models: [
+                {
+                    displayName: 'Gemini 2.5 Flash',
+                    inputTokenLimit: 1_048_576,
+                    name: 'models/gemini-2.5-flash',
+                    outputTokenLimit: 65_536,
+                    supportedGenerationMethods: ['generateContent', 'createCachedContent'],
+                },
+            ],
+            nextPageToken: 'page-2',
+        }), {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+        }))
+            .mockResolvedValueOnce(new Response(JSON.stringify({
+            models: [
+                {
+                    displayName: 'Gemini Embedding 001',
+                    inputTokenLimit: 2_048,
+                    name: 'models/gemini-embedding-001',
+                    outputTokenLimit: 1,
+                    supportedGenerationMethods: ['embedContent'],
+                },
+            ],
+        }), {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+        }));
+        const client = new LLMClient({
+            fetchImplementation,
+            geminiApiKey: 'gemini-key',
+        });
+        const models = await client.models.listRemote({ provider: 'google' });
+        const firstRequest = fetchImplementation.mock.calls[0];
+        const secondRequest = fetchImplementation.mock.calls[1];
+        const headers = firstRequest[1].headers;
+        expect(String(firstRequest[0])).toBe('https://generativelanguage.googleapis.com/v1beta/models?pageSize=100');
+        expect(String(secondRequest[0])).toContain('pageToken=page-2');
+        expect(headers['x-goog-api-key']).toBe('gemini-key');
+        expect(models).toMatchObject([
+            {
+                displayName: 'Gemini 2.5 Flash',
+                id: 'gemini-2.5-flash',
+                inputTokenLimit: 1_048_576,
+                outputTokenLimit: 65_536,
+                provider: 'google',
+                providerId: 'models/gemini-2.5-flash',
+                supportedActions: ['generateContent', 'createCachedContent'],
+            },
+            {
+                displayName: 'Gemini Embedding 001',
+                id: 'gemini-embedding-001',
+                provider: 'google',
+                providerId: 'models/gemini-embedding-001',
+                supportedActions: ['embedContent'],
+            },
+        ]);
+    });
+    it('throws when remote model discovery is requested without provider credentials', async () => {
+        const client = new LLMClient();
+        await expect(client.models.listRemote({ provider: 'openai' })).rejects.toBeInstanceOf(AuthenticationError);
+    });
     it('routes complete() calls to Anthropic by model', async () => {
         const fetchImplementation = vi.fn(async (input) => {
             const url = typeof input === 'string' ? input : input.toString();

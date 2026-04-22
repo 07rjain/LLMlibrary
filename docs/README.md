@@ -20,6 +20,7 @@ If you are opening the repository for the first time, read the pages below in or
 - Stateful conversations with optional tool execution
 - Session persistence in memory, Postgres, or Redis
 - Usage and cost tracking
+- Live provider model discovery through `client.models.listRemote({ provider })`
 - A framework-agnostic Session API built on `Request` and `Response`
 - Routing and fallback rules for production traffic
 
@@ -41,6 +42,7 @@ If you are opening the repository for the first time, read the pages below in or
 - API reference: [docs/api/index.html](./api/index.html)
 - Session API contract: [SESSION_API_REFERENCE.md](./SESSION_API_REFERENCE.md)
 - Provider comparison: [PROVIDER_COMPARISON.md](./PROVIDER_COMPARISON.md)
+- Embeddings integration report: [EMBEDDINGS_REPORT.md](./EMBEDDINGS_REPORT.md)
 - Prompt caching implementation report: [PROMPT_CACHING_REPORT.md](./PROMPT_CACHING_REPORT.md)
 - OpenAI Responses migration report: [OPENAI_RESPONSES_MIGRATION_REPORT.md](./OPENAI_RESPONSES_MIGRATION_REPORT.md)
 - Migration notes: [MIGRATION_GUIDE.md](./MIGRATION_GUIDE.md)
@@ -53,6 +55,7 @@ If you are opening the repository for the first time, read the pages below in or
 - OpenAI uses `providerOptions.openai.promptCaching`.
 - Anthropic uses part-level `cacheControl`, tool-level `cacheControl`, and request-level `providerOptions.anthropic.cacheControl`.
 - Gemini uses `providerOptions.google.promptCaching.cachedContent`, and explicit cache resources can be managed with `client.googleCaches`.
+- `client.models.listRemote({ provider })` fetches the provider's live model list without changing the local routing registry.
 - The active implementation tracker is stored in the repository root as `prompt_caching_todo.md`.
 
 ## Prompt Caching Quick Start

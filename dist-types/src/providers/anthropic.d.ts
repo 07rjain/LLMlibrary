@@ -1,6 +1,6 @@
 import { AuthenticationError, ContextLimitError, ProviderError, RateLimitError } from '../errors.js';
 import { ModelRegistry } from '../models/registry.js';
-import type { CacheControl, CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, JsonObject, ProviderOptions, StreamChunk } from '../types.js';
+import type { CacheControl, CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, JsonObject, ProviderOptions, RemoteModelInfo, StreamChunk } from '../types.js';
 import type { RetryOptions } from '../utils/retry.js';
 type AnthropicContentBlock = AnthropicTextBlock | AnthropicImageBlock | AnthropicDocumentBlock | AnthropicToolUseBlock | AnthropicToolResultBlock;
 interface AnthropicTextBlock {
@@ -101,7 +101,9 @@ export declare class AnthropicAdapter {
     constructor(config: AnthropicClientConfig);
     complete(options: AnthropicCompletionOptions): Promise<CanonicalResponse>;
     stream(options: AnthropicCompletionOptions): AsyncGenerator<StreamChunk, void, void>;
+    listModels(): Promise<RemoteModelInfo[]>;
     private assertCapabilities;
+    private buildHeaders;
 }
 export declare function translateAnthropicRequest(options: AnthropicCompletionOptions): Record<string, unknown>;
 export declare function translateAnthropicTool(tool: CanonicalTool): AnthropicToolDefinition;

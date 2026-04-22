@@ -133,6 +133,21 @@ console.log(modelInfo?.supportsTools);
 
 This is useful when you want to expose model choices in an admin UI or enforce capability checks before sending a request.
 
+## 8. Discover Live Provider Models
+
+If you need the provider's current remote catalog instead of the checked-in registry, call `client.models.listRemote({ provider })`.
+
+```ts
+const remoteOpenAIModels = await client.models.listRemote({
+  provider: 'openai',
+});
+
+console.log(remoteOpenAIModels[0]?.id);
+console.log(remoteOpenAIModels[0]?.ownedBy);
+```
+
+This is discovery-only. It does not automatically make newly discovered models routable through `complete()` or `stream()`. If you want to use an unshipped model with this library today, register it explicitly with `client.models.register(...)` first.
+
 ## Common Import Patterns
 
 Import from the root package when possible:

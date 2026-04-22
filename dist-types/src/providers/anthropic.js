@@ -20,11 +20,7 @@ export class AnthropicAdapter {
         this.assertCapabilities(options);
         const response = await withRetry(async () => this.fetchImplementation(`${this.baseUrl}/v1/messages`, buildRequestInit({
             body: JSON.stringify(translateAnthropicRequest(options)),
-            headers: {
-                'anthropic-version': '2023-06-01',
-                'content-type': 'application/json',
-                'x-api-key': this.apiKey,
-            },
+            headers: this.buildHeaders(),
             method: 'POST',
         }, options.signal)), this.retryOptions);
         if (!response.ok) {
@@ -40,11 +36,7 @@ export class AnthropicAdapter {
                 ...translateAnthropicRequest(options),
                 stream: true,
             }),
-            headers: {
-                'anthropic-version': '2023-06-01',
-                'content-type': 'application/json',
-                'x-api-key': this.apiKey,
-            },
+            headers: this.buildHeaders(),
             method: 'POST',
         }, options.signal)), this.retryOptions);
         if (!response.ok) {
@@ -66,6 +58,40 @@ export class AnthropicAdapter {
             yield doneChunk;
         }
     }
+    async listModels() {
+        const models = [];
+        let afterId;
+        while (true) {
+            const searchParams = new URLSearchParams({
+                limit: '100',
+            });
+            if (afterId) {
+                searchParams.set('after_id', afterId);
+            }
+            const response = await withRetry(async () => this.fetchImplementation(`${this.baseUrl}/v1/models?${searchParams.toString()}`, buildRequestInit({
+                headers: this.buildHeaders(),
+                method: 'GET',
+            }, undefined)), this.retryOptions);
+            if (!response.ok) {
+                throw await mapAnthropicError(response);
+            }
+            const payload = (await response.json());
+            for (const model of payload.data ?? []) {
+                models.push({
+                    ...(model.created_at ? { createdAt: model.created_at } : {}),
+                    ...(model.display_name ? { displayName: model.display_name } : {}),
+                    id: model.id,
+                    provider: 'anthropic',
+                    raw: model,
+                });
+            }
+            const lastId = payload.last_id ?? payload.data?.at(-1)?.id;
+            if (!payload.has_more || !lastId) {
+                return models;
+            }
+            afterId = lastId;
+        }
+    }
     assertCapabilities(options) {
         if (options.tools && options.tools.length > 0) {
             this.modelRegistry.assertCapability(options.model, 'supportsTools', 'tool calling');
@@ -82,6 +108,13 @@ export class AnthropicAdapter {
                 provider: 'anthropic',
             });
         }
+    }
+    buildHeaders() {
+        return {
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json',
+            'x-api-key': this.apiKey,
+        };
     }
 }
 export function translateAnthropicRequest(options) {

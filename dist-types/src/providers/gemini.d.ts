@@ -1,6 +1,6 @@
 import { AuthenticationError, ContextLimitError, ProviderError, RateLimitError } from '../errors.js';
 import { ModelRegistry } from '../models/registry.js';
-import type { CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, CanonicalToolSchema, JsonObject, ProviderOptions, StreamChunk } from '../types.js';
+import type { CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, CanonicalToolSchema, JsonObject, ProviderOptions, RemoteModelInfo, StreamChunk } from '../types.js';
 import type { RetryOptions } from '../utils/retry.js';
 type GeminiRole = 'model' | 'user';
 type GeminiPart = GeminiTextPart | GeminiInlineDataPart | GeminiFileDataPart | GeminiFunctionCallPart | GeminiFunctionResponsePart;
@@ -149,6 +149,7 @@ export declare class GeminiAdapter {
     createCache(options: GeminiCreateCacheOptions): Promise<GeminiCachedContent>;
     getCache(name: string): Promise<GeminiCachedContent>;
     listCaches(options?: GeminiListCachesOptions): Promise<GeminiCachedContentPage>;
+    listModels(): Promise<RemoteModelInfo[]>;
     updateCache(name: string, options: GeminiUpdateCacheOptions): Promise<GeminiCachedContent>;
     deleteCache(name: string): Promise<void>;
     private assertCapabilities;

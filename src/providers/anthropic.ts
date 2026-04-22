@@ -22,6 +22,7 @@ import type {
   JsonObject,
   JsonValue,
   ProviderOptions,
+  RemoteModelInfo,
   StreamChunk,
 } from '../types.js';
 import type { RetryOptions } from '../utils/retry.js';
@@ -114,6 +115,19 @@ interface AnthropicErrorBody {
   type?: 'error';
 }
 
+interface AnthropicModelPayload {
+  created_at?: string;
+  display_name?: string;
+  id: string;
+  type?: string;
+}
+
+interface AnthropicModelListPayload {
+  data?: AnthropicModelPayload[];
+  has_more?: boolean;
+  last_id?: string;
+}
+
 interface AnthropicSSEEvent {
   content_block?: AnthropicContentBlock;
   delta?: {
@@ -179,11 +193,7 @@ export class AnthropicAdapter {
           buildRequestInit(
             {
               body: JSON.stringify(translateAnthropicRequest(options)),
-              headers: {
-                'anthropic-version': '2023-06-01',
-                'content-type': 'application/json',
-                'x-api-key': this.apiKey,
-              },
+              headers: this.buildHeaders(),
               method: 'POST',
             },
             options.signal,
@@ -215,11 +225,7 @@ export class AnthropicAdapter {
                 ...translateAnthropicRequest(options),
                 stream: true,
               }),
-              headers: {
-                'anthropic-version': '2023-06-01',
-                'content-type': 'application/json',
-                'x-api-key': this.apiKey,
-              },
+              headers: this.buildHeaders(),
               method: 'POST',
             },
             options.signal,
@@ -255,6 +261,57 @@ export class AnthropicAdapter {
     }
   }
 
+  async listModels(): Promise<RemoteModelInfo[]> {
+    const models: RemoteModelInfo[] = [];
+    let afterId: string | undefined;
+
+    while (true) {
+      const searchParams = new URLSearchParams({
+        limit: '100',
+      });
+      if (afterId) {
+        searchParams.set('after_id', afterId);
+      }
+
+      const response = await withRetry(
+        async () =>
+          this.fetchImplementation(
+            `${this.baseUrl}/v1/models?${searchParams.toString()}`,
+            buildRequestInit(
+              {
+                headers: this.buildHeaders(),
+                method: 'GET',
+              },
+              undefined,
+            ),
+          ),
+        this.retryOptions,
+      );
+
+      if (!response.ok) {
+        throw await mapAnthropicError(response);
+      }
+
+      const payload = (await response.json()) as AnthropicModelListPayload;
+      for (const model of payload.data ?? []) {
+        models.push({
+          ...(model.created_at ? { createdAt: model.created_at } : {}),
+          ...(model.display_name ? { displayName: model.display_name } : {}),
+          id: model.id,
+          provider: 'anthropic',
+          raw: model,
+        });
+      }
+
+      const lastId = payload.last_id ?? payload.data?.at(-1)?.id;
+      if (!payload.has_more || !lastId) {
+        return models;
+      }
+
+      afterId = lastId;
+    }
+  }
+
   private assertCapabilities(
     options: AnthropicCompletionOptions & { stream?: boolean },
   ): void {
@@ -279,6 +336,14 @@ export class AnthropicAdapter {
         },
       );
     }
+  }
+
+  private buildHeaders(): Record<string, string> {
+    return {
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+      'x-api-key': this.apiKey,
+    };
   }
 }
 

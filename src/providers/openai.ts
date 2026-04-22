@@ -21,6 +21,7 @@ import type {
   JsonObject,
   JsonValue,
   ProviderOptions,
+  RemoteModelInfo,
   StreamChunk,
 } from '../types.js';
 import type { OpenAIUsagePayload } from '../utils/cost.js';
@@ -142,6 +143,18 @@ interface OpenAIResponsePayload {
 
 interface OpenAIErrorBody {
   error?: OpenAIResponseErrorPayload;
+}
+
+interface OpenAIModelPayload {
+  created?: number;
+  id: string;
+  object: string;
+  owned_by?: string;
+}
+
+interface OpenAIModelListPayload {
+  data?: OpenAIModelPayload[];
+  object?: string;
 }
 
 interface OpenAIResponseOutputTextDeltaEvent {
@@ -320,6 +333,40 @@ export class OpenAIAdapter {
     }
 
     yield assembler.finish();
+  }
+
+  async listModels(): Promise<RemoteModelInfo[]> {
+    const response = await withRetry(
+      async () =>
+        this.fetchImplementation(
+          `${this.baseUrl}/v1/models`,
+          buildRequestInit(
+            {
+              headers: this.buildHeaders(),
+              method: 'GET',
+            },
+            undefined,
+          ),
+        ),
+      this.retryOptions,
+    );
+
+    if (!response.ok) {
+      throw await mapOpenAIError(response);
+    }
+
+    const payload = (await response.json()) as OpenAIModelListPayload;
+    return (payload.data ?? []).map((model) => {
+      const createdAt = normalizeUnixTimestamp(model.created);
+      return {
+        ...(createdAt ? { createdAt } : {}),
+        displayName: model.id,
+        id: model.id,
+        ...(model.owned_by ? { ownedBy: model.owned_by } : {}),
+        provider: 'openai',
+        raw: model,
+      };
+    });
   }
 
   private assertCapabilities(
@@ -580,6 +627,14 @@ export async function mapOpenAIError(
   }
 
   return new ProviderError(message, options);
+}
+
+function normalizeUnixTimestamp(value: number | undefined): string | undefined {
+  if (value === undefined || !Number.isFinite(value)) {
+    return undefined;
+  }
+
+  return new Date(value * 1000).toISOString();
 }
 
 class OpenAIStreamAssembler {

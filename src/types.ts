@@ -230,3 +230,25 @@ export type ModelCapability = keyof Pick<
   ModelInfo,
   'supportsStreaming' | 'supportsTools' | 'supportsVision'
 >;
+
+export type RemoteModelProvider = Extract<
+  CanonicalProvider,
+  'anthropic' | 'google' | 'openai'
+>;
+
+export interface RemoteModelInfo {
+  createdAt?: string;
+  displayName?: string;
+  id: string;
+  inputTokenLimit?: number;
+  outputTokenLimit?: number;
+  ownedBy?: string;
+  provider: RemoteModelProvider;
+  providerId?: string;
+  raw: unknown;
+  supportedActions?: string[];
+}
+
+export interface RemoteModelListOptions {
+  provider: RemoteModelProvider;
+}

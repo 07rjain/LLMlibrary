@@ -55,6 +55,9 @@ The fastest path through the docs is:
 
 If you want the lower-level generated API surface, open [API Reference](./api/index.html).
 
+If you need the providers' current live catalogs, use `client.models.listRemote({ provider })` and treat the result as discovery data. It does not automatically replace the checked-in model registry.
+
+For embeddings planning tied to the chatbot widget use case, see [Embeddings Integration Report](./EMBEDDINGS_REPORT.md).
 For provider-specific implementation planning, see [Prompt Caching Report](./PROMPT_CACHING_REPORT.md).
 Prompt caching work is tracked in the repository root as `prompt_caching_todo.md`.
 For the OpenAI transport migration specifically, see [OpenAI Responses Migration Report](./OPENAI_RESPONSES_MIGRATION_REPORT.md).

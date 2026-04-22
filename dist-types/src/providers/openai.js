@@ -59,6 +59,27 @@ export class OpenAIAdapter {
         }
         yield assembler.finish();
     }
+    async listModels() {
+        const response = await withRetry(async () => this.fetchImplementation(`${this.baseUrl}/v1/models`, buildRequestInit({
+            headers: this.buildHeaders(),
+            method: 'GET',
+        }, undefined)), this.retryOptions);
+        if (!response.ok) {
+            throw await mapOpenAIError(response);
+        }
+        const payload = (await response.json());
+        return (payload.data ?? []).map((model) => {
+            const createdAt = normalizeUnixTimestamp(model.created);
+            return {
+                ...(createdAt ? { createdAt } : {}),
+                displayName: model.id,
+                id: model.id,
+                ...(model.owned_by ? { ownedBy: model.owned_by } : {}),
+                provider: 'openai',
+                raw: model,
+            };
+        });
+    }
     assertCapabilities(options) {
         if (options.tools && options.tools.length > 0) {
             this.modelRegistry.assertCapability(options.model, 'supportsTools', 'tool calling');
@@ -250,6 +271,12 @@ export async function mapOpenAIError(response, model) {
         });
     }
     return new ProviderError(message, options);
+}
+function normalizeUnixTimestamp(value) {
+    if (value === undefined || !Number.isFinite(value)) {
+        return undefined;
+    }
+    return new Date(value * 1000).toISOString();
 }
 class OpenAIStreamAssembler {
     finalResponse;

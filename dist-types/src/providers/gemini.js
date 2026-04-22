@@ -92,6 +92,48 @@ export class GeminiAdapter {
         }
         return (await response.json());
     }
+    async listModels() {
+        const models = [];
+        let pageToken;
+        while (true) {
+            const searchParams = new URLSearchParams({
+                pageSize: '100',
+            });
+            if (pageToken) {
+                searchParams.set('pageToken', pageToken);
+            }
+            const response = await withRetry(async () => this.fetchImplementation(`${this.baseUrl}/v1beta/models?${searchParams.toString()}`, buildRequestInit({
+                headers: this.buildHeaders(),
+                method: 'GET',
+            }, undefined)), this.retryOptions);
+            if (!response.ok) {
+                throw await mapGeminiError(response);
+            }
+            const payload = (await response.json());
+            for (const model of payload.models ?? []) {
+                models.push({
+                    ...(model.displayName ? { displayName: model.displayName } : {}),
+                    id: normalizeGeminiModelId(model.name),
+                    ...(model.inputTokenLimit !== undefined
+                        ? { inputTokenLimit: model.inputTokenLimit }
+                        : {}),
+                    ...(model.outputTokenLimit !== undefined
+                        ? { outputTokenLimit: model.outputTokenLimit }
+                        : {}),
+                    provider: 'google',
+                    providerId: model.name,
+                    raw: model,
+                    ...(model.supportedGenerationMethods
+                        ? { supportedActions: model.supportedGenerationMethods }
+                        : {}),
+                });
+            }
+            if (!payload.nextPageToken) {
+                return models;
+            }
+            pageToken = payload.nextPageToken;
+        }
+    }
     async updateCache(name, options) {
         const normalizedName = normalizeGeminiCachedContentName(name);
         const translated = translateGeminiCacheUpdateRequest(options);
@@ -502,6 +544,9 @@ function applyGeminiCacheExpiration(body, ttl, expireTime) {
 }
 function normalizeGeminiCacheModelName(model) {
     return model.startsWith('models/') ? model : `models/${model}`;
+}
+function normalizeGeminiModelId(model) {
+    return model.startsWith('models/') ? model.slice('models/'.length) : model;
 }
 function normalizeGeminiCachedContentName(name) {
     return name.startsWith('cachedContents/') ? name : `cachedContents/${name}`;

@@ -5,7 +5,7 @@ import type { ConversationOptions, ConversationSnapshot } from './conversation.j
 import type { GeminiCachedContent, GeminiCachedContentPage, GeminiCreateCacheOptions, GeminiListCachesOptions, GeminiUpdateCacheOptions } from './providers/gemini.js';
 import type { SessionStore } from './session-store.js';
 import type { ModelRouter } from './router.js';
-import type { CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, BudgetExceededAction, CancelableStream, ProviderOptions, StreamChunk } from './types.js';
+import type { CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, BudgetExceededAction, CancelableStream, ProviderOptions, RemoteModelInfo, RemoteModelListOptions, StreamChunk } from './types.js';
 import type { UsageExportFormat, UsageLogger, UsageQuery, UsageSummary } from './usage.js';
 import type { RetryOptions } from './utils/retry.js';
 /** Constructor options for `LLMClient`. */
@@ -88,6 +88,7 @@ export declare class LLMClient {
     readonly models: {
         get: ModelRegistry['get'];
         list: ModelRegistry['list'];
+        listRemote: (options: RemoteModelListOptions) => Promise<RemoteModelInfo[]>;
         register: ModelRegistry['register'];
     };
     readonly googleCaches: {
@@ -124,8 +125,8 @@ export declare class LLMClient {
     getSessionStore(): SessionStore<ConversationSnapshot> | undefined;
     private getAnthropicAdapter;
     private getGeminiAdapter;
-    private getGeminiCacheAdapter;
     private getOpenAIAdapter;
+    private listRemoteModels;
     private dispatchComplete;
     private dispatchStream;
     private resolveRequest;

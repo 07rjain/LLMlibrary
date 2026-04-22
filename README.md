@@ -16,6 +16,7 @@ Provider-agnostic TypeScript client for Anthropic, OpenAI, and Google Gemini wit
 - Automatic Postgres session persistence when `DATABASE_URL` is present
 - Built-in framework-agnostic Session API handler with `Request`/`Response` endpoints
 - Model routing, fallback chains, weighted A/B routing, and usage logging
+- Live provider model discovery via `client.models.listRemote({ provider })`
 - Budget breach policies: `throw`, `warn`, or `skip`
 - Usage aggregation export as JSON or CSV
 - Edge-safe core imports with Node-only Postgres features loaded lazily
@@ -235,6 +236,21 @@ Supported endpoints include:
 - `GET /sessions`
 
 For the full endpoint contract and the OpenAI Responses-style mapping notes, see [SESSION_API.md](SESSION_API.md).
+
+## Remote Model Discovery
+
+Use `client.models.listRemote({ provider })` when you want the provider's current live model list instead of the checked-in local registry.
+
+```ts
+const googleModels = await client.models.listRemote({
+  provider: 'google',
+});
+
+console.log(googleModels[0]?.id);
+console.log(googleModels[0]?.supportedActions);
+```
+
+`listRemote()` is discovery-only. It does not auto-register those models into the local routing registry, so `complete()` and `stream()` still require either a known built-in model or a manual `client.models.register(...)` step.
 
 ## Runtime Support
 

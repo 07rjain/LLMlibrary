@@ -38,6 +38,8 @@ import type {
   BudgetExceededAction,
   CancelableStream,
   ProviderOptions,
+  RemoteModelInfo,
+  RemoteModelListOptions,
   StreamChunk,
   UsageEvent,
   UsageMetrics,
@@ -152,6 +154,7 @@ export class LLMClient {
   readonly models: {
     get: ModelRegistry['get'];
     list: ModelRegistry['list'];
+    listRemote: (options: RemoteModelListOptions) => Promise<RemoteModelInfo[]>;
     register: ModelRegistry['register'];
   };
   readonly googleCaches: {
@@ -222,16 +225,17 @@ export class LLMClient {
     this.models = {
       get: this.modelRegistry.get.bind(this.modelRegistry),
       list: this.modelRegistry.list.bind(this.modelRegistry),
+      listRemote: this.listRemoteModels.bind(this),
       register: this.modelRegistry.register.bind(this.modelRegistry),
     };
     this.googleCaches = {
       create: (cacheOptions) =>
         this.getGeminiAdapter(cacheOptions.model).createCache(cacheOptions),
-      delete: (name) => this.getGeminiCacheAdapter().deleteCache(name),
-      get: (name) => this.getGeminiCacheAdapter().getCache(name),
-      list: (cacheOptions) => this.getGeminiCacheAdapter().listCaches(cacheOptions),
+      delete: (name) => this.getGeminiAdapter().deleteCache(name),
+      get: (name) => this.getGeminiAdapter().getCache(name),
+      list: (cacheOptions) => this.getGeminiAdapter().listCaches(cacheOptions),
       update: (name, cacheOptions) =>
-        this.getGeminiCacheAdapter().updateCache(name, cacheOptions),
+        this.getGeminiAdapter().updateCache(name, cacheOptions),
     };
   }
 
@@ -393,12 +397,12 @@ export class LLMClient {
     return this.sessionStore;
   }
 
-  private getAnthropicAdapter(model: string): AnthropicAdapter {
+  private getAnthropicAdapter(model?: string): AnthropicAdapter {
     if (!this.anthropicAdapter) {
       throw new AuthenticationError(
         'Anthropic API key is missing. Populate ANTHROPIC_API_KEY in .env or pass anthropicApiKey to LLMClient.',
         {
-          model,
+          ...(model !== undefined ? { model } : {}),
           provider: 'anthropic',
         },
       );
@@ -407,12 +411,12 @@ export class LLMClient {
     return this.anthropicAdapter;
   }
 
-  private getGeminiAdapter(model: string): GeminiAdapter {
+  private getGeminiAdapter(model?: string): GeminiAdapter {
     if (!this.geminiAdapter) {
       throw new AuthenticationError(
         'Gemini API key is missing. Populate GEMINI_API_KEY in .env or pass geminiApiKey to LLMClient.',
         {
-          model,
+          ...(model !== undefined ? { model } : {}),
           provider: 'google',
         },
       );
@@ -421,31 +425,31 @@ export class LLMClient {
     return this.geminiAdapter;
   }
 
-  private getGeminiCacheAdapter(): GeminiAdapter {
-    if (!this.geminiAdapter) {
-      throw new AuthenticationError(
-        'Gemini API key is missing. Populate GEMINI_API_KEY in .env or pass geminiApiKey to LLMClient.',
-        {
-          provider: 'google',
-        },
-      );
-    }
-
-    return this.geminiAdapter;
-  }
-
-  private getOpenAIAdapter(model: string): OpenAIAdapter {
+  private getOpenAIAdapter(model?: string): OpenAIAdapter {
     if (!this.openaiAdapter) {
       throw new AuthenticationError(
         'OpenAI API key is missing. Populate OPENAI_API_KEY in .env or pass openaiApiKey to LLMClient.',
         {
-          model,
+          ...(model !== undefined ? { model } : {}),
           provider: 'openai',
         },
       );
     }
 
     return this.openaiAdapter;
+  }
+
+  private async listRemoteModels(
+    options: RemoteModelListOptions,
+  ): Promise<RemoteModelInfo[]> {
+    switch (options.provider) {
+      case 'anthropic':
+        return this.getAnthropicAdapter().listModels();
+      case 'google':
+        return this.getGeminiAdapter().listModels();
+      case 'openai':
+        return this.getOpenAIAdapter().listModels();
+    }
   }
 
   private dispatchComplete(

@@ -1,6 +1,6 @@
 import { AuthenticationError, ContextLimitError, ProviderError, RateLimitError } from '../errors.js';
 import { ModelRegistry } from '../models/registry.js';
-import type { CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, ProviderOptions, StreamChunk } from '../types.js';
+import type { CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, ProviderOptions, RemoteModelInfo, StreamChunk } from '../types.js';
 import type { OpenAIUsagePayload } from '../utils/cost.js';
 import type { RetryOptions } from '../utils/retry.js';
 interface OpenAIToolDefinition {
@@ -97,6 +97,7 @@ export declare class OpenAIAdapter {
     constructor(config: OpenAIClientConfig);
     complete(options: OpenAICompletionOptions): Promise<CanonicalResponse>;
     stream(options: OpenAICompletionOptions): AsyncGenerator<StreamChunk, void, void>;
+    listModels(): Promise<RemoteModelInfo[]>;
     private assertCapabilities;
     private buildHeaders;
 }
