@@ -27,6 +27,9 @@ Prepared: 2026-04-16
 - [x] Phase 7 validation commands also pass: `pnpm sizecheck`, `pnpm depcheck`, `pnpm edgecheck`, `pnpm bench:complete`, `pnpm bench:first-token`, `pnpm bench:memory`, `pnpm bench:concurrency`, `pnpm pricecheck`, and `pnpm docs:api`
 - [x] `.env` exists locally and the user has populated API keys for live smoke testing
 - [x] `TEST_AGENT_HANDOFF.md` exists for parallel validation/testing work
+- [x] Embeddings planning docs and the dedicated tracker now exist in `docs/EMBEDDINGS_REPORT.md`, `docs/EMBEDDINGS_RETRIEVAL_ARCHITECTURE_REPORT.md`, `docs/RETRIEVAL_API_INTEGRATION_REPORT.md`, and `embeddings_todo.md`
+- [x] Google-only v1 embeddings are now partially shipped with `client.embed()`, embedding-aware model registry metadata, the Gemini Embedding 2 adapter path, and retrieval helpers in `src/retrieval.ts`
+- [x] The retrieval module now includes `PostgresKnowledgeStore` for app-owned `pgvector` storage, strict filtered dense/lexical search, and schema bootstrap helpers
 - [x] `T-01`, `T-02`, `T-04`, `T-05`, `T-06`, and `T-07` are implemented and verified
 - [x] `T-03` is implemented and verified
 - [x] `T-08` Anthropic adapter is implemented and verified

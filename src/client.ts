@@ -30,6 +30,7 @@ import type { SessionStore } from './session-store.js';
 import type { ModelRouter, ResolvedModelRoute, RouterContext } from './router.js';
 import type {
   CanonicalFinishReason,
+  CanonicalPart,
   CanonicalMessage,
   CanonicalProvider,
   CanonicalResponse,
@@ -37,6 +38,12 @@ import type {
   CanonicalToolChoice,
   BudgetExceededAction,
   CancelableStream,
+  EmbeddingInput,
+  EmbeddingInputItem,
+  EmbeddingProvider,
+  EmbeddingRequestOptions,
+  EmbeddingResponse,
+  ModelInfo,
   ProviderOptions,
   RemoteModelInfo,
   RemoteModelListOptions,
@@ -56,6 +63,8 @@ import type { RetryOptions } from './utils/retry.js';
 export interface LLMClientOptions {
   anthropicApiKey?: string;
   budgetExceededAction?: BudgetExceededAction;
+  defaultEmbeddingModel?: string;
+  defaultEmbeddingProvider?: EmbeddingProvider;
   defaultModel?: string;
   defaultProvider?: CanonicalProvider;
   fetchImplementation?: typeof fetch;
@@ -97,6 +106,15 @@ export interface MockLLMClientOptions
     LLMClientOptions,
     'anthropicApiKey' | 'geminiApiKey' | 'openaiApiKey'
   > {
+  embeddings?: Array<
+    | EmbeddingResponse
+    | ((
+        options: EmbeddingRequestOptions & {
+          model: string;
+          provider: EmbeddingProvider;
+        },
+      ) => EmbeddingResponse | Promise<EmbeddingResponse>)
+  >;
   responses?: Array<
     | CanonicalResponse
     | ((
@@ -141,6 +159,8 @@ export interface MockLLMClientOptions
 export class LLMClient {
   private readonly anthropicAdapter: AnthropicAdapter | null;
   private readonly budgetExceededAction: BudgetExceededAction;
+  private readonly defaultEmbeddingModel: string | undefined;
+  private readonly defaultEmbeddingProvider: EmbeddingProvider | undefined;
   private readonly defaultModel: string | undefined;
   private readonly defaultProvider: CanonicalProvider | undefined;
   private readonly geminiAdapter: GeminiAdapter | null;
@@ -174,6 +194,8 @@ export class LLMClient {
       new ModelRegistry(undefined, options.modelRegistryOptions);
     this.modelRegistry = modelRegistry;
     this.budgetExceededAction = options.budgetExceededAction ?? 'throw';
+    this.defaultEmbeddingModel = options.defaultEmbeddingModel;
+    this.defaultEmbeddingProvider = options.defaultEmbeddingProvider;
     this.defaultModel = options.defaultModel;
     this.defaultProvider = options.defaultProvider;
     this.modelRouter = options.modelRouter;
@@ -311,6 +333,12 @@ export class LLMClient {
     }
 
     throw new ProviderCapabilityError('No model route attempts were available.');
+  }
+
+  /** Executes a single non-streaming embedding request. */
+  async embed(options: EmbeddingRequestOptions): Promise<EmbeddingResponse> {
+    const resolved = this.resolveEmbeddingRequest(options);
+    return this.dispatchEmbed(resolved);
   }
 
   /** Executes a streaming completion request and yields canonical chunks. */
@@ -477,6 +505,26 @@ export class LLMClient {
     }
   }
 
+  private dispatchEmbed(
+    resolved: EmbeddingRequestOptions & {
+      model: string;
+      provider: EmbeddingProvider;
+    },
+  ): Promise<EmbeddingResponse> {
+    switch (resolved.provider) {
+      case 'google':
+        return this.getGeminiAdapter(resolved.model).embed(resolved);
+      default:
+        throw new ProviderCapabilityError(
+          `Provider "${resolved.provider}" is not implemented in this client yet.`,
+          {
+            model: resolved.model,
+            provider: resolved.provider,
+          },
+        );
+    }
+  }
+
   private dispatchStream(
     resolved: LLMRequestOptions & {
       maxTokens: number;
@@ -537,6 +585,58 @@ export class LLMClient {
     return {
       ...options,
       maxTokens: options.maxTokens ?? 1024,
+      model,
+      provider,
+    };
+  }
+
+  private resolveEmbeddingRequest(
+    options: EmbeddingRequestOptions,
+  ): EmbeddingRequestOptions & {
+    model: string;
+    provider: EmbeddingProvider;
+  } {
+    const model = normalizeEmbeddingModelId(
+      options.model ?? this.defaultEmbeddingModel ?? 'gemini-embedding-2',
+    );
+    const requestedProvider = options.provider as CanonicalProvider | undefined;
+    if (requestedProvider && requestedProvider !== 'google') {
+      throw new ProviderCapabilityError(
+        `Embeddings currently support provider "google" only in v1. Received "${requestedProvider}".`,
+        {
+          model,
+          provider: requestedProvider,
+        },
+      );
+    }
+
+    const modelInfo = this.modelRegistry.assertModelKind(model, 'embedding');
+    const provider = options.provider ?? this.defaultEmbeddingProvider ?? (modelInfo.provider as EmbeddingProvider);
+
+    if (provider !== 'google') {
+      throw new ProviderCapabilityError(
+        `Embeddings currently support provider "google" only in v1. Received "${provider}".`,
+        {
+          model,
+          provider,
+        },
+      );
+    }
+
+    if (provider !== modelInfo.provider) {
+      throw new ProviderCapabilityError(
+        `Model "${model}" belongs to provider "${modelInfo.provider}", but embedding request asked for "${provider}".`,
+        {
+          model,
+          provider,
+        },
+      );
+    }
+
+    validateEmbeddingRequest(options, modelInfo, model);
+
+    return {
+      ...options,
       model,
       provider,
     };
@@ -770,23 +870,54 @@ export class LLMClient {
 }
 
 class MockLLMClient extends LLMClient {
+  private readonly embeddingQueue: NonNullable<MockLLMClientOptions['embeddings']>;
   private readonly mockDefaultModel: string;
+  private readonly mockDefaultEmbeddingModel: string;
+  private readonly mockDefaultEmbeddingProvider: EmbeddingProvider;
   private readonly mockDefaultProvider: CanonicalProvider;
   private readonly responseQueue: NonNullable<MockLLMClientOptions['responses']>;
   private readonly streamQueue: NonNullable<MockLLMClientOptions['streams']>;
 
   constructor(options: MockLLMClientOptions = {}) {
     const defaultModel = options.defaultModel ?? 'mock-model';
+    const defaultEmbeddingModel = options.defaultEmbeddingModel ?? 'mock-embedding-model';
+    const defaultEmbeddingProvider = options.defaultEmbeddingProvider ?? 'mock';
     const defaultProvider = options.defaultProvider ?? 'mock';
     super({
       ...options,
+      defaultEmbeddingModel,
+      defaultEmbeddingProvider,
       defaultModel,
       defaultProvider,
     });
+    this.embeddingQueue = [...(options.embeddings ?? [])];
+    this.mockDefaultEmbeddingModel = defaultEmbeddingModel;
+    this.mockDefaultEmbeddingProvider = defaultEmbeddingProvider;
     this.mockDefaultModel = defaultModel;
     this.mockDefaultProvider = defaultProvider;
     this.responseQueue = [...(options.responses ?? [])];
     this.streamQueue = [...(options.streams ?? [])];
+  }
+
+  override async embed(options: EmbeddingRequestOptions): Promise<EmbeddingResponse> {
+    const resolved = this.resolveMockEmbeddingRequest(options);
+    const next = this.embeddingQueue.shift();
+
+    if (!next) {
+      return {
+        embeddings: [
+          {
+            index: 0,
+            values: [0.1, 0.2, 0.3],
+          },
+        ],
+        model: resolved.model,
+        provider: resolved.provider,
+        raw: { mock: true },
+      };
+    }
+
+    return typeof next === 'function' ? await next(resolved) : next;
   }
 
   override async complete(options: LLMRequestOptions): Promise<CanonicalResponse> {
@@ -853,6 +984,21 @@ class MockLLMClient extends LLMClient {
       provider: options.provider ?? this.mockDefaultProvider,
     };
   }
+
+  private resolveMockEmbeddingRequest(
+    options: EmbeddingRequestOptions,
+  ): EmbeddingRequestOptions & {
+    model: string;
+    provider: EmbeddingProvider;
+  } {
+    return {
+      ...options,
+      model: normalizeEmbeddingModelId(
+        options.model ?? this.mockDefaultEmbeddingModel,
+      ),
+      provider: options.provider ?? this.mockDefaultEmbeddingProvider,
+    };
+  }
 }
 
 function buildAnthropicConfig(
@@ -867,6 +1013,10 @@ function buildAnthropicConfig(
     ...(fetchImplementation ? { fetchImplementation } : {}),
     ...(retryOptions ? { retryOptions } : {}),
   };
+}
+
+function normalizeEmbeddingModelId(model: string): string {
+  return model.startsWith('models/') ? model.slice('models/'.length) : model;
 }
 
 function buildOpenAIConfig(
@@ -1025,6 +1175,235 @@ function shouldTryFallback(error: unknown): boolean {
     error instanceof RateLimitError ||
     (error instanceof LLMError && error.retryable)
   );
+}
+
+function validateEmbeddingRequest(
+  options: EmbeddingRequestOptions,
+  modelInfo: ModelInfo,
+  model: string,
+): void {
+  validateEmbeddingDimensions(options.dimensions, modelInfo, model);
+  validateEmbeddingTitle(options, modelInfo, model);
+  validateEmbeddingInput(options.input, modelInfo, model);
+}
+
+function validateEmbeddingDimensions(
+  dimensions: number | undefined,
+  modelInfo: ModelInfo,
+  model: string,
+): void {
+  if (dimensions === undefined) {
+    return;
+  }
+
+  if (!Number.isInteger(dimensions) || dimensions <= 0) {
+    throw new ProviderCapabilityError(
+      `Embedding dimensions must be a positive integer. Received "${dimensions}".`,
+      {
+        model,
+        provider: modelInfo.provider,
+      },
+    );
+  }
+
+  const limits = modelInfo.embeddingDimensions;
+  if (!limits) {
+    return;
+  }
+
+  if (limits.min !== undefined && dimensions < limits.min) {
+    throw new ProviderCapabilityError(
+      `Model "${model}" requires embedding dimensions >= ${limits.min}. Received ${dimensions}.`,
+      {
+        model,
+        provider: modelInfo.provider,
+      },
+    );
+  }
+
+  if (limits.max !== undefined && dimensions > limits.max) {
+    throw new ProviderCapabilityError(
+      `Model "${model}" supports embedding dimensions <= ${limits.max}. Received ${dimensions}.`,
+      {
+        model,
+        provider: modelInfo.provider,
+      },
+    );
+  }
+}
+
+function validateEmbeddingTitle(
+  options: EmbeddingRequestOptions,
+  modelInfo: ModelInfo,
+  model: string,
+): void {
+  const title = options.providerOptions?.google?.title;
+  if (!title) {
+    return;
+  }
+
+  if (options.purpose !== 'retrieval_document') {
+    throw new ProviderCapabilityError(
+      'Embedding titles are only supported for retrieval_document requests.',
+      {
+        model,
+        provider: modelInfo.provider,
+      },
+    );
+  }
+}
+
+function validateEmbeddingInput(
+  input: EmbeddingInput,
+  modelInfo: ModelInfo,
+  model: string,
+): void {
+  const items = normalizeEmbeddingInputItems(input);
+  if (items.length === 0) {
+    throw new ProviderCapabilityError('Embedding requests require at least one input item.', {
+      model,
+      provider: modelInfo.provider,
+    });
+  }
+
+  for (const item of items) {
+    validateEmbeddingInputItem(item, modelInfo, model);
+  }
+}
+
+function validateEmbeddingInputItem(
+  item: EmbeddingInputItem,
+  modelInfo: ModelInfo,
+  model: string,
+): void {
+  if (typeof item === 'string') {
+    if (item.trim().length === 0) {
+      throw new ProviderCapabilityError(
+        'Embedding text inputs cannot be empty.',
+        {
+          model,
+          provider: modelInfo.provider,
+        },
+      );
+    }
+
+    return;
+  }
+
+  if (!Array.isArray(item) || item.length === 0) {
+    throw new ProviderCapabilityError(
+      'Embedding part-array inputs cannot be empty.',
+      {
+        model,
+        provider: modelInfo.provider,
+      },
+    );
+  }
+
+  const supportedModalities = new Set(modelInfo.supportedInputModalities ?? ['text']);
+  let binaryPartCount = 0;
+  const binaryModalities = new Set<string>();
+
+  for (const part of item) {
+    const modality = mapEmbeddingPartToModality(part);
+    if (!supportedModalities.has(modality)) {
+      throw new ProviderCapabilityError(
+        `Model "${model}" does not support ${modality} embedding inputs.`,
+        {
+          model,
+          provider: modelInfo.provider,
+        },
+      );
+    }
+
+    if (part.type === 'text' && part.text.trim().length === 0) {
+      throw new ProviderCapabilityError(
+        'Embedding text parts cannot be empty.',
+        {
+          model,
+          provider: modelInfo.provider,
+        },
+      );
+    }
+
+    if (modality !== 'text') {
+      binaryPartCount += 1;
+      binaryModalities.add(modality);
+    }
+  }
+
+  if (binaryPartCount > 1) {
+    throw new ProviderCapabilityError(
+      'Embedding requests currently support only one binary file part per input item. Split multi-file inputs into separate embed() calls.',
+      {
+        model,
+        provider: modelInfo.provider,
+      },
+    );
+  }
+
+  if (binaryModalities.size > 1) {
+    throw new ProviderCapabilityError(
+      'Embedding requests currently support only one binary modality per input item. Split mixed file inputs into separate embed() calls.',
+      {
+        model,
+        provider: modelInfo.provider,
+      },
+    );
+  }
+}
+
+function normalizeEmbeddingInputItems(input: EmbeddingInput): EmbeddingInputItem[] {
+  if (typeof input === 'string') {
+    return [input];
+  }
+
+  if (!Array.isArray(input)) {
+    return [input];
+  }
+
+  if (input.length === 0) {
+    return [];
+  }
+
+  if (isCanonicalPartArray(input)) {
+    return [input];
+  }
+
+  return input;
+}
+
+function isCanonicalPartArray(input: EmbeddingInput): input is CanonicalPart[] {
+  return (
+    Array.isArray(input) &&
+    input.every(
+      (value) =>
+        typeof value === 'object' &&
+        value !== null &&
+        'type' in value,
+    )
+  );
+}
+
+function mapEmbeddingPartToModality(
+  part: CanonicalPart,
+): 'audio' | 'document' | 'image' | 'text' {
+  switch (part.type) {
+    case 'audio':
+      return 'audio';
+    case 'document':
+      return 'document';
+    case 'image_base64':
+    case 'image_url':
+      return 'image';
+    case 'text':
+      return 'text';
+    case 'tool_call':
+    case 'tool_result':
+      throw new ProviderCapabilityError(
+        'Embedding requests do not support tool call or tool result parts.',
+      );
+  }
 }
 
 function buildZeroUsage(): UsageMetrics {

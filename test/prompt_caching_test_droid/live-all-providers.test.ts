@@ -17,13 +17,14 @@ import { buildLargePrefix, loadEnv, log, summarize } from './helpers.js';
 
 loadEnv();
 
+const liveEnabled = process.env.LIVE_TESTS === '1';
 const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
 const hasAnthropic = Boolean(process.env.ANTHROPIC_API_KEY);
 const hasGemini = Boolean(process.env.GEMINI_API_KEY);
 
-const ifOpenAI = hasOpenAI ? it : it.skip;
-const ifAnthropic = hasAnthropic ? it : it.skip;
-const ifGemini = hasGemini ? it : it.skip;
+const ifOpenAI = liveEnabled && hasOpenAI ? it : it.skip;
+const ifAnthropic = liveEnabled && hasAnthropic ? it : it.skip;
+const ifGemini = liveEnabled && hasGemini ? it : it.skip;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PART 1 — Basic completions (same code paths as main branch)

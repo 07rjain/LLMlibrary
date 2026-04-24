@@ -7,7 +7,7 @@ describe('ModelRegistry', () => {
   it('lists seeded models', () => {
     const registry = new ModelRegistry();
 
-    expect(registry.list().length).toBe(12);
+    expect(registry.list().length).toBe(13);
     expect(registry.isSupported('claude-sonnet-4-6')).toBe(true);
   });
 
@@ -21,6 +21,18 @@ describe('ModelRegistry', () => {
     expect(() =>
       registry.assertCapability('gpt-5.4-nano', 'supportsVision', 'vision'),
     ).toThrow(ProviderCapabilityError);
+    expect(registry.assertModelKind('gemini-embedding-2', 'embedding').kind).toBe(
+      'embedding',
+    );
+  });
+
+  it('defaults legacy models to completion kind and rejects mismatched kinds', () => {
+    const registry = new ModelRegistry();
+
+    expect(registry.get('gpt-4o').kind).toBe('completion');
+    expect(() => registry.assertModelKind('gpt-4o', 'embedding')).toThrow(
+      ProviderCapabilityError,
+    );
   });
 
   it('throws for unknown models', () => {

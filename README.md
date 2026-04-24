@@ -17,6 +17,8 @@ Provider-agnostic TypeScript client for Anthropic, OpenAI, and Google Gemini wit
 - Built-in framework-agnostic Session API handler with `Request`/`Response` endpoints
 - Model routing, fallback chains, weighted A/B routing, and usage logging
 - Live provider model discovery via `client.models.listRemote({ provider })`
+- Google Embedding 2 support through `client.embed()`
+- Optional retrieval helpers via `unified-llm-client/retrieval`
 - Budget breach policies: `throw`, `warn`, or `skip`
 - Usage aggregation export as JSON or CSV
 - Edge-safe core imports with Node-only Postgres features loaded lazily
@@ -252,6 +254,106 @@ console.log(googleModels[0]?.supportedActions);
 
 `listRemote()` is discovery-only. It does not auto-register those models into the local routing registry, so `complete()` and `stream()` still require either a known built-in model or a manual `client.models.register(...)` step.
 
+## Embeddings
+
+Google Embedding 2 is the current embeddings surface for v1.
+
+```ts
+import { LLMClient } from 'unified-llm-client';
+
+const client = LLMClient.fromEnv({
+  defaultEmbeddingModel: 'gemini-embedding-2',
+});
+
+const embedding = await client.embed({
+  input: 'Refunds are available for 30 days after purchase.',
+  purpose: 'retrieval_document',
+  providerOptions: {
+    google: {
+      title: 'Refund Policy',
+    },
+  },
+});
+
+console.log(embedding.embeddings[0]?.values.length);
+console.log(embedding.usage?.inputTokens);
+```
+
+`client.embed()` is separate from `complete()` and `conversation()`. Embedding and generation can use different providers in the same application flow.
+
+## Retrieval Helpers
+
+The package also ships optional app-layer retrieval helpers. They do not hide retrieval inside `LLMClient`; they help you compose retrieval before generation.
+
+```ts
+import { LLMClient } from 'unified-llm-client';
+import {
+  createDenseRetriever,
+  createPostgresKnowledgeStore,
+  formatRetrievedContext,
+} from 'unified-llm-client/retrieval';
+
+const client = LLMClient.fromEnv({
+  defaultEmbeddingModel: 'gemini-embedding-2',
+  defaultModel: 'gpt-4o',
+});
+
+const knowledgeStore = createPostgresKnowledgeStore({
+  connectionString: process.env.DATABASE_URL,
+});
+
+await knowledgeStore.ensureSchema();
+
+const retriever = createDenseRetriever({
+  embed: client,
+  embedding: {
+    model: 'gemini-embedding-2',
+  },
+  store: knowledgeStore,
+});
+
+const results = await retriever.search({
+  filter: {
+    botId: 'bot-1',
+    embeddingProfileId: 'profile-2026-04-24',
+    knowledgeSpaceId: 'kb-support',
+    tenantId: 'tenant-1',
+  },
+  query: 'What is the refund window?',
+  topK: 4,
+});
+
+const context = formatRetrievedContext(results, {
+  maxResults: 4,
+  maxTokens: 900,
+});
+
+const answer = await client.complete({
+  messages: [
+    {
+      content: `Question: What is the refund window?\n\n${context.text}`,
+      role: 'user',
+    },
+  ],
+});
+```
+
+The retrieval module currently includes:
+
+- `KnowledgeStore`
+- `Retriever`
+- `createDenseRetriever()`
+- `createHybridRetriever()`
+- `createPostgresKnowledgeStore()`
+- `PostgresKnowledgeStore`
+- `createPgvectorHnswIndexSql()`
+- `mergeRetrievalCandidates()`
+- `formatRetrievedContext()`
+
+`createDenseRetriever()` and `createHybridRetriever()` now also accept optional rerank hooks, and `PostgresKnowledgeStore` now exposes active-profile and reindex helpers such as `activateEmbeddingProfile()`, `getActiveEmbeddingProfile()`, `listKnowledgeSources()`, and `markKnowledgeSourcesNeedingReindex()`.
+
+When you use `PostgresKnowledgeStore`, search requests must stay fully scoped. Pass `tenantId`, `botId`, `knowledgeSpaceId`, and `embeddingProfileId`, and use the same embedding profile for chunk ingestion and live query embedding. The retrieval helpers intentionally do not take over chunking, ingestion queues, provider-managed reranking services, or automatic retrieval inside `complete()` / `conversation()`.
+
 ## Runtime Support
 
 - Edge/browser-safe core surface: `LLMClient`, `Conversation`, routing, in-memory storage, utilities, and `SessionApi`
@@ -394,6 +496,7 @@ Optional live-provider smoke tests stay opt-in:
 
 ```bash
 LIVE_TESTS=1 pnpm test:live
+LIVE_TESTS=1 pnpm test:embeddings:live
 pnpm test:prompt-caching:live
 ```
 

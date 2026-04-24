@@ -57,7 +57,12 @@ If you want the lower-level generated API surface, open [API Reference](./api/in
 
 If you need the providers' current live catalogs, use `client.models.listRemote({ provider })` and treat the result as discovery data. It does not automatically replace the checked-in model registry.
 
+Embeddings now ship in the library through `client.embed()` with the Google Embedding 2 path. Optional retrieval primitives are available from the package root and from `unified-llm-client/retrieval`, including the new `PostgresKnowledgeStore` helper for app-owned `pgvector` retrieval, rerank hook support in the retrievers, and active-profile / reindex helpers for rollout-safe storage. Keep query embeddings and stored chunk embeddings on the same embedding profile; the library does not mix profiles for you.
+
 For embeddings planning tied to the chatbot widget use case, see [Embeddings Integration Report](./EMBEDDINGS_REPORT.md).
+For the broader retrieval architecture, storage model, and rollout strategy, see [Embeddings And Retrieval Architecture Report](./EMBEDDINGS_RETRIEVAL_ARCHITECTURE_REPORT.md).
+For the concrete multitenant retrieval API, safety, and scaling plan, see [Retrieval API Integration Report](./RETRIEVAL_API_INTEGRATION_REPORT.md).
+Embeddings implementation work is tracked in the repository root as `embeddings_todo.md`.
 For provider-specific implementation planning, see [Prompt Caching Report](./PROMPT_CACHING_REPORT.md).
 Prompt caching work is tracked in the repository root as `prompt_caching_todo.md`.
 For the OpenAI transport migration specifically, see [OpenAI Responses Migration Report](./OPENAI_RESPONSES_MIGRATION_REPORT.md).

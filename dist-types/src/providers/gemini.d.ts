@@ -1,6 +1,6 @@
 import { AuthenticationError, ContextLimitError, ProviderError, RateLimitError } from '../errors.js';
 import { ModelRegistry } from '../models/registry.js';
-import type { CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, CanonicalToolSchema, JsonObject, ProviderOptions, RemoteModelInfo, StreamChunk } from '../types.js';
+import type { CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, CanonicalToolSchema, EmbeddingInputItem, EmbeddingRequestOptions, EmbeddingResponse, JsonObject, ProviderOptions, RemoteModelInfo, StreamChunk } from '../types.js';
 import type { RetryOptions } from '../utils/retry.js';
 type GeminiRole = 'model' | 'user';
 type GeminiPart = GeminiTextPart | GeminiInlineDataPart | GeminiFileDataPart | GeminiFunctionCallPart | GeminiFunctionResponsePart;
@@ -83,6 +83,14 @@ interface GeminiGenerateContentResponse {
     };
     usageMetadata?: GeminiUsageMetadata;
 }
+interface GeminiEmbeddingPayload {
+    values: number[];
+}
+interface GeminiEmbedContentResponse {
+    embedding?: GeminiEmbeddingPayload;
+    embeddings?: GeminiEmbeddingPayload[];
+    usageMetadata?: GeminiUsageMetadata;
+}
 export interface GeminiCachedContent {
     contents?: GeminiContent[];
     createTime?: string;
@@ -119,6 +127,9 @@ export interface GeminiCompletionOptions {
     toolChoice?: CanonicalToolChoice;
     tools?: CanonicalTool[];
 }
+export interface GeminiEmbeddingOptions extends Pick<EmbeddingRequestOptions, 'botId' | 'dimensions' | 'input' | 'providerOptions' | 'purpose' | 'signal' | 'tenantId'> {
+    model: string;
+}
 export interface GeminiCreateCacheOptions {
     displayName?: string;
     expireTime?: string;
@@ -145,6 +156,7 @@ export declare class GeminiAdapter {
     private readonly retryOptions;
     constructor(config: GeminiClientConfig);
     complete(options: GeminiCompletionOptions): Promise<CanonicalResponse>;
+    embed(options: GeminiEmbeddingOptions): Promise<EmbeddingResponse>;
     stream(options: GeminiCompletionOptions): AsyncGenerator<StreamChunk, void, void>;
     createCache(options: GeminiCreateCacheOptions): Promise<GeminiCachedContent>;
     getCache(name: string): Promise<GeminiCachedContent>;
@@ -156,6 +168,7 @@ export declare class GeminiAdapter {
     private buildHeaders;
 }
 export declare function translateGeminiRequest(options: GeminiCompletionOptions): Record<string, unknown>;
+export declare function translateGeminiEmbeddingRequest(options: Pick<GeminiEmbeddingOptions, 'dimensions' | 'model' | 'providerOptions' | 'purpose'>, input: EmbeddingInputItem): Record<string, unknown>;
 export declare function translateGeminiCacheCreateRequest(options: GeminiCreateCacheOptions): Record<string, unknown>;
 export declare function translateGeminiCacheUpdateRequest(options: GeminiUpdateCacheOptions): {
     body: Record<string, string>;
@@ -165,6 +178,7 @@ export declare function translateGeminiTools(tools: CanonicalTool[]): GeminiTool
 export declare function translateGeminiTool(tool: CanonicalTool): GeminiFunctionDeclaration;
 export declare function translateGeminiToolChoice(toolChoice: CanonicalToolChoice): GeminiToolConfig;
 export declare function translateGeminiResponse(payload: GeminiGenerateContentResponse, requestedModel: string, modelRegistry?: ModelRegistry): CanonicalResponse;
+export declare function translateGeminiEmbeddingResponse(payload: GeminiEmbedContentResponse, requestedModel: string, modelRegistry?: ModelRegistry): EmbeddingResponse;
 export declare function mapGeminiError(response: Response, model?: string): Promise<AuthenticationError | ContextLimitError | ProviderError | RateLimitError>;
 export {};
 //# sourceMappingURL=gemini.d.ts.map

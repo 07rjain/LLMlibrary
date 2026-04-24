@@ -294,6 +294,225 @@ describe('LLMClient', () => {
     );
   });
 
+  it('routes embed() calls to Gemini using the default embedding model', async () => {
+    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+
+      expect(body).toMatchObject({
+        outputDimensionality: 768,
+        taskType: 'RETRIEVAL_QUERY',
+      });
+
+      return new Response(
+        JSON.stringify({
+          embedding: {
+            values: [0.11, 0.22, 0.33],
+          },
+          usageMetadata: {
+            promptTokenCount: 12,
+          },
+        }),
+        {
+          headers: { 'content-type': 'application/json' },
+          status: 200,
+        },
+      );
+    });
+
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      fetchImplementation,
+      geminiApiKey: 'gemini-key',
+    });
+
+    const response = await client.embed({
+      dimensions: 768,
+      input: 'Where is my refund?',
+      purpose: 'retrieval_query',
+    });
+
+    const request = fetchImplementation.mock.calls[0] as unknown as [
+      RequestInfo | URL,
+      RequestInit,
+    ];
+
+    expect(String(request[0])).toBe(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent',
+    );
+    expect(response.provider).toBe('google');
+    expect(response.embeddings[0]?.values).toEqual([0.11, 0.22, 0.33]);
+    expect(response.usage).toMatchObject({
+      inputTokens: 12,
+    });
+  });
+
+  it('rejects unsupported embedding providers in v1', async () => {
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.embed({
+        input: 'Hello',
+        provider: 'openai' as never,
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+  });
+
+  it('rejects completion models in embed()', async () => {
+    const client = new LLMClient({
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.embed({
+        input: 'Hello',
+        model: 'gemini-2.5-flash',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+  });
+
+  it('rejects unsupported embedding dimensions', async () => {
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.embed({
+        dimensions: 4096,
+        input: 'Hello',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+  });
+
+  it('rejects embedding titles outside retrieval_document requests', async () => {
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.embed({
+        input: 'Hello',
+        providerOptions: {
+          google: {
+            title: 'Refund Policy',
+          },
+        },
+        purpose: 'retrieval_query',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+  });
+
+  it('rejects multi-file embedding inputs in a single item', async () => {
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.embed({
+        input: [
+          [
+            {
+              data: 'cGRm',
+              mediaType: 'application/pdf',
+              type: 'document',
+            },
+            {
+              mediaType: 'audio/wav',
+              type: 'audio',
+              url: 'https://example.test/audio.wav',
+            },
+          ],
+        ],
+        purpose: 'retrieval_document',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+  });
+
+  it('rejects multiple files of the same modality in one embedding item', async () => {
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.embed({
+        input: [
+          [
+            {
+              data: 'cGRm',
+              mediaType: 'application/pdf',
+              type: 'document',
+            },
+            {
+              data: 'cGRmMg==',
+              mediaType: 'application/pdf',
+              type: 'document',
+            },
+          ],
+        ],
+        purpose: 'retrieval_document',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+  });
+
+  it('rejects empty embedding text and tool parts before dispatch', async () => {
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.embed({
+        input: '   ',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+
+    await expect(
+      client.embed({
+        input: [],
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+
+    await expect(
+      client.embed({
+        input: [
+          {
+            args: {},
+            id: 'call_1',
+            name: 'lookup',
+            type: 'tool_call',
+          },
+        ] as never,
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+  });
+
+  it('provides deterministic queued embeddings through LLMClient.mock()', async () => {
+    const client = LLMClient.mock({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      embeddings: [
+        {
+          embeddings: [{ index: 0, values: [0.5, 0.6] }],
+          model: 'gemini-embedding-2',
+          provider: 'mock',
+          raw: { mock: true },
+        },
+      ],
+    });
+
+    const response = await client.embed({
+      input: 'Hello',
+    });
+
+    expect(response.embeddings[0]?.values).toEqual([0.5, 0.6]);
+    expect(response.provider).toBe('mock');
+  });
+
   it('routes complete() calls to Anthropic by model', async () => {
     const fetchImplementation = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();

@@ -5,13 +5,15 @@ import type { ConversationOptions, ConversationSnapshot } from './conversation.j
 import type { GeminiCachedContent, GeminiCachedContentPage, GeminiCreateCacheOptions, GeminiListCachesOptions, GeminiUpdateCacheOptions } from './providers/gemini.js';
 import type { SessionStore } from './session-store.js';
 import type { ModelRouter } from './router.js';
-import type { CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, BudgetExceededAction, CancelableStream, ProviderOptions, RemoteModelInfo, RemoteModelListOptions, StreamChunk } from './types.js';
+import type { CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, BudgetExceededAction, CancelableStream, EmbeddingProvider, EmbeddingRequestOptions, EmbeddingResponse, ProviderOptions, RemoteModelInfo, RemoteModelListOptions, StreamChunk } from './types.js';
 import type { UsageExportFormat, UsageLogger, UsageQuery, UsageSummary } from './usage.js';
 import type { RetryOptions } from './utils/retry.js';
 /** Constructor options for `LLMClient`. */
 export interface LLMClientOptions {
     anthropicApiKey?: string;
     budgetExceededAction?: BudgetExceededAction;
+    defaultEmbeddingModel?: string;
+    defaultEmbeddingProvider?: EmbeddingProvider;
     defaultModel?: string;
     defaultProvider?: CanonicalProvider;
     fetchImplementation?: typeof fetch;
@@ -47,6 +49,10 @@ export interface LLMRequestOptions {
 }
 /** Configuration for `LLMClient.mock()` test instances. */
 export interface MockLLMClientOptions extends Omit<LLMClientOptions, 'anthropicApiKey' | 'geminiApiKey' | 'openaiApiKey'> {
+    embeddings?: Array<EmbeddingResponse | ((options: EmbeddingRequestOptions & {
+        model: string;
+        provider: EmbeddingProvider;
+    }) => EmbeddingResponse | Promise<EmbeddingResponse>)>;
     responses?: Array<CanonicalResponse | ((options: LLMRequestOptions & {
         maxTokens: number;
         model: string;
@@ -76,6 +82,8 @@ export interface MockLLMClientOptions extends Omit<LLMClientOptions, 'anthropicA
 export declare class LLMClient {
     private readonly anthropicAdapter;
     private readonly budgetExceededAction;
+    private readonly defaultEmbeddingModel;
+    private readonly defaultEmbeddingProvider;
     private readonly defaultModel;
     private readonly defaultProvider;
     private readonly geminiAdapter;
@@ -108,6 +116,8 @@ export declare class LLMClient {
     static mock(options?: MockLLMClientOptions): LLMClient;
     /** Executes a single non-streaming completion request. */
     complete(options: LLMRequestOptions): Promise<CanonicalResponse>;
+    /** Executes a single non-streaming embedding request. */
+    embed(options: EmbeddingRequestOptions): Promise<EmbeddingResponse>;
     /** Executes a streaming completion request and yields canonical chunks. */
     stream(options: LLMRequestOptions): CancelableStream<StreamChunk>;
     /**
@@ -128,8 +138,10 @@ export declare class LLMClient {
     private getOpenAIAdapter;
     private listRemoteModels;
     private dispatchComplete;
+    private dispatchEmbed;
     private dispatchStream;
     private resolveRequest;
+    private resolveEmbeddingRequest;
     private resolveRequestPlan;
     private resolveRoute;
     private buildRouterContext;

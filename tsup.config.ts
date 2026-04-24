@@ -11,6 +11,7 @@ export default defineConfig({
     'providers-anthropic': 'src/providers/anthropic.ts',
     'providers-gemini': 'src/providers/gemini.ts',
     'providers-openai': 'src/providers/openai.ts',
+    retrieval: 'src/retrieval.ts',
     'session-api': 'src/session-api.ts',
     utils: 'src/utils/index.ts',
   },

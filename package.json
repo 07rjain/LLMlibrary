@@ -50,6 +50,11 @@
       "import": "./dist/providers-openai.js",
       "require": "./dist/providers-openai.cjs"
     },
+    "./retrieval": {
+      "types": "./dist/retrieval.d.ts",
+      "import": "./dist/retrieval.js",
+      "require": "./dist/retrieval.cjs"
+    },
     "./session-api": {
       "types": "./dist/session-api.d.ts",
       "import": "./dist/session-api.js",
@@ -88,7 +93,8 @@
     "prepack": "pnpm build",
     "sizecheck": "node ./scripts/check-bundle-size.mjs",
     "test": "vitest run --coverage",
-    "test:live": "LIVE_TESTS=1 vitest run test/live.e2e.test.ts test/prompt_caching_test/prompt-caching.live.test.ts",
+    "test:embeddings:live": "node ./test/embeddings_test/run-live.mjs",
+    "test:live": "LIVE_TESTS=1 vitest run test/live.e2e.test.ts test/embeddings_test/embeddings.live.test.ts test/prompt_caching_test/prompt-caching.live.test.ts",
     "test:prompt-caching:live": "node ./test/prompt_caching_test/run-live.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc -b",

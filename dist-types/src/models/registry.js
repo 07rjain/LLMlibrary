@@ -22,7 +22,7 @@ export class ModelRegistry {
         this.now = options.now ?? (() => new Date());
         this.onWarning = options.onWarning ?? ((message) => console.warn(message));
         for (const [id, model] of Object.entries(seed)) {
-            this.models.set(id, { ...model, id });
+            this.models.set(id, normalizeModelInfo({ ...model, id }));
         }
         if (options.emitStalenessWarning ?? !isProductionRuntime()) {
             this.warnOnStalePrices();
@@ -39,6 +39,17 @@ export class ModelRegistry {
         }
         return model;
     }
+    assertModelKind(modelId, kind) {
+        const model = this.get(modelId);
+        const actualKind = model.kind ?? 'completion';
+        if (actualKind !== kind) {
+            throw new ProviderCapabilityError(`Model "${modelId}" is a ${actualKind} model and cannot be used for ${kind} requests.`, {
+                model: modelId,
+                provider: model.provider,
+            });
+        }
+        return model;
+    }
     get(modelId) {
         const model = this.models.get(modelId);
         if (!model) {
@@ -46,26 +57,27 @@ export class ModelRegistry {
                 model: modelId,
             });
         }
-        return { ...model };
+        return normalizeModelInfo({ ...model });
     }
     isSupported(modelId) {
         return this.models.has(modelId);
     }
     list() {
         return [...this.models.values()]
-            .map((model) => ({ ...model }))
+            .map((model) => normalizeModelInfo({ ...model }))
             .sort((left, right) => left.id.localeCompare(right.id));
     }
     register(model) {
-        this.models.set(model.id, { ...model });
+        this.models.set(model.id, normalizeModelInfo({ ...model }));
         return this.get(model.id);
     }
     updatePrices(overrides) {
         for (const [modelId, override] of Object.entries(overrides)) {
             const current = this.get(modelId);
             this.models.set(modelId, {
-                ...current,
+                ...normalizeModelInfo(current),
                 ...override,
+                kind: override.kind ?? current.kind ?? 'completion',
             });
         }
     }
@@ -82,4 +94,10 @@ export class ModelRegistry {
             }
         }
     }
+}
+function normalizeModelInfo(model) {
+    return {
+        ...model,
+        kind: model.kind ?? 'completion',
+    };
 }
