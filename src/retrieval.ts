@@ -144,6 +144,8 @@ export interface MergeRetrievalCandidatesOptions {
   topK?: number;
 }
 
+export type RetrievalScoreDisplay = 'raw' | 'relative_top_1';
+
 export interface FormatRetrievedContextOptions {
   header?: string;
   includeMetadataKeys?: string[];
@@ -151,6 +153,7 @@ export interface FormatRetrievedContextOptions {
   maxPerSource?: number;
   maxResults?: number;
   maxTokens?: number;
+  scoreDisplay?: RetrievalScoreDisplay;
 }
 
 export interface FormattedRetrievedContext {
@@ -352,6 +355,8 @@ export function formatRetrievedContext(
   const includeScores = options.includeScores ?? false;
   const includeMetadataKeys = options.includeMetadataKeys ?? [];
   const maxTokens = options.maxTokens;
+  const scoreDisplay = options.scoreDisplay ?? 'raw';
+  const scoreDisplayTopScore = limited[0]?.score;
   const headerPrefix = `${header}\n\n`;
   const blocks: string[] = [];
   const usedResults: RetrievalResult[] = [];
@@ -366,6 +371,8 @@ export function formatRetrievedContext(
       ordinal,
       includeScores,
       includeMetadataKeys,
+      scoreDisplay,
+      scoreDisplayTopScore,
     );
     const fullBlock = `${prefix}${result.text.trim()}`;
     const fullBlockTokens = estimateTokens(fullBlock);
@@ -537,11 +544,13 @@ function buildContextBlockPrefix(
   ordinal: number,
   includeScores: boolean,
   includeMetadataKeys: string[],
+  scoreDisplay: RetrievalScoreDisplay,
+  scoreDisplayTopScore: number | undefined,
 ): string {
   const lines = [`[${ordinal}] Source: ${formatSourceLabel(result)}`];
 
   if (includeScores) {
-    lines.push(`Score: ${result.score.toFixed(4)}`);
+    lines.push(formatScoreLine(result, scoreDisplay, scoreDisplayTopScore));
   }
 
   const metadataEntries = includeMetadataKeys.flatMap((key) => {
@@ -554,6 +563,37 @@ function buildContextBlockPrefix(
   }
 
   return `${lines.join('\n')}\n`;
+}
+
+function formatScoreLine(
+  result: RetrievalResult,
+  scoreDisplay: RetrievalScoreDisplay,
+  topScore: number | undefined,
+): string {
+  if (scoreDisplay === 'relative_top_1') {
+    const normalizedScore = normalizeScoreRelativeToTopResult(result.score, topScore);
+    if (normalizedScore !== undefined) {
+      return `Score (relative to top result; display-only, not a probability): ${normalizedScore.toFixed(4)}`;
+    }
+  }
+
+  return `Score (${describeRawScore(result)}; not a probability): ${result.score.toFixed(4)}`;
+}
+
+function describeRawScore(result: RetrievalResult): string {
+  if (result.denseScore !== undefined && result.lexicalScore !== undefined) {
+    return 'raw fused rank score';
+  }
+
+  if (result.denseScore !== undefined) {
+    return 'raw dense similarity';
+  }
+
+  if (result.lexicalScore !== undefined) {
+    return 'raw lexical relevance';
+  }
+
+  return 'raw retrieval score';
 }
 
 function formatMetadataValue(value: JsonValue): string {
@@ -570,6 +610,17 @@ function formatMetadataValue(value: JsonValue): string {
 
 function formatSourceLabel(result: RetrievalResult): string {
   return result.title ?? result.sourceName ?? result.sourceId;
+}
+
+function normalizeScoreRelativeToTopResult(
+  score: number,
+  topScore: number | undefined,
+): number | undefined {
+  if (topScore === undefined || topScore <= 0) {
+    return undefined;
+  }
+
+  return score / topScore;
 }
 
 function getRetrievalResultKey(result: RetrievalResult): string {

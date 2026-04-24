@@ -1,4 +1,5 @@
 export * from './client.js';
+export * from './chunking.js';
 export * from './context-manager.js';
 export * from './conversation.js';
 export * from './errors.js';

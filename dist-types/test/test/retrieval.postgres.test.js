@@ -169,6 +169,80 @@ describe('PostgresKnowledgeStore', () => {
         });
         expect(active).toBeNull();
     });
+    it('normalizes unexpected stored purpose defaults conservatively', async () => {
+        const pool = new MockPgPool((text) => {
+            if (text.startsWith('SELECT')) {
+                return {
+                    rowCount: 1,
+                    rows: [
+                        {
+                            bot_id: 'bot-1',
+                            created_at: '2026-04-24T00:00:00.000Z',
+                            dimensions: 768,
+                            distance_metric: 'cosine',
+                            id: 'profile-3',
+                            knowledge_space_id: 'space-1',
+                            model: 'gemini-embedding-2',
+                            provider: 'google',
+                            purpose_defaults: ['semantic_similarity', 'unexpected-purpose'],
+                            status: 'active',
+                            task_instruction: null,
+                            tenant_id: 'tenant-1',
+                            updated_at: '2026-04-24T00:00:00.000Z',
+                        },
+                    ],
+                };
+            }
+            return { rowCount: 0, rows: [] };
+        });
+        const store = new PostgresKnowledgeStore({ pool });
+        const active = await store.getActiveEmbeddingProfile({
+            botId: 'bot-1',
+            knowledgeSpaceId: 'space-1',
+            tenantId: 'tenant-1',
+        });
+        expect(active).toMatchObject({
+            id: 'profile-3',
+            purposeDefaults: ['semantic_similarity'],
+        });
+    });
+    it('falls back to an empty purpose-default list when stored data is not an array', async () => {
+        const pool = new MockPgPool((text) => {
+            if (text.startsWith('SELECT')) {
+                return {
+                    rowCount: 1,
+                    rows: [
+                        {
+                            bot_id: 'bot-1',
+                            created_at: '2026-04-24T00:00:00.000Z',
+                            dimensions: 768,
+                            distance_metric: 'cosine',
+                            id: 'profile-4',
+                            knowledge_space_id: 'space-1',
+                            model: 'gemini-embedding-2',
+                            provider: 'google',
+                            purpose_defaults: 'unexpected-string-value',
+                            status: 'active',
+                            task_instruction: null,
+                            tenant_id: 'tenant-1',
+                            updated_at: '2026-04-24T00:00:00.000Z',
+                        },
+                    ],
+                };
+            }
+            return { rowCount: 0, rows: [] };
+        });
+        const store = new PostgresKnowledgeStore({ pool });
+        const active = await store.getActiveEmbeddingProfile({
+            botId: 'bot-1',
+            knowledgeSpaceId: 'space-1',
+            tenantId: 'tenant-1',
+        });
+        expect(active).toMatchObject({
+            id: 'profile-4',
+            purposeDefaults: [],
+        });
+    });
     it('treats embedding profile shape as immutable', async () => {
         const pool = new MockPgPool((text) => {
             if (text.startsWith('SELECT')) {
@@ -207,6 +281,198 @@ describe('PostgresKnowledgeStore', () => {
             tenantId: 'tenant-1',
         })).rejects.toBeInstanceOf(LLMError);
     });
+    it('treats embedding-profile purpose defaults as immutable', async () => {
+        const pool = new MockPgPool((text) => {
+            if (text.startsWith('SELECT')) {
+                return {
+                    rowCount: 1,
+                    rows: [
+                        {
+                            bot_id: 'bot-1',
+                            created_at: '2026-04-24T00:00:00.000Z',
+                            dimensions: 768,
+                            distance_metric: 'cosine',
+                            id: 'profile-purpose-immutable',
+                            knowledge_space_id: 'space-1',
+                            model: 'gemini-embedding-2',
+                            provider: 'google',
+                            purpose_defaults: ['retrieval_document'],
+                            status: 'active',
+                            task_instruction: null,
+                            tenant_id: 'tenant-1',
+                            updated_at: '2026-04-24T00:00:00.000Z',
+                        },
+                    ],
+                };
+            }
+            return { rowCount: 0, rows: [] };
+        });
+        const store = new PostgresKnowledgeStore({ pool });
+        await expect(store.upsertEmbeddingProfile({
+            botId: 'bot-1',
+            dimensions: 768,
+            id: 'profile-purpose-immutable',
+            knowledgeSpaceId: 'space-1',
+            model: 'gemini-embedding-2',
+            provider: 'google',
+            purposeDefaults: ['retrieval_document', 'retrieval_query'],
+            tenantId: 'tenant-1',
+        })).rejects.toBeInstanceOf(LLMError);
+    });
+    it('treats embedding-profile task instruction and distance metric as immutable', async () => {
+        const pool = new MockPgPool((text) => {
+            if (text.startsWith('SELECT')) {
+                return {
+                    rowCount: 1,
+                    rows: [
+                        {
+                            bot_id: 'bot-1',
+                            created_at: '2026-04-24T00:00:00.000Z',
+                            dimensions: 768,
+                            distance_metric: 'cosine',
+                            id: 'profile-task-immutable',
+                            knowledge_space_id: 'space-1',
+                            model: 'gemini-embedding-2',
+                            provider: 'google',
+                            purpose_defaults: ['retrieval_document'],
+                            status: 'active',
+                            task_instruction: 'Embed support content.',
+                            tenant_id: 'tenant-1',
+                            updated_at: '2026-04-24T00:00:00.000Z',
+                        },
+                    ],
+                };
+            }
+            return { rowCount: 0, rows: [] };
+        });
+        const store = new PostgresKnowledgeStore({ pool });
+        await expect(store.upsertEmbeddingProfile({
+            botId: 'bot-1',
+            dimensions: 768,
+            distanceMetric: 'l2',
+            id: 'profile-task-immutable',
+            knowledgeSpaceId: 'space-1',
+            model: 'gemini-embedding-2',
+            provider: 'google',
+            purposeDefaults: ['retrieval_document'],
+            taskInstruction: 'Embed different content.',
+            tenantId: 'tenant-1',
+        })).rejects.toBeInstanceOf(LLMError);
+    });
+    it('treats embedding-profile provider and model as immutable', async () => {
+        const pool = new MockPgPool((text) => {
+            if (text.startsWith('SELECT')) {
+                return {
+                    rowCount: 1,
+                    rows: [
+                        {
+                            bot_id: 'bot-1',
+                            created_at: '2026-04-24T00:00:00.000Z',
+                            dimensions: 768,
+                            distance_metric: 'cosine',
+                            id: 'profile-provider-immutable',
+                            knowledge_space_id: 'space-1',
+                            model: 'gemini-embedding-2',
+                            provider: 'google',
+                            purpose_defaults: ['retrieval_document'],
+                            status: 'active',
+                            task_instruction: null,
+                            tenant_id: 'tenant-1',
+                            updated_at: '2026-04-24T00:00:00.000Z',
+                        },
+                    ],
+                };
+            }
+            return { rowCount: 0, rows: [] };
+        });
+        const store = new PostgresKnowledgeStore({ pool });
+        await expect(store.upsertEmbeddingProfile({
+            botId: 'bot-1',
+            dimensions: 768,
+            id: 'profile-provider-immutable',
+            knowledgeSpaceId: 'space-1',
+            model: 'mock-embedding-model',
+            provider: 'mock',
+            purposeDefaults: ['retrieval_document'],
+            tenantId: 'tenant-1',
+        })).rejects.toBeInstanceOf(LLMError);
+    });
+    it('treats embedding-profile tenant and bot ownership as immutable', async () => {
+        const pool = new MockPgPool((text) => {
+            if (text.startsWith('SELECT')) {
+                return {
+                    rowCount: 1,
+                    rows: [
+                        {
+                            bot_id: 'bot-1',
+                            created_at: '2026-04-24T00:00:00.000Z',
+                            dimensions: 768,
+                            distance_metric: 'cosine',
+                            id: 'profile-owner-immutable',
+                            knowledge_space_id: 'space-1',
+                            model: 'gemini-embedding-2',
+                            provider: 'google',
+                            purpose_defaults: ['retrieval_document'],
+                            status: 'active',
+                            task_instruction: null,
+                            tenant_id: 'tenant-1',
+                            updated_at: '2026-04-24T00:00:00.000Z',
+                        },
+                    ],
+                };
+            }
+            return { rowCount: 0, rows: [] };
+        });
+        const store = new PostgresKnowledgeStore({ pool });
+        await expect(store.upsertEmbeddingProfile({
+            botId: 'bot-2',
+            dimensions: 768,
+            id: 'profile-owner-immutable',
+            knowledgeSpaceId: 'space-1',
+            model: 'gemini-embedding-2',
+            provider: 'google',
+            purposeDefaults: ['retrieval_document'],
+            tenantId: 'tenant-2',
+        })).rejects.toBeInstanceOf(LLMError);
+    });
+    it('treats embedding-profile knowledge-space ownership as immutable', async () => {
+        const pool = new MockPgPool((text) => {
+            if (text.startsWith('SELECT')) {
+                return {
+                    rowCount: 1,
+                    rows: [
+                        {
+                            bot_id: 'bot-1',
+                            created_at: '2026-04-24T00:00:00.000Z',
+                            dimensions: 768,
+                            distance_metric: 'cosine',
+                            id: 'profile-space-immutable',
+                            knowledge_space_id: 'space-1',
+                            model: 'gemini-embedding-2',
+                            provider: 'google',
+                            purpose_defaults: ['retrieval_document'],
+                            status: 'active',
+                            task_instruction: null,
+                            tenant_id: 'tenant-1',
+                            updated_at: '2026-04-24T00:00:00.000Z',
+                        },
+                    ],
+                };
+            }
+            return { rowCount: 0, rows: [] };
+        });
+        const store = new PostgresKnowledgeStore({ pool });
+        await expect(store.upsertEmbeddingProfile({
+            botId: 'bot-1',
+            dimensions: 768,
+            id: 'profile-space-immutable',
+            knowledgeSpaceId: 'space-2',
+            model: 'gemini-embedding-2',
+            provider: 'google',
+            purposeDefaults: ['retrieval_document'],
+            tenantId: 'tenant-1',
+        })).rejects.toBeInstanceOf(LLMError);
+    });
     it('requires strict filters for Postgres retrieval', async () => {
         const pool = new MockPgPool();
         const store = new PostgresKnowledgeStore({ pool });
@@ -239,6 +505,42 @@ describe('PostgresKnowledgeStore', () => {
             queryEmbedding: [Number.NaN],
         })).rejects.toBeInstanceOf(LLMError);
     });
+    it('includes lexical minScore clauses when requested', async () => {
+        const pool = new MockPgPool();
+        const store = new PostgresKnowledgeStore({ pool });
+        await store.searchByText({
+            filter: {
+                botId: 'bot-1',
+                embeddingProfileId: 'profile-1',
+                knowledgeSpaceId: 'space-1',
+                tenantId: 'tenant-1',
+            },
+            limit: 5,
+            minScore: 0.25,
+            query: 'refund policy',
+        });
+        const searchQuery = pool.queries.at(-1);
+        expect(searchQuery?.text).toContain('ts_rank_cd');
+        expect(searchQuery?.values).toContain(0.25);
+    });
+    it('throws when no Postgres connection string is available', async () => {
+        const previousDatabaseUrl = process.env.DATABASE_URL;
+        delete process.env.DATABASE_URL;
+        try {
+            const store = new PostgresKnowledgeStore({
+                ensureVectorExtension: false,
+            });
+            await expect(store.ensureSchema()).rejects.toThrow(/DATABASE_URL is required/);
+        }
+        finally {
+            if (previousDatabaseUrl === undefined) {
+                delete process.env.DATABASE_URL;
+            }
+            else {
+                process.env.DATABASE_URL = previousDatabaseUrl;
+            }
+        }
+    });
     it('creates an internal pg pool from connectionString when no pool is supplied', async () => {
         const mockPool = new MockPgPool();
         pgMockState.poolConstructor.mockImplementation(() => mockPool);
@@ -246,10 +548,60 @@ describe('PostgresKnowledgeStore', () => {
             connectionString: 'postgres://example.test/app',
         });
         await store.ensureSchema();
+        await store.searchByEmbedding({
+            filter: {
+                botId: 'bot-1',
+                embeddingProfileId: 'profile-1',
+                knowledgeSpaceId: 'space-1',
+                tenantId: 'tenant-1',
+            },
+            limit: 1,
+            queryEmbedding: [0.1, 0.2],
+        });
         expect(pgMockState.poolConstructor).toHaveBeenCalledWith({
             connectionString: 'postgres://example.test/app',
         });
+        expect(pgMockState.poolConstructor).toHaveBeenCalledTimes(1);
         expect(mockPool.queries.length).toBeGreaterThan(0);
+    });
+    it('reads DATABASE_URL from the environment in fromEnv()', () => {
+        const previousDatabaseUrl = process.env.DATABASE_URL;
+        process.env.DATABASE_URL = 'postgres://example.test/from-env';
+        try {
+            const store = PostgresKnowledgeStore.fromEnv({
+                ensureVectorExtension: false,
+            });
+            expect(store).toBeInstanceOf(PostgresKnowledgeStore);
+        }
+        finally {
+            if (previousDatabaseUrl === undefined) {
+                delete process.env.DATABASE_URL;
+            }
+            else {
+                process.env.DATABASE_URL = previousDatabaseUrl;
+            }
+        }
+    });
+    it('closes the internal pg pool and clears cached state', async () => {
+        const end = vi.fn(async () => undefined);
+        const mockPool = new MockPgPool();
+        Object.assign(mockPool, { end });
+        pgMockState.poolConstructor.mockImplementation(() => mockPool);
+        const store = new PostgresKnowledgeStore({
+            connectionString: 'postgres://example.test/app',
+            ensureVectorExtension: false,
+        });
+        await store.ensureSchema();
+        await store.close();
+        await store.ensureSchema();
+        expect(end).toHaveBeenCalledTimes(1);
+        expect(pgMockState.poolConstructor).toHaveBeenCalledTimes(2);
+    });
+    it('treats close() as a no-op when there is no internal pool to end', async () => {
+        const store = new PostgresKnowledgeStore({
+            pool: new MockPgPool(),
+        });
+        await expect(store.close()).resolves.toBeUndefined();
     });
     it('preserves explicit citations when storing chunks', async () => {
         const pool = new MockPgPool();

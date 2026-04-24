@@ -288,11 +288,13 @@ The package also ships optional app-layer retrieval helpers. They do not hide re
 ```ts
 import { LLMClient } from 'unified-llm-client';
 import {
+  chunkText,
   createDenseRetriever,
   createInMemoryKnowledgeStore,
   createPostgresKnowledgeStore,
   formatRetrievedContext,
 } from 'unified-llm-client/retrieval';
+import { cleanText, stripHtml } from 'unified-llm-client/chunking';
 
 const client = LLMClient.fromEnv({
   defaultEmbeddingModel: 'gemini-embedding-2',
@@ -339,10 +341,23 @@ const answer = await client.complete({
 });
 ```
 
+Chunking helpers are now available as a separate subpath:
+
+```ts
+const cleaned = cleanText(stripHtml('<h1>Refund Policy</h1><p>Refunds last 30 days.</p>'));
+const chunks = chunkText(cleaned, {
+  chunkSize: 900,
+  overlap: 120,
+});
+```
+
 The retrieval module currently includes:
 
 - `KnowledgeStore`
 - `Retriever`
+- `chunkText()`
+- `cleanText()`
+- `stripHtml()`
 - `createDenseRetriever()`
 - `createHybridRetriever()`
 - `createInMemoryKnowledgeStore()`
@@ -364,6 +379,18 @@ const knowledgeStore = createInMemoryKnowledgeStore();
 ```
 
 `InMemoryKnowledgeStore` keeps chunks and vectors in process memory, supports the same retriever-facing search interface, and mirrors the main upsert helpers. It is useful for local development and examples, but it is not durable and should not replace `PostgresKnowledgeStore` for production retrieval.
+
+`formatRetrievedContext()` also supports explicit score display modes so users do not misread raw retrieval scores as probabilities:
+
+```ts
+const context = formatRetrievedContext(results, {
+  includeScores: true,
+  scoreDisplay: 'relative_top_1',
+});
+```
+
+- `scoreDisplay: 'raw'` prints labels such as `raw dense similarity`, `raw lexical relevance`, or `raw fused rank score`
+- `scoreDisplay: 'relative_top_1'` prints a display-only score normalized against the top shown result and clearly marks it as not a probability
 
 ## Runtime Support
 

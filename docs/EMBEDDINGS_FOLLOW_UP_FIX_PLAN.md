@@ -18,15 +18,15 @@ The external review is directionally useful, but the suggestions are not all the
 
 There are three categories:
 
-- `Ship next`: lightweight stores, chunking helpers, and Gemini text batching
-- `Nice to have`: score-display normalization
+- `Ship next`: Gemini text batching
+- `Shipped`: lightweight stores, chunking helpers, and score-display normalization
 - `Do only if product scope changes`: OpenAI embeddings and extraction helpers
 
 The highest-value fixes are still the simplest ones:
 
-1. add `createInMemoryKnowledgeStore()` and `createJsonFileKnowledgeStore()`
-2. add `unified-llm-client/chunking`
-3. optimize Gemini multi-text embedding arrays through `batchEmbedContents`
+1. optimize Gemini multi-text embedding arrays through `batchEmbedContents`
+2. reevaluate OpenAI embeddings only if product scope expands
+3. keep extraction helpers optional
 
 Those three changes reduce the most downstream boilerplate without changing the current public generation flow.
 
@@ -50,6 +50,7 @@ The library already ships:
 
 - `client.embed()` for Google Embedding 2
 - `createInMemoryKnowledgeStore()` for local demos, tests, and single-process apps
+- `unified-llm-client/chunking` for reusable text cleanup and chunk splitting
 - `PostgresKnowledgeStore`
 - `createDenseRetriever()`
 - `createHybridRetriever()`
@@ -62,11 +63,10 @@ The library does not currently ship:
 
 - `InMemoryKnowledgeStore`
 - `JsonFileKnowledgeStore`
-- `unified-llm-client/chunking`
+- score-display normalization in `formatRetrievedContext()`
 - internal Gemini text batching for embedding arrays
 - extraction helpers
 - OpenAI embeddings
-- score-display normalization
 
 That means the current embeddings implementation is complete for the v1 product scope, but it still leaves some high-value convenience gaps.
 
@@ -76,9 +76,9 @@ That means the current embeddings implementation is complete for the v1 product 
 | --- | --- | --- | --- |
 | `InMemoryKnowledgeStore` | Shipped | `P1` | Helps demos, tests, local apps immediately |
 | `JsonFileKnowledgeStore` | Ship | `P1` | Removes common single-tenant boilerplate |
-| `unified-llm-client/chunking` | Ship | `P1` | Every RAG app rewrites this today |
+| `unified-llm-client/chunking` | Shipped | `P1` | Every RAG app rewrites this today |
 | Gemini text batching | Ship | `P1` | Real latency and request-count win |
-| Score normalization | Optional | `P3` | UI/logging improvement only |
+| Score normalization | Shipped | `P3` | Clearer logs/UI without implying probabilities |
 | OpenAI embeddings | Defer | `P2` | Useful later, not needed for current product scope |
 | Extraction helpers | Defer | `P2` | Useful, but belongs outside the core client |
 

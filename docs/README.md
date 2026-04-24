@@ -25,6 +25,7 @@ If you are opening the repository for the first time, read the pages below in or
 - Routing and fallback rules for production traffic
 - Google Embedding 2 support through `client.embed()`
 - Optional retrieval helpers through `unified-llm-client/retrieval`
+- Reusable chunking helpers through `unified-llm-client/chunking`
 
 ## Which Page To Read For Which Task
 
@@ -77,6 +78,7 @@ import {
   createPostgresKnowledgeStore,
   formatRetrievedContext,
 } from 'unified-llm-client/retrieval';
+import { chunkText, cleanText, stripHtml } from 'unified-llm-client/chunking';
 
 const client = LLMClient.fromEnv({
   defaultEmbeddingModel: 'gemini-embedding-2',
@@ -121,6 +123,16 @@ const answer = await client.complete({
 });
 ```
 
+Chunking helpers stay separate from retrieval and generation:
+
+```ts
+const cleaned = cleanText(stripHtml('<h1>Refund Policy</h1><p>Refunds last 30 days.</p>'));
+const chunks = chunkText(cleaned, {
+  chunkSize: 900,
+  overlap: 120,
+});
+```
+
 The embedding request itself stays separate:
 
 ```ts
@@ -151,6 +163,11 @@ const knowledgeStore = createInMemoryKnowledgeStore();
 ```
 
 `InMemoryKnowledgeStore` keeps chunks and vectors in process memory and mirrors the main retrieval helper methods, so you can prototype without a database. It is not durable, so production retrieval should still use `PostgresKnowledgeStore`.
+
+`formatRetrievedContext()` now supports explicit score-display modes so logs and UI text do not imply that retrieval scores are probabilities:
+
+- `scoreDisplay: 'raw'` prints labeled raw values such as dense similarity, lexical relevance, or fused rank score
+- `scoreDisplay: 'relative_top_1'` prints a display-only value normalized to the top shown result and says so directly in the output
 
 Live embedding validation is opt-in:
 

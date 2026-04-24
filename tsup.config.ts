@@ -5,6 +5,7 @@ export default defineConfig({
   dts: true,
   entry: {
     client: 'src/client.ts',
+    chunking: 'src/chunking.ts',
     index: 'src/index.ts',
     errors: 'src/errors.ts',
     models: 'src/models/index.ts',

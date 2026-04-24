@@ -110,6 +110,8 @@ export function formatRetrievedContext(results, options = {}) {
     const includeScores = options.includeScores ?? false;
     const includeMetadataKeys = options.includeMetadataKeys ?? [];
     const maxTokens = options.maxTokens;
+    const scoreDisplay = options.scoreDisplay ?? 'raw';
+    const scoreDisplayTopScore = limited[0]?.score;
     const headerPrefix = `${header}\n\n`;
     const blocks = [];
     const usedResults = [];
@@ -118,7 +120,7 @@ export function formatRetrievedContext(results, options = {}) {
     let truncated = false;
     for (const [index, result] of limited.entries()) {
         const ordinal = index + 1;
-        const prefix = buildContextBlockPrefix(result, ordinal, includeScores, includeMetadataKeys);
+        const prefix = buildContextBlockPrefix(result, ordinal, includeScores, includeMetadataKeys, scoreDisplay, scoreDisplayTopScore);
         const fullBlock = `${prefix}${result.text.trim()}`;
         const fullBlockTokens = estimateTokens(fullBlock);
         if (maxTokens === undefined || estimatedTokens + fullBlockTokens <= maxTokens) {
@@ -235,10 +237,10 @@ function buildCitation(result) {
     }
     return citation;
 }
-function buildContextBlockPrefix(result, ordinal, includeScores, includeMetadataKeys) {
+function buildContextBlockPrefix(result, ordinal, includeScores, includeMetadataKeys, scoreDisplay, scoreDisplayTopScore) {
     const lines = [`[${ordinal}] Source: ${formatSourceLabel(result)}`];
     if (includeScores) {
-        lines.push(`Score: ${result.score.toFixed(4)}`);
+        lines.push(formatScoreLine(result, scoreDisplay, scoreDisplayTopScore));
     }
     const metadataEntries = includeMetadataKeys.flatMap((key) => {
         const value = result.metadata?.[key];
@@ -248,6 +250,27 @@ function buildContextBlockPrefix(result, ordinal, includeScores, includeMetadata
         lines.push(`Metadata: ${metadataEntries.join('; ')}`);
     }
     return `${lines.join('\n')}\n`;
+}
+function formatScoreLine(result, scoreDisplay, topScore) {
+    if (scoreDisplay === 'relative_top_1') {
+        const normalizedScore = normalizeScoreRelativeToTopResult(result.score, topScore);
+        if (normalizedScore !== undefined) {
+            return `Score (relative to top result; display-only, not a probability): ${normalizedScore.toFixed(4)}`;
+        }
+    }
+    return `Score (${describeRawScore(result)}; not a probability): ${result.score.toFixed(4)}`;
+}
+function describeRawScore(result) {
+    if (result.denseScore !== undefined && result.lexicalScore !== undefined) {
+        return 'raw fused rank score';
+    }
+    if (result.denseScore !== undefined) {
+        return 'raw dense similarity';
+    }
+    if (result.lexicalScore !== undefined) {
+        return 'raw lexical relevance';
+    }
+    return 'raw retrieval score';
 }
 function formatMetadataValue(value) {
     if (Array.isArray(value)) {
@@ -260,6 +283,12 @@ function formatMetadataValue(value) {
 }
 function formatSourceLabel(result) {
     return result.title ?? result.sourceName ?? result.sourceId;
+}
+function normalizeScoreRelativeToTopResult(score, topScore) {
+    if (topScore === undefined || topScore <= 0) {
+        return undefined;
+    }
+    return score / topScore;
 }
 function getRetrievalResultKey(result) {
     return `${result.sourceId}:${result.chunkId}`;

@@ -108,6 +108,7 @@ export interface MergeRetrievalCandidatesOptions {
     maxPerSource?: number;
     topK?: number;
 }
+export type RetrievalScoreDisplay = 'raw' | 'relative_top_1';
 export interface FormatRetrievedContextOptions {
     header?: string;
     includeMetadataKeys?: string[];
@@ -115,6 +116,7 @@ export interface FormatRetrievedContextOptions {
     maxPerSource?: number;
     maxResults?: number;
     maxTokens?: number;
+    scoreDisplay?: RetrievalScoreDisplay;
 }
 export interface FormattedRetrievedContext {
     citations: RetrievalCitation[];

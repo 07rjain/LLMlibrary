@@ -25,6 +25,11 @@
       "import": "./dist/client.js",
       "require": "./dist/client.cjs"
     },
+    "./chunking": {
+      "types": "./dist/chunking.d.ts",
+      "import": "./dist/chunking.js",
+      "require": "./dist/chunking.cjs"
+    },
     "./errors": {
       "types": "./dist/errors.d.ts",
       "import": "./dist/errors.js",

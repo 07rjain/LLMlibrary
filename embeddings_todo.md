@@ -30,6 +30,8 @@ Planned direction:
 - [x] The Gemini adapter now exposes the selected Google Embedding 2 transport
 - [x] The package now exposes retrieval primitives and helper interfaces through the main package and `unified-llm-client/retrieval`
 - [x] The retrieval module now also ships `createInMemoryKnowledgeStore()` for demos, tests, and single-process apps
+- [x] Reusable cleanup and chunk splitting helpers now ship through `unified-llm-client/chunking`
+- [x] `formatRetrievedContext()` now supports explicit score-display modes that label raw and normalized scores clearly
 - [x] The v1 plan is Google-only for embeddings, with OpenAI deferred and Anthropic unsupported
 
 ## Design Constraints

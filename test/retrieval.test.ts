@@ -406,6 +406,9 @@ describe('retrieval helpers', () => {
 
     expect(formatted.text).toContain('Knowledge');
     expect(formatted.text).toContain('[1] Source: Refund Policy');
+    expect(formatted.text).toContain(
+      'Score (raw retrieval score; not a probability): 0.9000',
+    );
     expect(formatted.text).toContain('Metadata: section: billing');
     expect(formatted.text).toContain('[truncated]');
     expect(formatted.citations).toEqual([
@@ -613,6 +616,62 @@ describe('retrieval helpers', () => {
       url: 'https://example.test/refunds',
     });
     expect(formatted.text).toContain('Metadata: tags: billing, refund; extra: {"locale":"en"}');
+  });
+
+  it('formats relative score display with explicit explanatory labels', () => {
+    const formatted = formatRetrievedContext(
+      [
+        {
+          chunkId: 'chunk-a',
+          denseScore: 0.92,
+          lexicalScore: 11,
+          score: 0.0328,
+          sourceId: 'source-1',
+          text: 'Top fused result',
+        },
+        {
+          chunkId: 'chunk-b',
+          denseScore: 0.88,
+          lexicalScore: 10,
+          score: 0.0164,
+          sourceId: 'source-2',
+          text: 'Second fused result',
+        },
+      ],
+      {
+        includeScores: true,
+        scoreDisplay: 'relative_top_1',
+      },
+    );
+
+    expect(formatted.text).toContain(
+      'Score (relative to top result; display-only, not a probability): 1.0000',
+    );
+    expect(formatted.text).toContain(
+      'Score (relative to top result; display-only, not a probability): 0.5000',
+    );
+  });
+
+  it('falls back to explicit raw labels when relative display would be misleading', () => {
+    const formatted = formatRetrievedContext(
+      [
+        {
+          chunkId: 'chunk-a',
+          lexicalScore: 0,
+          score: 0,
+          sourceId: 'source-1',
+          text: 'Zero-score lexical result',
+        },
+      ],
+      {
+        includeScores: true,
+        scoreDisplay: 'relative_top_1',
+      },
+    );
+
+    expect(formatted.text).toContain(
+      'Score (raw lexical relevance; not a probability): 0.0000',
+    );
   });
 
   it('stores and retrieves chunks with the in-memory knowledge store', async () => {
