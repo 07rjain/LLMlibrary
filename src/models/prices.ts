@@ -137,6 +137,26 @@ export const defaultModelPrices = {
     supportsTools: true,
     supportsVision: true,
   },
+  'gemini-3.1-pro-preview': {
+    contextWindow: 1048576,
+    inputPrice: 2,
+    lastUpdated: '2026-04-25',
+    outputPrice: 12,
+    provider: 'google',
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsVision: true,
+  },
+  'gemini-3.1-flash-lite-preview': {
+    contextWindow: 1048576,
+    inputPrice: 0.25,
+    lastUpdated: '2026-04-25',
+    outputPrice: 1.5,
+    provider: 'google',
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsVision: true,
+  },
   'gemini-embedding-2': {
     contextWindow: 8192,
     embeddingDimensions: {

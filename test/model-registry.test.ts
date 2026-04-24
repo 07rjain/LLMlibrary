@@ -6,9 +6,18 @@ import { ModelRegistry } from '../src/models/registry.js';
 describe('ModelRegistry', () => {
   it('lists seeded models', () => {
     const registry = new ModelRegistry();
+    const modelIds = registry.list().map((model) => model.id);
 
-    expect(registry.list().length).toBe(13);
+    expect(modelIds).toEqual(
+      expect.arrayContaining([
+        'claude-sonnet-4-6',
+        'gemini-3.1-pro-preview',
+        'gemini-3.1-flash-lite-preview',
+      ]),
+    );
     expect(registry.isSupported('claude-sonnet-4-6')).toBe(true);
+    expect(registry.isSupported('gemini-3.1-pro-preview')).toBe(true);
+    expect(registry.isSupported('gemini-3.1-flash-lite-preview')).toBe(true);
   });
 
   it('returns a model and validates capabilities', () => {
