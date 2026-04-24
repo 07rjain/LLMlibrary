@@ -253,8 +253,40 @@ export interface PgvectorHnswIndexOptions {
     indexName?: string;
     schemaName?: string;
 }
+export type KnowledgeSpaceRecord = PostgresKnowledgeSpaceRecord;
+export type EmbeddingProfileRecord = PostgresEmbeddingProfileRecord;
+export type ActiveEmbeddingProfileFilter = PostgresActiveEmbeddingProfileFilter;
+export type ActivateEmbeddingProfileOptions = PostgresActivateEmbeddingProfileOptions;
+export type KnowledgeSourceRecord = PostgresKnowledgeSourceRecord;
+export type KnowledgeSourceListOptions = PostgresKnowledgeSourceListOptions;
+export type MarkKnowledgeSourcesNeedingReindexOptions = PostgresMarkKnowledgeSourcesNeedingReindexOptions;
+export type KnowledgeChunkRecord = PostgresKnowledgeChunkRecord;
+export interface InMemoryKnowledgeStoreOptions {
+    now?: () => Date;
+}
 export declare function createPostgresKnowledgeStore(options?: PostgresKnowledgeStoreOptions): PostgresKnowledgeStore;
 export declare function createPgvectorHnswIndexSql(options: PgvectorHnswIndexOptions): string;
+export declare function createInMemoryKnowledgeStore(options?: InMemoryKnowledgeStoreOptions): InMemoryKnowledgeStore;
+export declare class InMemoryKnowledgeStore implements KnowledgeStore {
+    private readonly chunks;
+    private readonly now;
+    private readonly profiles;
+    private readonly sources;
+    private readonly spaces;
+    constructor(options?: InMemoryKnowledgeStoreOptions);
+    searchByEmbedding(options: DenseKnowledgeSearchOptions): Promise<RetrievalResult[]>;
+    searchByText(options: LexicalKnowledgeSearchOptions): Promise<RetrievalResult[]>;
+    activateEmbeddingProfile(options: ActivateEmbeddingProfileOptions): Promise<void>;
+    clear(): Promise<void>;
+    deleteKnowledgeSource(sourceId: string): Promise<void>;
+    getActiveEmbeddingProfile(filter: ActiveEmbeddingProfileFilter): Promise<EmbeddingProfileRecord | null>;
+    listKnowledgeSources(options: KnowledgeSourceListOptions): Promise<KnowledgeSourceRecord[]>;
+    markKnowledgeSourcesNeedingReindex(options: MarkKnowledgeSourcesNeedingReindexOptions): Promise<number>;
+    upsertEmbeddingProfile(record: EmbeddingProfileRecord): Promise<EmbeddingProfileRecord>;
+    upsertKnowledgeChunk(record: KnowledgeChunkRecord): Promise<KnowledgeChunkRecord>;
+    upsertKnowledgeSource(record: KnowledgeSourceRecord): Promise<KnowledgeSourceRecord>;
+    upsertKnowledgeSpace(record: KnowledgeSpaceRecord): Promise<KnowledgeSpaceRecord>;
+}
 export declare class PostgresKnowledgeStore implements KnowledgeStore {
     private readonly connectionString;
     private ensureSchemaPromise;

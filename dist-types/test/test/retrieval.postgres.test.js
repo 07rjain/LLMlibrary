@@ -154,6 +154,21 @@ describe('PostgresKnowledgeStore', () => {
             taskInstruction: 'Embed support content.',
         });
     });
+    it('returns null when no active embedding profile is configured', async () => {
+        const pool = new MockPgPool((text) => {
+            if (text.startsWith('SELECT')) {
+                return { rowCount: 0, rows: [] };
+            }
+            return { rowCount: 0, rows: [] };
+        });
+        const store = new PostgresKnowledgeStore({ pool });
+        const active = await store.getActiveEmbeddingProfile({
+            botId: 'bot-1',
+            knowledgeSpaceId: 'space-1',
+            tenantId: 'tenant-1',
+        });
+        expect(active).toBeNull();
+    });
     it('treats embedding profile shape as immutable', async () => {
         const pool = new MockPgPool((text) => {
             if (text.startsWith('SELECT')) {
@@ -461,6 +476,19 @@ describe('PostgresKnowledgeStore', () => {
             status: 'ready',
         });
         expect(updated).toBe(2);
+    });
+    it('can mark knowledge sources for reindex without restricting the previous profile id', async () => {
+        const pool = new MockPgPool(() => ({ rowCount: 3, rows: [] }));
+        const store = new PostgresKnowledgeStore({ pool });
+        const updated = await store.markKnowledgeSourcesNeedingReindex({
+            botId: 'bot-1',
+            knowledgeSpaceId: 'space-1',
+            tenantId: 'tenant-1',
+            toEmbeddingProfileId: 'profile-2',
+        });
+        const updateQuery = pool.queries.find((query) => query.text.startsWith('UPDATE'));
+        expect(updateQuery?.text).not.toContain('embedding_profile_id = $6');
+        expect(updated).toBe(3);
     });
     it('maps explicit stored citations from Postgres rows', async () => {
         const row = {

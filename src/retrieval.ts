@@ -701,6 +701,275 @@ function roundNumber(value: number): number {
   return Number(value.toFixed(8));
 }
 
+function assertInMemoryEmbeddingProfileImmutability(
+  existing: EmbeddingProfileRecord,
+  incoming: EmbeddingProfileRecord,
+): void {
+  const immutableChanges: string[] = [];
+  if (existing.knowledgeSpaceId !== incoming.knowledgeSpaceId) {
+    immutableChanges.push('knowledgeSpaceId');
+  }
+  if (existing.tenantId !== incoming.tenantId) {
+    immutableChanges.push('tenantId');
+  }
+  if (existing.botId !== incoming.botId) {
+    immutableChanges.push('botId');
+  }
+  if (existing.provider !== incoming.provider) {
+    immutableChanges.push('provider');
+  }
+  if (existing.model !== incoming.model) {
+    immutableChanges.push('model');
+  }
+  if (existing.dimensions !== incoming.dimensions) {
+    immutableChanges.push('dimensions');
+  }
+  if ((existing.distanceMetric ?? 'cosine') !== (incoming.distanceMetric ?? 'cosine')) {
+    immutableChanges.push('distanceMetric');
+  }
+  if ((existing.taskInstruction ?? null) !== (incoming.taskInstruction ?? null)) {
+    immutableChanges.push('taskInstruction');
+  }
+
+  const existingPurposes = JSON.stringify(existing.purposeDefaults ?? []);
+  const incomingPurposes = JSON.stringify(incoming.purposeDefaults ?? []);
+  if (existingPurposes !== incomingPurposes) {
+    immutableChanges.push('purposeDefaults');
+  }
+
+  if (immutableChanges.length > 0) {
+    throw new LLMError(
+      `Embedding profiles are immutable. Create a new profile id instead of changing: ${immutableChanges.join(', ')}.`,
+    );
+  }
+}
+
+function buildInMemoryRetrievalResult(
+  chunk: KnowledgeChunkRecord,
+  source: KnowledgeSourceRecord,
+  score: number,
+): RetrievalResult {
+  const result: RetrievalResult = {
+    chunkId: chunk.id,
+    raw: { chunk, source },
+    score,
+    sourceId: chunk.sourceId,
+    sourceName: chunk.sourceName ?? source.name,
+    text: chunk.text,
+    title: chunk.title ?? source.title ?? source.name,
+    ...(chunk.endOffset !== undefined ? { endOffset: chunk.endOffset } : {}),
+    ...(chunk.metadata ? { metadata: chunk.metadata } : {}),
+    ...(chunk.startOffset !== undefined ? { startOffset: chunk.startOffset } : {}),
+    ...(chunk.url ?? source.canonicalUrl
+      ? { url: chunk.url ?? source.canonicalUrl }
+      : {}),
+  };
+
+  result.citation = chunk.citation ?? buildCitation(result);
+  return result;
+}
+
+function calculateCosineSimilarity(left: number[], right: number[]): number {
+  if (left.length === 0 || right.length === 0 || left.length !== right.length) {
+    return Number.NaN;
+  }
+
+  let dotProduct = 0;
+  let leftMagnitude = 0;
+  let rightMagnitude = 0;
+
+  for (let index = 0; index < left.length; index += 1) {
+    const leftValue = left[index]!;
+    const rightValue = right[index]!;
+    if (!Number.isFinite(leftValue) || !Number.isFinite(rightValue)) {
+      return Number.NaN;
+    }
+
+    dotProduct += leftValue * rightValue;
+    leftMagnitude += leftValue * leftValue;
+    rightMagnitude += rightValue * rightValue;
+  }
+
+  if (leftMagnitude === 0 || rightMagnitude === 0) {
+    return Number.NaN;
+  }
+
+  return dotProduct / (Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude));
+}
+
+function calculateLexicalSearchScore(
+  query: string,
+  chunk: KnowledgeChunkRecord,
+  source: KnowledgeSourceRecord,
+): number {
+  const normalizedQuery = normalizeLexicalText(query);
+  if (normalizedQuery.length === 0) {
+    return 0;
+  }
+
+  const haystack = normalizeLexicalText(
+    [chunk.title, source.title, source.name, chunk.text].filter(Boolean).join('\n'),
+  );
+  if (haystack.length === 0) {
+    return 0;
+  }
+
+  const tokens = tokenizeLexicalQuery(normalizedQuery);
+  if (tokens.length === 0) {
+    return 0;
+  }
+
+  let score = 0;
+  for (const token of tokens) {
+    const occurrences = countLexicalOccurrences(haystack, token);
+    if (occurrences > 0) {
+      score += occurrences * 2;
+    }
+  }
+
+  if (haystack.includes(normalizedQuery)) {
+    score += tokens.length * 3;
+  }
+
+  if ((chunk.title ?? source.title ?? '').toLowerCase().includes(normalizedQuery)) {
+    score += 4;
+  }
+
+  return score;
+}
+
+function compareKnowledgeSourcesByUpdatedAtDesc(
+  left: KnowledgeSourceRecord,
+  right: KnowledgeSourceRecord,
+): number {
+  const leftTime = Date.parse(left.updatedAt ?? left.createdAt ?? '') || 0;
+  const rightTime = Date.parse(right.updatedAt ?? right.createdAt ?? '') || 0;
+
+  if (rightTime !== leftTime) {
+    return rightTime - leftTime;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+function compareRetrievalResultsByScore(
+  left: RetrievalResult,
+  right: RetrievalResult,
+): number {
+  if (right.score !== left.score) {
+    return right.score - left.score;
+  }
+
+  return left.chunkId.localeCompare(right.chunkId);
+}
+
+function countLexicalOccurrences(haystack: string, needle: string): number {
+  let count = 0;
+  let position = 0;
+
+  while (position < haystack.length) {
+    const nextIndex = haystack.indexOf(needle, position);
+    if (nextIndex === -1) {
+      break;
+    }
+
+    count += 1;
+    position = nextIndex + needle.length;
+  }
+
+  return count;
+}
+
+function matchesInMemoryRetrievalFilter(
+  chunk: KnowledgeChunkRecord,
+  source: KnowledgeSourceRecord,
+  filter: RetrievalFilter | undefined,
+): boolean {
+  if (!filter) {
+    return true;
+  }
+
+  if (filter.tenantId && chunk.tenantId !== filter.tenantId) {
+    return false;
+  }
+  if (filter.botId && chunk.botId !== filter.botId) {
+    return false;
+  }
+  if (filter.knowledgeSpaceId && chunk.knowledgeSpaceId !== filter.knowledgeSpaceId) {
+    return false;
+  }
+  if (filter.embeddingProfileId && chunk.embeddingProfileId !== filter.embeddingProfileId) {
+    return false;
+  }
+  if (filter.scopeType && (chunk.scopeType ?? 'bot') !== filter.scopeType) {
+    return false;
+  }
+  if (filter.scopeUserId && chunk.scopeUserId !== filter.scopeUserId) {
+    return false;
+  }
+  if (filter.sourceIds && filter.sourceIds.length > 0 && !filter.sourceIds.includes(chunk.sourceId)) {
+    return false;
+  }
+  if (
+    filter.sourceTypes &&
+    filter.sourceTypes.length > 0 &&
+    !filter.sourceTypes.includes(chunk.sourceType ?? source.sourceType)
+  ) {
+    return false;
+  }
+  if (filter.locale) {
+    const localeValue =
+      typeof chunk.metadata?.locale === 'string'
+        ? chunk.metadata.locale
+        : typeof source.metadata?.locale === 'string'
+          ? source.metadata.locale
+          : undefined;
+
+    if (localeValue !== filter.locale) {
+      return false;
+    }
+  }
+  if (filter.metadata && !matchesJsonRecordSubset(chunk.metadata ?? {}, filter.metadata)) {
+    return false;
+  }
+
+  return true;
+}
+
+function matchesJsonRecordSubset(
+  actual: Record<string, JsonValue>,
+  expected: Record<string, JsonValue | JsonValue[]>,
+): boolean {
+  return Object.entries(expected).every(([key, expectedValue]) =>
+    matchesJsonValue(actual[key], expectedValue),
+  );
+}
+
+function matchesJsonValue(
+  actual: JsonValue | undefined,
+  expected: JsonValue | JsonValue[],
+): boolean {
+  if (Array.isArray(expected)) {
+    if (!Array.isArray(actual)) {
+      return false;
+    }
+
+    return expected.every((expectedItem) =>
+      actual.some((actualItem) => JSON.stringify(actualItem) === JSON.stringify(expectedItem)),
+    );
+  }
+
+  return JSON.stringify(actual) === JSON.stringify(expected);
+}
+
+function normalizeLexicalText(value: string): string {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function tokenizeLexicalQuery(query: string): string[] {
+  return Array.from(new Set(query.split(' ').filter((token) => token.length > 0)));
+}
+
 function truncateTextToTokenBudget(text: string, tokenBudget: number): string {
   if (tokenBudget <= 0 || text.length === 0) {
     return '';
@@ -964,6 +1233,20 @@ export interface PgvectorHnswIndexOptions {
   schemaName?: string;
 }
 
+export type KnowledgeSpaceRecord = PostgresKnowledgeSpaceRecord;
+export type EmbeddingProfileRecord = PostgresEmbeddingProfileRecord;
+export type ActiveEmbeddingProfileFilter = PostgresActiveEmbeddingProfileFilter;
+export type ActivateEmbeddingProfileOptions = PostgresActivateEmbeddingProfileOptions;
+export type KnowledgeSourceRecord = PostgresKnowledgeSourceRecord;
+export type KnowledgeSourceListOptions = PostgresKnowledgeSourceListOptions;
+export type MarkKnowledgeSourcesNeedingReindexOptions =
+  PostgresMarkKnowledgeSourcesNeedingReindexOptions;
+export type KnowledgeChunkRecord = PostgresKnowledgeChunkRecord;
+
+export interface InMemoryKnowledgeStoreOptions {
+  now?: () => Date;
+}
+
 interface PostgresKnowledgeSearchRow {
   chunk_id: string;
   chunk_text: string;
@@ -1046,6 +1329,284 @@ export function createPgvectorHnswIndexSql(
 ON ${quoteIdentifier(schemaName)}.${quoteIdentifier(chunksTableName)}
 USING hnsw ((embedding::vector(${options.dimensions})) ${opClass})
 WHERE embedding_profile_id = ${quoteLiteral(options.embeddingProfileId)} AND embedding IS NOT NULL;`;
+}
+
+export function createInMemoryKnowledgeStore(
+  options: InMemoryKnowledgeStoreOptions = {},
+): InMemoryKnowledgeStore {
+  return new InMemoryKnowledgeStore(options);
+}
+
+export class InMemoryKnowledgeStore implements KnowledgeStore {
+  private readonly chunks = new Map<string, KnowledgeChunkRecord>();
+  private readonly now: () => Date;
+  private readonly profiles = new Map<string, EmbeddingProfileRecord>();
+  private readonly sources = new Map<string, KnowledgeSourceRecord>();
+  private readonly spaces = new Map<string, KnowledgeSpaceRecord>();
+
+  constructor(options: InMemoryKnowledgeStoreOptions = {}) {
+    this.now = options.now ?? (() => new Date());
+  }
+
+  async searchByEmbedding(options: DenseKnowledgeSearchOptions): Promise<RetrievalResult[]> {
+    assertQueryEmbedding(options.queryEmbedding);
+
+    const matches = Array.from(this.chunks.values())
+      .flatMap((chunk) => {
+        const source = this.sources.get(chunk.sourceId);
+        if (!source || source.status !== 'ready') {
+          return [];
+        }
+
+        if (!matchesInMemoryRetrievalFilter(chunk, source, options.filter)) {
+          return [];
+        }
+
+        const score = calculateCosineSimilarity(options.queryEmbedding, chunk.embedding);
+        if (!Number.isFinite(score)) {
+          return [];
+        }
+
+        const roundedScore = roundNumber(score);
+        if (options.minScore !== undefined && roundedScore < options.minScore) {
+          return [];
+        }
+
+        return [buildInMemoryRetrievalResult(chunk, source, roundedScore)];
+      })
+      .sort(compareRetrievalResultsByScore)
+      .slice(0, Math.max(options.limit, 1));
+
+    return matches;
+  }
+
+  async searchByText(options: LexicalKnowledgeSearchOptions): Promise<RetrievalResult[]> {
+    const query = options.query.trim();
+    if (query.length === 0) {
+      return [];
+    }
+
+    const matches = Array.from(this.chunks.values())
+      .flatMap((chunk) => {
+        const source = this.sources.get(chunk.sourceId);
+        if (!source || source.status !== 'ready') {
+          return [];
+        }
+
+        if (!matchesInMemoryRetrievalFilter(chunk, source, options.filter)) {
+          return [];
+        }
+
+        const score = calculateLexicalSearchScore(query, chunk, source);
+        if (!Number.isFinite(score) || score <= 0) {
+          return [];
+        }
+
+        const roundedScore = roundNumber(score);
+        if (options.minScore !== undefined && roundedScore < options.minScore) {
+          return [];
+        }
+
+        return [buildInMemoryRetrievalResult(chunk, source, roundedScore)];
+      })
+      .sort(compareRetrievalResultsByScore)
+      .slice(0, Math.max(options.limit, 1));
+
+    return matches;
+  }
+
+  async activateEmbeddingProfile(
+    options: ActivateEmbeddingProfileOptions,
+  ): Promise<void> {
+    const existing = this.spaces.get(options.knowledgeSpaceId);
+    if (!existing || existing.tenantId !== options.tenantId || existing.botId !== options.botId) {
+      return;
+    }
+
+    const timestamp = this.now().toISOString();
+    this.spaces.set(options.knowledgeSpaceId, {
+      ...existing,
+      activeEmbeddingProfileId: options.embeddingProfileId,
+      updatedAt: timestamp,
+    });
+  }
+
+  async clear(): Promise<void> {
+    this.chunks.clear();
+    this.profiles.clear();
+    this.sources.clear();
+    this.spaces.clear();
+  }
+
+  async deleteKnowledgeSource(sourceId: string): Promise<void> {
+    this.sources.delete(sourceId);
+    for (const [chunkId, chunk] of this.chunks.entries()) {
+      if (chunk.sourceId === sourceId) {
+        this.chunks.delete(chunkId);
+      }
+    }
+  }
+
+  async getActiveEmbeddingProfile(
+    filter: ActiveEmbeddingProfileFilter,
+  ): Promise<EmbeddingProfileRecord | null> {
+    const space = this.spaces.get(filter.knowledgeSpaceId);
+    if (
+      !space ||
+      space.tenantId !== filter.tenantId ||
+      space.botId !== filter.botId ||
+      !space.activeEmbeddingProfileId
+    ) {
+      return null;
+    }
+
+    const profile = this.profiles.get(space.activeEmbeddingProfileId);
+    if (
+      !profile ||
+      profile.tenantId !== filter.tenantId ||
+      profile.botId !== filter.botId ||
+      profile.knowledgeSpaceId !== filter.knowledgeSpaceId
+    ) {
+      return null;
+    }
+
+    return profile;
+  }
+
+  async listKnowledgeSources(
+    options: KnowledgeSourceListOptions,
+  ): Promise<KnowledgeSourceRecord[]> {
+    return Array.from(this.sources.values())
+      .filter((source) => source.tenantId === options.tenantId)
+      .filter((source) => source.botId === options.botId)
+      .filter((source) => source.knowledgeSpaceId === options.knowledgeSpaceId)
+      .filter(
+        (source) =>
+          options.embeddingProfileId === undefined ||
+          source.embeddingProfileId === options.embeddingProfileId,
+      )
+      .filter(
+        (source) =>
+          !options.statuses ||
+          options.statuses.length === 0 ||
+          options.statuses.includes(source.status ?? 'queued'),
+      )
+      .sort(compareKnowledgeSourcesByUpdatedAtDesc)
+      .slice(0, Math.max(options.limit ?? 100, 1));
+  }
+
+  async markKnowledgeSourcesNeedingReindex(
+    options: MarkKnowledgeSourcesNeedingReindexOptions,
+  ): Promise<number> {
+    const timestamp = this.now().toISOString();
+    let updatedCount = 0;
+
+    for (const [sourceId, source] of this.sources.entries()) {
+      if (
+        source.tenantId !== options.tenantId ||
+        source.botId !== options.botId ||
+        source.knowledgeSpaceId !== options.knowledgeSpaceId
+      ) {
+        continue;
+      }
+
+      if (
+        options.fromEmbeddingProfileId !== undefined &&
+        source.embeddingProfileId !== options.fromEmbeddingProfileId
+      ) {
+        continue;
+      }
+
+      if (
+        source.embeddingProfileId !== undefined &&
+        source.embeddingProfileId === options.toEmbeddingProfileId
+      ) {
+        continue;
+      }
+
+      this.sources.set(sourceId, {
+        ...source,
+        status: 'needs_reindex',
+        updatedAt: timestamp,
+      });
+      updatedCount += 1;
+    }
+
+    return updatedCount;
+  }
+
+  async upsertEmbeddingProfile(
+    record: EmbeddingProfileRecord,
+  ): Promise<EmbeddingProfileRecord> {
+    const existing = this.profiles.get(record.id);
+    if (existing) {
+      assertInMemoryEmbeddingProfileImmutability(existing, record);
+    }
+
+    const timestamp = this.now().toISOString();
+    const normalized: EmbeddingProfileRecord = {
+      ...record,
+      createdAt: existing?.createdAt ?? record.createdAt ?? timestamp,
+      updatedAt: record.updatedAt ?? timestamp,
+      ...(record.distanceMetric === undefined ? { distanceMetric: 'cosine' } : {}),
+      ...(record.purposeDefaults === undefined ? { purposeDefaults: [] } : {}),
+      ...(record.status === undefined ? { status: 'active' } : {}),
+    };
+
+    this.profiles.set(normalized.id, normalized);
+    return normalized;
+  }
+
+  async upsertKnowledgeChunk(
+    record: KnowledgeChunkRecord,
+  ): Promise<KnowledgeChunkRecord> {
+    assertQueryEmbedding(record.embedding);
+
+    const existing = this.chunks.get(record.id);
+    const timestamp = this.now().toISOString();
+    const normalized: KnowledgeChunkRecord = {
+      ...record,
+      createdAt: existing?.createdAt ?? record.createdAt ?? timestamp,
+      updatedAt: record.updatedAt ?? timestamp,
+      ...(record.scopeType === undefined ? { scopeType: 'bot' } : {}),
+    };
+
+    this.chunks.set(normalized.id, normalized);
+    return normalized;
+  }
+
+  async upsertKnowledgeSource(
+    record: KnowledgeSourceRecord,
+  ): Promise<KnowledgeSourceRecord> {
+    const existing = this.sources.get(record.id);
+    const timestamp = this.now().toISOString();
+    const normalized: KnowledgeSourceRecord = {
+      ...record,
+      createdAt: existing?.createdAt ?? record.createdAt ?? timestamp,
+      updatedAt: record.updatedAt ?? timestamp,
+      ...(record.progressPercent === undefined ? { progressPercent: 0 } : {}),
+      ...(record.status === undefined ? { status: 'queued' } : {}),
+    };
+
+    this.sources.set(normalized.id, normalized);
+    return normalized;
+  }
+
+  async upsertKnowledgeSpace(
+    record: KnowledgeSpaceRecord,
+  ): Promise<KnowledgeSpaceRecord> {
+    const existing = this.spaces.get(record.id);
+    const timestamp = this.now().toISOString();
+    const normalized: KnowledgeSpaceRecord = {
+      ...record,
+      createdAt: existing?.createdAt ?? record.createdAt ?? timestamp,
+      updatedAt: record.updatedAt ?? timestamp,
+      ...(record.visibilityScope === undefined ? { visibilityScope: 'bot' } : {}),
+    };
+
+    this.spaces.set(normalized.id, normalized);
+    return normalized;
+  }
 }
 
 export class PostgresKnowledgeStore implements KnowledgeStore {

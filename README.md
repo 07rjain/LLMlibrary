@@ -289,6 +289,7 @@ The package also ships optional app-layer retrieval helpers. They do not hide re
 import { LLMClient } from 'unified-llm-client';
 import {
   createDenseRetriever,
+  createInMemoryKnowledgeStore,
   createPostgresKnowledgeStore,
   formatRetrievedContext,
 } from 'unified-llm-client/retrieval';
@@ -344,7 +345,9 @@ The retrieval module currently includes:
 - `Retriever`
 - `createDenseRetriever()`
 - `createHybridRetriever()`
+- `createInMemoryKnowledgeStore()`
 - `createPostgresKnowledgeStore()`
+- `InMemoryKnowledgeStore`
 - `PostgresKnowledgeStore`
 - `createPgvectorHnswIndexSql()`
 - `mergeRetrievalCandidates()`
@@ -353,6 +356,14 @@ The retrieval module currently includes:
 `createDenseRetriever()` and `createHybridRetriever()` now also accept optional rerank hooks, and `PostgresKnowledgeStore` now exposes active-profile and reindex helpers such as `activateEmbeddingProfile()`, `getActiveEmbeddingProfile()`, `listKnowledgeSources()`, and `markKnowledgeSourcesNeedingReindex()`.
 
 When you use `PostgresKnowledgeStore`, search requests must stay fully scoped. Pass `tenantId`, `botId`, `knowledgeSpaceId`, and `embeddingProfileId`, and use the same embedding profile for chunk ingestion and live query embedding. The retrieval helpers intentionally do not take over chunking, ingestion queues, provider-managed reranking services, or automatic retrieval inside `complete()` / `conversation()`.
+
+For local demos, tests, or single-process apps that do not need Postgres yet, you can swap in the in-memory store:
+
+```ts
+const knowledgeStore = createInMemoryKnowledgeStore();
+```
+
+`InMemoryKnowledgeStore` keeps chunks and vectors in process memory, supports the same retriever-facing search interface, and mirrors the main upsert helpers. It is useful for local development and examples, but it is not durable and should not replace `PostgresKnowledgeStore` for production retrieval.
 
 ## Runtime Support
 

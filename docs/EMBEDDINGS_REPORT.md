@@ -7,6 +7,7 @@ This report describes how embeddings should be added to `unified-llm-client` for
 
 For the broader system design around retrieval flows, storage, hybrid search, reranking, and rollout sequencing, see [EMBEDDINGS_RETRIEVAL_ARCHITECTURE_REPORT.md](./EMBEDDINGS_RETRIEVAL_ARCHITECTURE_REPORT.md).  
 For the concrete multitenant retrieval, safety, and scaling plan, see [RETRIEVAL_API_INTEGRATION_REPORT.md](./RETRIEVAL_API_INTEGRATION_REPORT.md).
+For a cross-check of post-v1 follow-up suggestions such as lightweight stores, chunking helpers, Gemini text batching, extraction helpers, and OpenAI embeddings, see [EMBEDDINGS_REVIEW_CROSSCHECK.md](./EMBEDDINGS_REVIEW_CROSSCHECK.md).
 
 ## Executive Summary
 
@@ -111,6 +112,7 @@ Current implementation status:
 - optional retrieval helpers now ship through the package root and `unified-llm-client/retrieval`
 - `PostgresKnowledgeStore` now ships for the recommended `Postgres + pgvector` architecture
 - live validation now exists for Gemini text embeddings, Postgres-backed retrieval smoke, and an opt-in tiny-PDF embedding smoke
+- current public Gemini embeddings docs explicitly cover `gemini-embedding-2` multimodal inputs, including PDF, while the safest batching optimization target remains text-only multi-input requests
 
 ### Critical design rule
 

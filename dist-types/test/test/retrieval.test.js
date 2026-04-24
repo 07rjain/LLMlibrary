@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LLMError } from '../src/errors.js';
-import { createDenseRetriever, createHybridRetriever, formatRetrievedContext, mergeRetrievalCandidates, } from '../src/retrieval.js';
+import { createDenseRetriever, createHybridRetriever, createInMemoryKnowledgeStore, formatRetrievedContext, mergeRetrievalCandidates, } from '../src/retrieval.js';
 describe('retrieval helpers', () => {
     it('creates a dense retriever around embed() and the knowledge store', async () => {
         const embed = vi.fn(async () => ({
@@ -537,5 +537,230 @@ describe('retrieval helpers', () => {
             url: 'https://example.test/refunds',
         });
         expect(formatted.text).toContain('Metadata: tags: billing, refund; extra: {"locale":"en"}');
+    });
+    it('stores and retrieves chunks with the in-memory knowledge store', async () => {
+        const store = createInMemoryKnowledgeStore();
+        await store.upsertKnowledgeSpace({
+            botId: 'bot-1',
+            id: 'space-1',
+            name: 'Support KB',
+            tenantId: 'tenant-1',
+        });
+        await store.upsertEmbeddingProfile({
+            botId: 'bot-1',
+            dimensions: 2,
+            id: 'profile-1',
+            knowledgeSpaceId: 'space-1',
+            model: 'gemini-embedding-2',
+            provider: 'google',
+            tenantId: 'tenant-1',
+        });
+        await store.upsertKnowledgeSource({
+            botId: 'bot-1',
+            embeddingProfileId: 'profile-1',
+            id: 'source-1',
+            knowledgeSpaceId: 'space-1',
+            name: 'Refund Policy PDF',
+            sourceType: 'pdf',
+            status: 'ready',
+            tenantId: 'tenant-1',
+            title: 'Refund Policy',
+        });
+        await store.upsertKnowledgeChunk({
+            botId: 'bot-1',
+            chunkIndex: 0,
+            embedding: [0.98, 0.02],
+            embeddingProfileId: 'profile-1',
+            id: 'chunk-1',
+            knowledgeSpaceId: 'space-1',
+            metadata: { locale: 'en', section: 'refunds' },
+            sourceId: 'source-1',
+            tenantId: 'tenant-1',
+            text: 'Refunds are available for 30 days after purchase.',
+        });
+        await store.upsertKnowledgeChunk({
+            botId: 'bot-1',
+            chunkIndex: 1,
+            embedding: [0.15, 0.85],
+            embeddingProfileId: 'profile-1',
+            id: 'chunk-2',
+            knowledgeSpaceId: 'space-1',
+            sourceId: 'source-1',
+            tenantId: 'tenant-1',
+            text: 'Fees are usually non-refundable.',
+        });
+        const results = await store.searchByEmbedding({
+            filter: {
+                botId: 'bot-1',
+                embeddingProfileId: 'profile-1',
+                knowledgeSpaceId: 'space-1',
+                tenantId: 'tenant-1',
+            },
+            limit: 2,
+            queryEmbedding: [1, 0],
+        });
+        expect(results).toHaveLength(2);
+        expect(results[0]).toMatchObject({
+            chunkId: 'chunk-1',
+            citation: {
+                chunkId: 'chunk-1',
+                sourceId: 'source-1',
+                title: 'Refund Policy',
+            },
+            sourceId: 'source-1',
+            sourceName: 'Refund Policy PDF',
+            title: 'Refund Policy',
+        });
+        expect(results[0].score).toBeGreaterThan(results[1].score);
+        const listedSources = await store.listKnowledgeSources({
+            botId: 'bot-1',
+            knowledgeSpaceId: 'space-1',
+            tenantId: 'tenant-1',
+        });
+        expect(listedSources).toHaveLength(1);
+        expect(listedSources[0]).toMatchObject({
+            id: 'source-1',
+            status: 'ready',
+        });
+        await store.deleteKnowledgeSource('source-1');
+        await expect(store.searchByEmbedding({
+            filter: {
+                botId: 'bot-1',
+                embeddingProfileId: 'profile-1',
+                knowledgeSpaceId: 'space-1',
+                tenantId: 'tenant-1',
+            },
+            limit: 2,
+            queryEmbedding: [1, 0],
+        })).resolves.toEqual([]);
+    });
+    it('supports lexical filtering and reindex state changes in the in-memory store', async () => {
+        const store = createInMemoryKnowledgeStore();
+        await store.upsertKnowledgeSource({
+            botId: 'bot-1',
+            embeddingProfileId: 'profile-1',
+            id: 'source-1',
+            knowledgeSpaceId: 'space-1',
+            metadata: { locale: 'en' },
+            name: 'Refund FAQ',
+            sourceType: 'faq',
+            status: 'ready',
+            tenantId: 'tenant-1',
+        });
+        await store.upsertKnowledgeSource({
+            botId: 'bot-1',
+            embeddingProfileId: 'profile-legacy',
+            id: 'source-2',
+            knowledgeSpaceId: 'space-1',
+            name: 'Legacy FAQ',
+            sourceType: 'faq',
+            status: 'ready',
+            tenantId: 'tenant-1',
+        });
+        await store.upsertKnowledgeChunk({
+            botId: 'bot-1',
+            chunkIndex: 0,
+            embedding: [1, 0],
+            embeddingProfileId: 'profile-1',
+            id: 'chunk-1',
+            knowledgeSpaceId: 'space-1',
+            metadata: { locale: 'en', section: 'refunds' },
+            sourceId: 'source-1',
+            sourceType: 'faq',
+            tenantId: 'tenant-1',
+            text: 'The refund window lasts 30 days.',
+        });
+        await store.upsertKnowledgeChunk({
+            botId: 'bot-1',
+            chunkIndex: 0,
+            embedding: [0, 1],
+            embeddingProfileId: 'profile-legacy',
+            id: 'chunk-2',
+            knowledgeSpaceId: 'space-1',
+            metadata: { locale: 'fr', section: 'legacy' },
+            sourceId: 'source-2',
+            sourceType: 'faq',
+            tenantId: 'tenant-1',
+            text: 'Ancient refund rules from the legacy migration.',
+        });
+        const results = await store.searchByText({
+            filter: {
+                botId: 'bot-1',
+                embeddingProfileId: 'profile-1',
+                knowledgeSpaceId: 'space-1',
+                locale: 'en',
+                metadata: { section: 'refunds' },
+                tenantId: 'tenant-1',
+            },
+            limit: 3,
+            query: 'refund window',
+        });
+        expect(results).toHaveLength(1);
+        expect(results[0]).toMatchObject({
+            chunkId: 'chunk-1',
+            sourceId: 'source-1',
+        });
+        const markedCount = await store.markKnowledgeSourcesNeedingReindex({
+            botId: 'bot-1',
+            fromEmbeddingProfileId: 'profile-legacy',
+            knowledgeSpaceId: 'space-1',
+            tenantId: 'tenant-1',
+            toEmbeddingProfileId: 'profile-2',
+        });
+        expect(markedCount).toBe(1);
+        const reindexSources = await store.listKnowledgeSources({
+            botId: 'bot-1',
+            knowledgeSpaceId: 'space-1',
+            statuses: ['needs_reindex'],
+            tenantId: 'tenant-1',
+        });
+        expect(reindexSources).toHaveLength(1);
+        expect(reindexSources[0]).toMatchObject({
+            id: 'source-2',
+            status: 'needs_reindex',
+        });
+    });
+    it('tracks active in-memory embedding profiles and preserves profile immutability', async () => {
+        const store = createInMemoryKnowledgeStore();
+        await store.upsertKnowledgeSpace({
+            botId: 'bot-1',
+            id: 'space-1',
+            name: 'Support KB',
+            tenantId: 'tenant-1',
+        });
+        await store.upsertEmbeddingProfile({
+            botId: 'bot-1',
+            dimensions: 768,
+            id: 'profile-1',
+            knowledgeSpaceId: 'space-1',
+            model: 'gemini-embedding-2',
+            provider: 'google',
+            purposeDefaults: ['retrieval_document', 'retrieval_query'],
+            tenantId: 'tenant-1',
+        });
+        await store.activateEmbeddingProfile({
+            botId: 'bot-1',
+            embeddingProfileId: 'profile-1',
+            knowledgeSpaceId: 'space-1',
+            tenantId: 'tenant-1',
+        });
+        await expect(store.getActiveEmbeddingProfile({
+            botId: 'bot-1',
+            knowledgeSpaceId: 'space-1',
+            tenantId: 'tenant-1',
+        })).resolves.toMatchObject({
+            id: 'profile-1',
+            model: 'gemini-embedding-2',
+        });
+        await expect(store.upsertEmbeddingProfile({
+            botId: 'bot-1',
+            dimensions: 1536,
+            id: 'profile-1',
+            knowledgeSpaceId: 'space-1',
+            model: 'gemini-embedding-2',
+            provider: 'google',
+            purposeDefaults: ['retrieval_document', 'retrieval_query'],
+            tenantId: 'tenant-1',
+        })).rejects.toBeInstanceOf(LLMError);
     });
 });

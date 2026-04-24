@@ -29,6 +29,7 @@ Planned direction:
 - [x] The model registry now classifies embedding models separately from completion models
 - [x] The Gemini adapter now exposes the selected Google Embedding 2 transport
 - [x] The package now exposes retrieval primitives and helper interfaces through the main package and `unified-llm-client/retrieval`
+- [x] The retrieval module now also ships `createInMemoryKnowledgeStore()` for demos, tests, and single-process apps
 - [x] The v1 plan is Google-only for embeddings, with OpenAI deferred and Anthropic unsupported
 
 ## Design Constraints

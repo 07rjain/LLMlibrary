@@ -45,6 +45,8 @@ If you are opening the repository for the first time, read the pages below in or
 - Session API contract: [SESSION_API_REFERENCE.md](./SESSION_API_REFERENCE.md)
 - Provider comparison: [PROVIDER_COMPARISON.md](./PROVIDER_COMPARISON.md)
 - Embeddings integration report: [EMBEDDINGS_REPORT.md](./EMBEDDINGS_REPORT.md)
+- Embeddings review cross-check: [EMBEDDINGS_REVIEW_CROSSCHECK.md](./EMBEDDINGS_REVIEW_CROSSCHECK.md)
+- Embeddings follow-up fix plan: [EMBEDDINGS_FOLLOW_UP_FIX_PLAN.md](./EMBEDDINGS_FOLLOW_UP_FIX_PLAN.md)
 - Prompt caching implementation report: [PROMPT_CACHING_REPORT.md](./PROMPT_CACHING_REPORT.md)
 - OpenAI Responses migration report: [OPENAI_RESPONSES_MIGRATION_REPORT.md](./OPENAI_RESPONSES_MIGRATION_REPORT.md)
 - Migration notes: [MIGRATION_GUIDE.md](./MIGRATION_GUIDE.md)
@@ -60,6 +62,8 @@ If you are opening the repository for the first time, read the pages below in or
 - `client.models.listRemote({ provider })` fetches the provider's live model list without changing the local routing registry.
 - `client.embed()` is now available for Google Embedding 2.
 - Retrieval remains explicit app orchestration; the helper module gives you `createDenseRetriever()`, `createHybridRetriever()`, and `formatRetrievedContext()` without changing `complete()` or `conversation()`.
+- The external follow-up review has been cross-checked in [EMBEDDINGS_REVIEW_CROSSCHECK.md](./EMBEDDINGS_REVIEW_CROSSCHECK.md); the highest-confidence follow-ups are lightweight stores, chunking helpers, and Gemini text batching.
+- The detailed follow-up implementation plan is in [EMBEDDINGS_FOLLOW_UP_FIX_PLAN.md](./EMBEDDINGS_FOLLOW_UP_FIX_PLAN.md), including exact fix order and file-level implementation guidance.
 - The active implementation tracker is stored in the repository root as `prompt_caching_todo.md`.
 - The embeddings implementation tracker is stored in the repository root as `embeddings_todo.md`.
 
@@ -69,6 +73,7 @@ If you are opening the repository for the first time, read the pages below in or
 import { LLMClient } from 'unified-llm-client';
 import {
   createDenseRetriever,
+  createInMemoryKnowledgeStore,
   createPostgresKnowledgeStore,
   formatRetrievedContext,
 } from 'unified-llm-client/retrieval';
@@ -138,6 +143,14 @@ const embedding = await client.embed({
 - `embeddingProfileId`
 
 That is intentional. The store fails closed rather than broadening the search scope. Keep stored chunk embeddings and live query embeddings on the same embedding profile. `createDenseRetriever()` and `createHybridRetriever()` now accept optional rerank hooks, while `PostgresKnowledgeStore` exposes active-profile and reindex helpers such as `activateEmbeddingProfile()`, `getActiveEmbeddingProfile()`, `listKnowledgeSources()`, and `markKnowledgeSourcesNeedingReindex()`. Chunking, ingestion queues, provider-managed reranking services, and automatic retrieval inside `complete()` / `conversation()` remain outside the core library.
+
+For local demos, tests, or single-process apps, you can start with:
+
+```ts
+const knowledgeStore = createInMemoryKnowledgeStore();
+```
+
+`InMemoryKnowledgeStore` keeps chunks and vectors in process memory and mirrors the main retrieval helper methods, so you can prototype without a database. It is not durable, so production retrieval should still use `PostgresKnowledgeStore`.
 
 Live embedding validation is opt-in:
 

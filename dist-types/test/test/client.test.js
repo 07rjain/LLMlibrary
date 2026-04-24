@@ -322,6 +322,51 @@ describe('LLMClient', () => {
             purpose: 'retrieval_document',
         })).rejects.toBeInstanceOf(ProviderCapabilityError);
     });
+    it('rejects multiple files of the same modality in one embedding item', async () => {
+        const client = new LLMClient({
+            defaultEmbeddingModel: 'gemini-embedding-2',
+            geminiApiKey: 'gemini-key',
+        });
+        await expect(client.embed({
+            input: [
+                [
+                    {
+                        data: 'cGRm',
+                        mediaType: 'application/pdf',
+                        type: 'document',
+                    },
+                    {
+                        data: 'cGRmMg==',
+                        mediaType: 'application/pdf',
+                        type: 'document',
+                    },
+                ],
+            ],
+            purpose: 'retrieval_document',
+        })).rejects.toBeInstanceOf(ProviderCapabilityError);
+    });
+    it('rejects empty embedding text and tool parts before dispatch', async () => {
+        const client = new LLMClient({
+            defaultEmbeddingModel: 'gemini-embedding-2',
+            geminiApiKey: 'gemini-key',
+        });
+        await expect(client.embed({
+            input: '   ',
+        })).rejects.toBeInstanceOf(ProviderCapabilityError);
+        await expect(client.embed({
+            input: [],
+        })).rejects.toBeInstanceOf(ProviderCapabilityError);
+        await expect(client.embed({
+            input: [
+                {
+                    args: {},
+                    id: 'call_1',
+                    name: 'lookup',
+                    type: 'tool_call',
+                },
+            ],
+        })).rejects.toBeInstanceOf(ProviderCapabilityError);
+    });
     it('provides deterministic queued embeddings through LLMClient.mock()', async () => {
         const client = LLMClient.mock({
             defaultEmbeddingModel: 'gemini-embedding-2',
