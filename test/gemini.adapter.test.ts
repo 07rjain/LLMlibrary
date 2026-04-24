@@ -10,6 +10,8 @@ import {
 import { ModelRegistry } from '../src/models/registry.js';
 import {
   GeminiAdapter,
+  translateGeminiEmbeddingRequest,
+  translateGeminiEmbeddingResponse,
   mapGeminiError,
   translateGeminiCacheCreateRequest,
   translateGeminiCacheUpdateRequest,
@@ -210,6 +212,98 @@ describe('Gemini adapter', () => {
     expect(request).toMatchObject({
       cachedContent: 'cachedContents/support-faq-v1',
     });
+  });
+
+  it('translates Gemini embedding requests with task type, dimensions, and title', () => {
+    const request = translateGeminiEmbeddingRequest(
+      {
+        dimensions: 768,
+        model: 'gemini-embedding-2',
+        providerOptions: {
+          google: {
+            taskInstruction: 'Embed this knowledge-base document.',
+            title: 'Refund Policy',
+          },
+        },
+        purpose: 'retrieval_document',
+      },
+      [
+        { text: 'Refunds are available for 30 days.', type: 'text' },
+        {
+          data: 'cGRm',
+          mediaType: 'application/pdf',
+          type: 'document',
+        },
+      ],
+    );
+
+    expect(request).toEqual({
+      content: {
+        parts: [
+          { text: 'Embed this knowledge-base document.' },
+          { text: 'Refunds are available for 30 days.' },
+          {
+            inlineData: {
+              data: 'cGRm',
+              mimeType: 'application/pdf',
+            },
+          },
+        ],
+      },
+      outputDimensionality: 768,
+      taskType: 'RETRIEVAL_DOCUMENT',
+      title: 'Refund Policy',
+    });
+  });
+
+  it('translates Gemini embedding responses into canonical embedding payloads', () => {
+    const response = translateGeminiEmbeddingResponse(
+      {
+        embedding: {
+          values: [0.1, 0.2, 0.3],
+        },
+        usageMetadata: {
+          promptTokenCount: 12,
+        },
+      },
+      'gemini-embedding-2',
+      new ModelRegistry(),
+    );
+
+    expect(response).toEqual({
+      embeddings: [{ index: 0, values: [0.1, 0.2, 0.3] }],
+      model: 'gemini-embedding-2',
+      provider: 'google',
+      raw: {
+        embedding: {
+          values: [0.1, 0.2, 0.3],
+        },
+        usageMetadata: {
+          promptTokenCount: 12,
+        },
+      },
+      usage: {
+        inputTokens: 12,
+      },
+    });
+  });
+
+  it('rejects Gemini embedding tool parts', () => {
+    expect(() =>
+      translateGeminiEmbeddingRequest(
+        {
+          model: 'gemini-embedding-2',
+        },
+        [
+          {
+            args: { city: 'Berlin' },
+            id: 'call_1',
+            name: 'weather_lookup',
+            type: 'tool_call',
+          },
+        ],
+      ),
+    ).toThrow(ProviderCapabilityError);
   });
 
   it('translates Gemini cache creation payloads', () => {

@@ -133,5 +133,23 @@ export declare const defaultModelPrices: {
         supportsTools: true;
         supportsVision: true;
     };
+    'gemini-embedding-2': {
+        contextWindow: number;
+        embeddingDimensions: {
+            default: number;
+            max: number;
+            recommended: number[];
+        };
+        inputPrice: number;
+        kind: "embedding";
+        lastUpdated: string;
+        maxInputTokens: number;
+        outputPrice: number;
+        provider: "google";
+        supportedInputModalities: ("text" | "document" | "audio" | "image")[];
+        supportsStreaming: false;
+        supportsTools: false;
+        supportsVision: false;
+    };
 };
 //# sourceMappingURL=prices.d.ts.map

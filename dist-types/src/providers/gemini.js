@@ -29,6 +29,54 @@ export class GeminiAdapter {
         const payload = (await response.json());
         return translateGeminiResponse(payload, options.model, this.modelRegistry);
     }
+    async embed(options) {
+        const requests = normalizeGeminiEmbeddingInput(options.input);
+        if (requests.length === 0) {
+            throw new ProviderError('Gemini embedding requests require at least one input item.', {
+                model: options.model,
+                provider: 'google',
+            });
+        }
+        const embeddings = [];
+        let lastPayload;
+        let totalPromptTokens = 0;
+        let observedPromptTokens = false;
+        for (const [index, input] of requests.entries()) {
+            const response = await withRetry(async () => this.fetchImplementation(`${this.baseUrl}/v1beta/models/${encodeURIComponent(normalizeGeminiModelId(options.model))}:embedContent`, buildRequestInit({
+                body: JSON.stringify(translateGeminiEmbeddingRequest(options, input)),
+                headers: this.buildHeaders(),
+                method: 'POST',
+            }, options.signal)), this.retryOptions);
+            if (!response.ok) {
+                throw await mapGeminiError(response, options.model);
+            }
+            const payload = (await response.json());
+            const translated = translateGeminiEmbeddingResponse(payload, options.model, this.modelRegistry);
+            embeddings.push({
+                index,
+                values: translated.embeddings[0]?.values ?? [],
+            });
+            lastPayload = payload;
+            if (payload.usageMetadata?.promptTokenCount !== undefined) {
+                totalPromptTokens += payload.usageMetadata.promptTokenCount;
+                observedPromptTokens = true;
+            }
+        }
+        if (embeddings.some((item) => item.values.length === 0)) {
+            throw new ProviderError('Gemini embedding response contained no embedding values.', {
+                model: options.model,
+                provider: 'google',
+            });
+        }
+        const usage = buildGeminiEmbeddingUsage(this.modelRegistry.get(options.model), observedPromptTokens ? { promptTokenCount: totalPromptTokens } : undefined);
+        return {
+            embeddings,
+            model: options.model,
+            provider: 'google',
+            raw: lastPayload ?? null,
+            ...(usage ? { usage } : {}),
+        };
+    }
     async *stream(options) {
         this.assertCapabilities({ ...options, stream: true });
         const response = await withRetry(async () => this.fetchImplementation(`${this.baseUrl}/v1beta/models/${encodeURIComponent(options.model)}:streamGenerateContent?alt=sse`, buildRequestInit({
@@ -210,6 +258,23 @@ export function translateGeminiRequest(options) {
     }
     return body;
 }
+export function translateGeminiEmbeddingRequest(options, input) {
+    const body = {
+        content: translateGeminiEmbeddingContent(input, options.providerOptions?.google),
+    };
+    const taskType = mapEmbeddingPurposeToGeminiTaskType(options.purpose);
+    if (taskType) {
+        body.taskType = taskType;
+    }
+    if (options.dimensions !== undefined) {
+        body.outputDimensionality = options.dimensions;
+    }
+    const title = options.providerOptions?.google?.title;
+    if (title && taskType === 'RETRIEVAL_DOCUMENT') {
+        body.title = title;
+    }
+    return body;
+}
 export function translateGeminiCacheCreateRequest(options) {
     const messages = options.messages ?? [];
     const systemMessages = messages.filter((message) => message.role === 'system');
@@ -345,6 +410,28 @@ export function translateGeminiResponse(payload, requestedModel, modelRegistry =
         usage,
     };
 }
+export function translateGeminiEmbeddingResponse(payload, requestedModel, modelRegistry = new ModelRegistry()) {
+    modelRegistry.get(requestedModel);
+    const rawEmbeddings = payload.embeddings ??
+        (payload.embedding ? [payload.embedding] : []);
+    if (rawEmbeddings.length === 0) {
+        throw new ProviderError('Gemini embedding response contained no embedding values.', {
+            model: requestedModel,
+            provider: 'google',
+        });
+    }
+    const usage = buildGeminiEmbeddingUsage(modelRegistry.get(requestedModel), payload.usageMetadata);
+    return {
+        embeddings: rawEmbeddings.map((embedding, index) => ({
+            index,
+            values: embedding.values,
+        })),
+        model: requestedModel,
+        provider: 'google',
+        raw: payload,
+        ...(usage ? { usage } : {}),
+    };
+}
 export async function mapGeminiError(response, model) {
     const requestId = response.headers.get('x-goog-request-id') ??
         response.headers.get('x-request-id') ??
@@ -455,6 +542,20 @@ function translateGeminiMessage(message) {
         role,
     };
 }
+function translateGeminiEmbeddingContent(input, options) {
+    const parts = [];
+    if (options?.taskInstruction) {
+        parts.push({ text: options.taskInstruction });
+    }
+    if (typeof input === 'string') {
+        parts.push({ text: input });
+        return { parts };
+    }
+    for (const part of input) {
+        parts.push(translateGeminiEmbeddingPart(part));
+    }
+    return { parts };
+}
 function translateGeminiPart(role, part) {
     switch (part.type) {
         case 'audio':
@@ -503,6 +604,37 @@ function translateGeminiPart(role, part) {
                     response: normalizeGeminiToolResult(part.result, part.isError),
                 },
             };
+    }
+}
+function translateGeminiEmbeddingPart(part) {
+    switch (part.type) {
+        case 'audio':
+            return translateGeminiBinaryLikePart(part.data, part.mediaType, part.url, 'Gemini embedding audio parts require data or a URL.');
+        case 'document':
+            return translateGeminiBinaryLikePart(part.data, part.mediaType, part.url, 'Gemini embedding documents require data or a URL.');
+        case 'image_base64':
+            return {
+                inlineData: {
+                    data: part.data,
+                    mimeType: part.mediaType,
+                },
+            };
+        case 'image_url':
+            return {
+                fileData: {
+                    fileUri: part.url,
+                    mimeType: part.mediaType ?? inferMediaTypeFromUrl(part.url) ?? 'image/*',
+                },
+            };
+        case 'text':
+            return {
+                text: part.text,
+            };
+        case 'tool_call':
+        case 'tool_result':
+            throw new ProviderCapabilityError('Gemini embeddings do not support tool call or tool result parts.', {
+                provider: 'google',
+            });
     }
 }
 function translateGeminiSystemInstruction(systemMessages, explicitSystem) {
@@ -597,6 +729,69 @@ function normalizeGeminiFinishReason(finishReason, parts) {
         case null:
             return 'stop';
     }
+}
+function normalizeGeminiEmbeddingInput(input) {
+    if (typeof input === 'string') {
+        return [input];
+    }
+    if (!Array.isArray(input)) {
+        return [input];
+    }
+    if (input.length === 0) {
+        return [];
+    }
+    if (isCanonicalPartArray(input)) {
+        return [input];
+    }
+    return input;
+}
+function isCanonicalPartArray(input) {
+    return (Array.isArray(input) &&
+        input.every((value) => typeof value === 'object' &&
+            value !== null &&
+            'type' in value));
+}
+function mapEmbeddingPurposeToGeminiTaskType(purpose) {
+    switch (purpose) {
+        case 'classification':
+            return 'CLASSIFICATION';
+        case 'clustering':
+            return 'CLUSTERING';
+        case 'retrieval_document':
+            return 'RETRIEVAL_DOCUMENT';
+        case 'retrieval_query':
+            return 'RETRIEVAL_QUERY';
+        case 'semantic_similarity':
+            return 'SEMANTIC_SIMILARITY';
+        case undefined:
+            return undefined;
+    }
+}
+function buildGeminiEmbeddingUsage(model, usage) {
+    if (usage?.promptTokenCount === undefined) {
+        return undefined;
+    }
+    const metrics = {
+        inputTokens: usage.promptTokenCount,
+    };
+    if (model.inputPrice > 0) {
+        const costUSD = roundEmbeddingUsd((usage.promptTokenCount / 1_000_000) * model.inputPrice);
+        metrics.costUSD = costUSD;
+        metrics.cost = formatEmbeddingCost(costUSD);
+    }
+    return metrics;
+}
+function formatEmbeddingCost(usd) {
+    if (usd === 0) {
+        return '$0.00';
+    }
+    if (Math.abs(usd) < 0.01) {
+        return `$${usd.toFixed(4)}`;
+    }
+    return `$${usd.toFixed(2)}`;
+}
+function roundEmbeddingUsd(value) {
+    return Math.round(value * 1_000_000_000) / 1_000_000_000;
 }
 function messageContainsVisionContent(message) {
     return (typeof message.content !== 'string' &&

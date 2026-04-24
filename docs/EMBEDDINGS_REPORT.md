@@ -1,131 +1,133 @@
 # Embeddings Integration Report
 
-Prepared: `2026-04-22`
+Prepared: `2026-04-22`  
+Updated: `2026-04-24`
 
-This report describes how embeddings should be added to `unified-llm-client` to support the chatbot widget product defined in `chatbot_widget_PRD.md`.
+This report describes how embeddings should be added to `unified-llm-client` for the chatbot widget product.
+
+For the broader system design around retrieval flows, storage, hybrid search, reranking, and rollout sequencing, see [EMBEDDINGS_RETRIEVAL_ARCHITECTURE_REPORT.md](./EMBEDDINGS_RETRIEVAL_ARCHITECTURE_REPORT.md).  
+For the concrete multitenant retrieval, safety, and scaling plan, see [RETRIEVAL_API_INTEGRATION_REPORT.md](./RETRIEVAL_API_INTEGRATION_REPORT.md).
 
 ## Executive Summary
 
-- The chatbot widget PRD already assumes runtime query embeddings and `pgvector` retrieval in the chat path, especially in the request lifecycle described in `chatbot_widget_PRD.md`.
-- The current library has no embeddings surface. It only exposes completion, streaming, conversations, usage logging, session APIs, and Gemini cache management.
-- OpenAI and Google Gemini both have first-party embeddings APIs today.
-- Anthropic still does not offer a first-party embeddings API. Anthropic’s official embeddings guide points users to external providers such as Voyage AI.
-- The recommended launch shape for this library is:
-  - add a first-class `client.embed()` API
-  - support `openai` and `google` in the first slice
-  - reject `provider: 'anthropic'` with `ProviderCapabilityError`
-  - keep embedding provider selection independent from chat-generation provider selection
+- The chatbot widget needs embeddings for ingest-time knowledge indexing and runtime query retrieval.
+- The library now ships a first-class embeddings surface through `client.embed()`.
+- The project decision for v1 is now explicit:
+  - support the Google Embedding 2 path only
+  - defer OpenAI embeddings
+  - reject Anthropic embeddings
+- The reason for that scope decision is product-driven:
+  - the widget needs native PDF and file-oriented knowledge ingestion
+  - OpenAI’s currently documented embedding models are text-only
+  - Anthropic does not provide a first-party embeddings API
+- The clean library shape is still:
+  - keep `client.embed()` as a top-level stateless operation
+  - keep retrieval helpers outside `LLMClient`
+  - keep retrieval, chunking, vector storage, citations, and ingestion jobs outside the core `LLMClient`
 
 ## Why This Is Needed For The Chatbot Widget
 
-The PRD already depends on embeddings in two important places:
+The PRD already depends on embeddings in two places:
 
-- Query-time retrieval:
-  `chatbot_widget_PRD.md` describes embedding the user message, running `pgvector` similarity search, and then assembling the final Anthropic prompt from retrieved chunks and live context.
-- Provider fallback:
-  the assumptions section currently says “Gemini Embedding 2 API” is the primary path and `text-embedding-3-large` is the fallback.
+- ingest-time knowledge indexing
+- runtime query retrieval before generation
 
 The product implication is straightforward:
 
-- the widget backend needs a stable way to embed knowledge chunks at ingest time
-- the widget backend needs a stable way to embed the end-user query at runtime
-- both sides must use the same embedding space for a given search index
+- the widget backend needs one stable way to embed knowledge chunks
+- the widget backend needs the same embedding profile for user-query retrieval
+- both sides must stay in one embedding space for the active index
 
 ## Current Repo State
 
-The current codebase does not yet expose embeddings:
+The current codebase now exposes the first embeddings slice:
 
-- `LLMClient` currently exposes `complete()`, `stream()`, `conversation()`, usage export, and `googleCaches` in [src/client.ts](../src/client.ts).
-- the model registry only contains generative models in [src/models/prices.json](../src/models/prices.json)
-- provider adapters only implement text generation, streaming, token counting, and Gemini cache lifecycle
-- there is no canonical embedding request/response type in [src/types.ts](../src/types.ts)
+- `LLMClient` exposes `embed()` alongside `complete()`, `stream()`, `conversation()`, usage export, and `googleCaches`
+- the model registry now distinguishes embedding models from completion models
+- the Gemini adapter implements the selected Google Embedding 2 transport
+- canonical embedding request/response types now live in `src/types.ts`
+- the package now ships optional retrieval primitives in `src/retrieval.ts`
+- the retrieval module now includes `PostgresKnowledgeStore` for app-owned `pgvector` storage, strict filtered search, and schema bootstrap helpers
 
-This means the chatbot platform would currently need a second embeddings client outside this library, which defeats the purpose of a unified provider layer.
+What is still intentionally missing:
 
-## Provider Reality As Of April 22, 2026
+- ingestion queues and source lifecycle management
+- rerank integrations
+- automatic retrieval inside `complete()` or `conversation()`
+
+## Provider Decision For V1
+
+### Google
+
+Google is the only embeddings provider in scope for the first release.
+
+Project decision:
+
+- target Google Embedding 2 for v1
+- shape the public API so it can support the widget’s file/PDF-oriented embedding use case
+- keep the exact retrieval/storage pipeline in the widget app, not in the core library
+
+Practical implication:
+
+- Google becomes the single supported embedding provider in the first slice
+- the library API should be designed around the Google-first use case rather than a lowest-common-denominator text-only abstraction
 
 ### OpenAI
 
-OpenAI supports first-party embeddings through `POST /v1/embeddings`.
+OpenAI is deferred for embeddings in v1.
 
-Relevant current facts from the official docs:
+Why:
 
-- recommended current models include `text-embedding-3-small` and `text-embedding-3-large`
-- the endpoint accepts one string or an array of strings
-- `dimensions` is supported on `text-embedding-3` models
-- the response includes token usage, which is useful for accurate cost reporting
+- the currently documented OpenAI embedding model pages describe text embeddings only
+- the widget’s current requirement is native PDF and file-oriented ingestion
+- supporting OpenAI now would complicate the public API and test matrix without serving the immediate product need
 
-Implication for this library:
-
-- OpenAI embeddings fit naturally into a unified `embed()` surface
-- OpenAI is a valid fallback for the widget if Gemini embedding behavior changes
-
-### Google Gemini
-
-Gemini supports first-party embeddings with `gemini-embedding-001`.
-
-Relevant current facts from the official docs:
-
-- the interactive endpoint is `models.embedContent`
-- Gemini also exposes `models.batchEmbedContents` and `asyncBatchEmbedContent`
-- Gemini supports retrieval-aware hints such as `RETRIEVAL_QUERY` and `RETRIEVAL_DOCUMENT`
-- Gemini supports `outputDimensionality`
-- Gemini’s embedding response shape does not expose request usage counts the way OpenAI does
-
-Implication for this library:
-
-- Gemini should be the primary embeddings provider for the widget if that remains the product choice
-- retrieval-oriented task hints are important and should be surfaced
-- Gemini cost tracking will need estimated token accounting unless Google adds usage fields to embedding responses
-
-Important PRD correction:
-
-- the PRD currently says “Gemini Embedding 2 API” in `chatbot_widget_PRD.md`
-- the current official stable Gemini embedding model is `gemini-embedding-001`
+OpenAI generation support remains unchanged. This decision applies only to embeddings.
 
 ### Anthropic
 
-Anthropic does not provide first-party embeddings.
+Anthropic remains unsupported for embeddings.
 
-Anthropic’s own embeddings guide explicitly recommends using an external embeddings vendor such as Voyage AI instead.
-
-Implication for this library:
-
-- `provider: 'anthropic'` should not be accepted for an embeddings API in the first release
-- if the product later wants an Anthropic-adjacent embeddings story, the correct follow-up is an optional `voyage` adapter, not a fake Anthropic embeddings transport
+Anthropic’s official embeddings guide still points users to external providers rather than a first-party Anthropic embeddings API.
 
 ## Recommended Product Decision
 
 ### Launch decision
 
-Add embeddings to the unified library, but do not wait for a full multi-provider vector platform abstraction.
+Add embeddings to the unified library with this first-release scope:
 
-Recommended release scope:
+1. Support Google Embedding 2 only
+2. Reject `provider: 'openai'` in `client.embed()` for v1
+3. Reject `provider: 'anthropic'` in `client.embed()`
+4. Keep embedding generation separate from chat-generation provider choice
 
-1. Support `google` embeddings
-2. Support `openai` embeddings
-3. Reject `anthropic` embeddings with `ProviderCapabilityError`
-4. Defer `voyage` to a later slice unless the chatbot widget requires it immediately
+Current implementation status:
+
+- `client.embed()` is shipped
+- `gemini-embedding-2` is in the local registry as an embedding model
+- unsupported providers fail clearly
+- optional retrieval helpers now ship through the package root and `unified-llm-client/retrieval`
+- `PostgresKnowledgeStore` now ships for the recommended `Postgres + pgvector` architecture
 
 ### Critical design rule
 
-Embedding provider must be independent from completion provider.
+Embedding generation and answer generation are separate concerns.
 
-The chatbot PRD already assumes a mixed-provider stack:
+The chatbot can still use:
 
-- Gemini embeddings
-- Anthropic generation
+- Google for embeddings
+- Anthropic or OpenAI for answer generation
 
 That is the correct architecture. The unified library should preserve it rather than force one provider for both operations.
 
 ## Recommended Public API
 
-The cleanest fit for this repo is a first-class `client.embed()` method, not an overload of `complete()` and not a fake conversation feature.
+The cleanest fit is still a first-class `client.embed()` method.
 
 ### Proposed request shape
 
 ```ts
-export type EmbeddingProvider = 'google' | 'openai';
+export type EmbeddingProvider = 'google';
 
 export type EmbeddingPurpose =
   | 'retrieval_document'
@@ -135,24 +137,24 @@ export type EmbeddingPurpose =
   | 'clustering';
 
 export interface EmbeddingRequestOptions {
-  input: string | string[];
+  input: CanonicalPart[] | string | string[];
   model?: string;
   provider?: EmbeddingProvider;
   signal?: AbortSignal;
 
-  // Useful across providers.
   dimensions?: number;
   purpose?: EmbeddingPurpose;
 
   providerOptions?: {
     google?: {
+      taskInstruction?: string;
       title?: string;
     };
-    openai?: {
-      encodingFormat?: 'float' | 'base64';
-      user?: string;
-    };
   };
+
+  // For tracing and usage only, not routing semantics.
+  botId?: string;
+  tenantId?: string;
 }
 ```
 
@@ -176,49 +178,45 @@ export interface EmbeddingResponse {
   model: string;
   provider: EmbeddingProvider;
   raw: unknown;
-  usage: EmbeddingUsageMetrics;
+  usage?: EmbeddingUsageMetrics;
 }
 ```
 
 ### Why this shape fits the repo
 
-- `LLMClient` already uses top-level verbs such as `complete()` and `stream()`
-- embeddings are a first-class operation, not provider cache lifecycle metadata
-- `input: string | string[]` matches the common denominator across OpenAI and Gemini
-- `dimensions` is a valid cross-provider concept
-- `purpose` is useful for retrieval systems and maps cleanly to Gemini while degrading safely on OpenAI
+- `LLMClient` already exposes top-level verbs
+- embeddings are a first-class operation, not generation metadata
+- the input shape can stay aligned with the widget’s Google-first file/document use case
+- `tenantId` and `botId` can flow into logging without turning `client.embed()` into a retrieval router
 
 ## Recommended Mapping Rules
 
-### OpenAI mapping
+### Google mapping
 
-Map canonical options to:
+Map canonical options to the selected Google Embedding 2 transport used by the widget stack.
+
+The library contract should preserve these concepts:
 
 - `model`
 - `input`
 - `dimensions`
-- `encoding_format` from `providerOptions.openai.encodingFormat`
-- `user` from `providerOptions.openai.user`
+- query/document intent through `purpose` or `taskInstruction`
+- file/document metadata such as `title` when the selected transport supports it
 
-OpenAI ignores `purpose`.
+The important design rule is not the exact wire field names. It is keeping the public API stable while the adapter maps to the verified Google Embedding 2 endpoint chosen for the product.
 
-### Gemini mapping
+### OpenAI mapping
 
-Map canonical options to:
+There should be no OpenAI mapping in v1.
 
-- `model: models/gemini-embedding-001`
-- `content` or batched requests from `input`
-- `outputDimensionality` from `dimensions`
-- `taskType` from `purpose`
-- `title` from `providerOptions.google.title`
+The library should throw:
 
-Purpose mapping should be:
-
-- `retrieval_query` -> `RETRIEVAL_QUERY`
-- `retrieval_document` -> `RETRIEVAL_DOCUMENT`
-- `semantic_similarity` -> `SEMANTIC_SIMILARITY`
-- `classification` -> `CLASSIFICATION`
-- `clustering` -> `CLUSTERING`
+```ts
+throw new ProviderCapabilityError(
+  'OpenAI embeddings are deferred in v1. The current embeddings scope is Google only.',
+  { provider: 'openai' },
+);
+```
 
 ### Anthropic mapping
 
@@ -237,22 +235,21 @@ throw new ProviderCapabilityError(
 
 ### 1. Query and document embeddings must match
 
-This is the most important implementation constraint.
+This is still the most important implementation constraint.
 
 You cannot safely:
 
-- embed stored knowledge chunks with Gemini
-- then embed the live user query with OpenAI
+- embed stored knowledge chunks with one Google embedding profile
+- then embed the live user query with a different profile
 - and expect one `pgvector` index to return meaningful similarity scores
 
-Embedding spaces are model-specific.
+Embedding spaces are profile-specific.
 
-That means the PRD’s fallback language needs one of these two operational strategies:
+That means the app needs:
 
-1. Re-embed the corpus when the active embedding model changes
-2. Store multiple embedding profiles side-by-side and query only the matching profile
-
-The second option is safer for production migrations.
+1. one active embedding profile per bot
+2. every stored vector tagged with its profile id
+3. runtime query embedding forced to the same profile id
 
 ### 2. The library should not own chunking or vector storage
 
@@ -265,6 +262,7 @@ Keep these concerns outside the unified client:
 - chunking strategy
 - `pgvector` schema migration
 - similarity search SQL
+- ingestion retries and progress tracking
 
 The library should only provide the provider-normalized embedding call that the widget backend uses.
 
@@ -277,7 +275,7 @@ interface EmbeddingProfile {
   dimensions?: number;
   id: string;
   model: string;
-  provider: 'google' | 'openai';
+  provider: 'google';
 }
 ```
 
@@ -288,16 +286,16 @@ Recommended behavior:
 - runtime query embedding uses the same profile id
 - profile swaps happen through a background reindex job, then an atomic cutover
 
-### 4. Query/document purpose matters for Gemini
+### 4. Query/document purpose still matters
 
 For the widget:
 
 - use `retrieval_document` when embedding knowledge chunks
 - use `retrieval_query` when embedding user messages for search
 
-That distinction is important for retrieval quality on Gemini and should be represented in the library surface.
+That distinction should be represented in the library surface.
 
-## Model Registry And Pricing Recommendations
+## Model Registry Recommendations
 
 The current registry only models generative models.
 
@@ -315,14 +313,13 @@ interface ModelInfo {
     recommended?: number[];
   };
   maxInputTokens?: number;
+  supportedInputModalities?: Array<'text' | 'document' | 'image' | 'audio' | 'video'>;
 }
 ```
 
-Recommended new registry entries:
+Recommended new registry entry for v1:
 
-- `gemini-embedding-001`
-- `text-embedding-3-small`
-- `text-embedding-3-large`
+- `gemini-embedding-2`
 
 ### Why `kind` matters
 
@@ -331,26 +328,17 @@ Without a model-kind distinction:
 - a caller could accidentally pass an embedding model into `complete()`
 - or pass a generative model into `embed()`
 
-That would fail late at the provider boundary instead of being rejected by the library.
+That should fail in the library before the provider boundary.
 
 ## Usage And Cost Tracking Recommendations
 
-### OpenAI
-
-OpenAI embedding responses include usage counts, so:
-
-- `inputTokens` can be provider-authoritative
-- `costUSD` can be computed accurately from model pricing metadata
-
-### Gemini
-
-Gemini’s current embedding response docs describe returning the vector, but not request token usage.
+Google embedding usage reporting should be modeled conservatively.
 
 Recommended v1 handling:
 
-- expose `usage.inputTokens` only when authoritative provider usage exists
-- for Gemini, either leave usage empty or mark it as estimated
-- do not pretend Gemini embedding cost is exact unless the provider actually returns usage
+- expose `usage.inputTokens` only when the provider returns authoritative usage
+- otherwise leave usage empty or mark it as estimated
+- do not pretend cost is exact unless the provider returns enough data to compute it correctly
 
 Suggested canonical behavior:
 
@@ -368,33 +356,31 @@ if the implementation chooses to estimate.
 
 1. Add canonical embedding request/response types in `src/types.ts`
 2. Add `client.embed()` in `src/client.ts`
-3. Add OpenAI embedding adapter support in `src/providers/openai.ts`
-4. Add Gemini embedding adapter support in `src/providers/gemini.ts`
-5. Extend model metadata for embedding models in `src/models/prices.json`
-6. Add cost handling for OpenAI embedding usage and estimated Gemini embedding usage
-7. Add unit tests for request mapping, response mapping, model-kind validation, and client routing
-8. Add live tests behind an opt-in gate for OpenAI and Gemini embeddings
-9. Update docs with widget-oriented examples for ingest-time document embeddings and runtime query embeddings
+3. Add Google Embedding 2 adapter support in `src/providers/gemini.ts`
+4. Extend model metadata for embedding models in `src/models/prices.json`
+5. Add conservative usage/cost handling for Google embedding responses
+6. Add unit tests for request mapping, response mapping, model-kind validation, and client routing
+7. Add live tests behind an opt-in gate for Google embeddings
+8. Update docs with widget-oriented examples for ingest-time document embeddings and runtime query embeddings
 
 ## Recommended Tests
 
-- OpenAI adapter test for single-string embeddings
-- OpenAI adapter test for string-array embeddings
-- OpenAI adapter test for `dimensions`
-- Gemini adapter test for `purpose -> taskType`
-- Gemini adapter test for `title`
-- Gemini adapter test for `dimensions -> outputDimensionality`
+- Google adapter test for embedding request mapping
+- Google adapter test for `purpose` / task-instruction mapping
+- Google adapter test for `dimensions`
+- Google adapter test for document/file-oriented input mapping on the selected transport
 - Client routing test for `client.embed()`
 - Model registry test that embedding models cannot be used for `complete()`
-- Live OpenAI embedding smoke test
-- Live Gemini embedding smoke test
+- Client test that `openai` embeddings are rejected in v1
+- Client test that `anthropic` embeddings are rejected
+- Live Google embedding smoke test
 
 ## Open Questions
 
-- Should the first release expose only `client.embed()` or also provider-specific batch helpers for Gemini’s async embedding batches?
-- Do we want a canonical `purpose` field, or should that remain provider-specific even though retrieval-query/document is central to the widget use case?
-- Should Gemini embedding cost be estimated in-library or left undefined until provider usage is available?
-- Is Voyage needed soon enough to justify a fourth provider surface for embeddings only?
+- Which exact Google Embedding 2 transport should the adapter target first in this repo?
+- Should the first release expose only `client.embed()` or also optional Google batch helpers later?
+- Should Google embedding cost be estimated in-library or left undefined until provider usage is available?
+- Do we want file/document capability in the first adapter patch, or text first with the request shape already prepared for file support?
 
 ## Bottom Line
 
@@ -403,18 +389,19 @@ Embeddings belong in this library, but as a separate first-class API from comple
 The correct near-term design is:
 
 - `client.embed()`
-- OpenAI + Gemini first
+- Google Embedding 2 only in v1
+- OpenAI deferred for embeddings
 - Anthropic unsupported for embeddings
-- embedding provider independent from generation provider
+- embedding generation independent from answer-generation provider choice
 - widget app manages chunking, vector storage, and embedding-profile rollouts
 
-That shape matches both the current provider landscape and the chatbot widget architecture already described in the PRD.
+That shape matches the current product decision and the chatbot widget architecture already described in the PRD.
 
 ## Source Links
 
-- OpenAI embeddings guide: https://platform.openai.com/docs/guides/embeddings
-- OpenAI embeddings API reference: https://platform.openai.com/docs/api-reference/embeddings/create
-- OpenAI `text-embedding-3-large` model page: https://platform.openai.com/docs/models/text-embedding-3-large
+- OpenAI `text-embedding-3-large` model page: https://developers.openai.com/api/docs/models/text-embedding-3-large
+- OpenAI `text-embedding-3-small` model page: https://developers.openai.com/api/docs/models/text-embedding-3-small
 - Gemini embeddings guide: https://ai.google.dev/gemini-api/docs/embeddings
 - Gemini embeddings API reference: https://ai.google.dev/api/embeddings
-- Anthropic embeddings guide: https://docs.anthropic.com/en/docs/build-with-claude/embeddings
+- Vertex AI multimodal embeddings: https://cloud.google.com/vertex-ai/generative-ai/docs/embeddings/get-multimodal-embeddings
+- Anthropic embeddings guide: https://platform.claude.com/docs/en/build-with-claude/embeddings

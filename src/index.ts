@@ -6,6 +6,7 @@ export * from './models/index.js';
 export * from './providers/anthropic.js';
 export * from './providers/gemini.js';
 export * from './providers/openai.js';
+export * from './retrieval.js';
 export * from './router.js';
 export * from './session-api.js';
 export * from './session-store.js';

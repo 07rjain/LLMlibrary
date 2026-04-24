@@ -218,6 +218,80 @@ describe('LLMClient', () => {
         const client = new LLMClient();
         await expect(client.models.listRemote({ provider: 'openai' })).rejects.toBeInstanceOf(AuthenticationError);
     });
+    it('routes embed() calls to Gemini using the default embedding model', async () => {
+        const fetchImplementation = vi.fn(async (_input, init) => {
+            const body = JSON.parse(String(init?.body ?? '{}'));
+            expect(body).toMatchObject({
+                outputDimensionality: 768,
+                taskType: 'RETRIEVAL_QUERY',
+            });
+            return new Response(JSON.stringify({
+                embedding: {
+                    values: [0.11, 0.22, 0.33],
+                },
+                usageMetadata: {
+                    promptTokenCount: 12,
+                },
+            }), {
+                headers: { 'content-type': 'application/json' },
+                status: 200,
+            });
+        });
+        const client = new LLMClient({
+            defaultEmbeddingModel: 'gemini-embedding-2',
+            fetchImplementation,
+            geminiApiKey: 'gemini-key',
+        });
+        const response = await client.embed({
+            dimensions: 768,
+            input: 'Where is my refund?',
+            purpose: 'retrieval_query',
+        });
+        const request = fetchImplementation.mock.calls[0];
+        expect(String(request[0])).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent');
+        expect(response.provider).toBe('google');
+        expect(response.embeddings[0]?.values).toEqual([0.11, 0.22, 0.33]);
+        expect(response.usage).toMatchObject({
+            inputTokens: 12,
+        });
+    });
+    it('rejects unsupported embedding providers in v1', async () => {
+        const client = new LLMClient({
+            defaultEmbeddingModel: 'gemini-embedding-2',
+            geminiApiKey: 'gemini-key',
+        });
+        await expect(client.embed({
+            input: 'Hello',
+            provider: 'openai',
+        })).rejects.toBeInstanceOf(ProviderCapabilityError);
+    });
+    it('rejects completion models in embed()', async () => {
+        const client = new LLMClient({
+            geminiApiKey: 'gemini-key',
+        });
+        await expect(client.embed({
+            input: 'Hello',
+            model: 'gemini-2.5-flash',
+        })).rejects.toBeInstanceOf(ProviderCapabilityError);
+    });
+    it('provides deterministic queued embeddings through LLMClient.mock()', async () => {
+        const client = LLMClient.mock({
+            defaultEmbeddingModel: 'gemini-embedding-2',
+            embeddings: [
+                {
+                    embeddings: [{ index: 0, values: [0.5, 0.6] }],
+                    model: 'gemini-embedding-2',
+                    provider: 'mock',
+                    raw: { mock: true },
+                },
+            ],
+        });
+        const response = await client.embed({
+            input: 'Hello',
+        });
+        expect(response.embeddings[0]?.values).toEqual([0.5, 0.6]);
+        expect(response.provider).toBe('mock');
+    });
     it('routes complete() calls to Anthropic by model', async () => {
         const fetchImplementation = vi.fn(async (input) => {
             const url = typeof input === 'string' ? input : input.toString();

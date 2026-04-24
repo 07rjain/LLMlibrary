@@ -12,7 +12,16 @@ describe('cost utilities', () => {
                 model: model.id,
                 outputTokens: 500,
             }, registry);
-            expect(cost).toBeGreaterThan(0);
+            const hasNonZeroPricing = model.inputPrice > 0 ||
+                model.outputPrice > 0 ||
+                (model.cacheReadPrice ?? 0) > 0 ||
+                (model.cacheWritePrice ?? 0) > 0;
+            if (hasNonZeroPricing) {
+                expect(cost).toBeGreaterThan(0);
+            }
+            else {
+                expect(cost).toBe(0);
+            }
         }
     });
     it('matches the exact pricing formula for every launch model entry', () => {

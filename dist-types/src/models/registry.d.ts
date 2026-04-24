@@ -28,6 +28,7 @@ export declare class ModelRegistry {
     private readonly onWarning;
     constructor(seed?: Record<string, Omit<ModelInfo, 'id'>>, options?: ModelRegistryOptions);
     assertCapability(modelId: string, capability: ModelCapability, featureLabel?: string): ModelInfo;
+    assertModelKind(modelId: string, kind: NonNullable<ModelInfo['kind']>): ModelInfo;
     get(modelId: string): ModelInfo;
     isSupported(modelId: string): boolean;
     list(): ModelInfo[];

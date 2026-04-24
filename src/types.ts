@@ -181,6 +181,59 @@ export interface UsageMetrics {
   outputTokens: number;
 }
 
+export type EmbeddingProvider = Extract<CanonicalProvider, 'google' | 'mock'>;
+
+export type EmbeddingPurpose =
+  | 'retrieval_document'
+  | 'retrieval_query'
+  | 'semantic_similarity'
+  | 'classification'
+  | 'clustering';
+
+export type EmbeddingInputItem = CanonicalPart[] | string;
+export type EmbeddingInput = EmbeddingInputItem | EmbeddingInputItem[];
+
+export interface GoogleEmbeddingOptions {
+  taskInstruction?: string;
+  title?: string;
+}
+
+export interface EmbeddingProviderOptions {
+  google?: GoogleEmbeddingOptions;
+}
+
+export interface EmbeddingRequestOptions {
+  botId?: string;
+  dimensions?: number;
+  input: EmbeddingInput;
+  model?: string;
+  provider?: EmbeddingProvider;
+  providerOptions?: EmbeddingProviderOptions;
+  purpose?: EmbeddingPurpose;
+  signal?: AbortSignal;
+  tenantId?: string;
+}
+
+export interface EmbeddingResultItem {
+  index: number;
+  values: number[];
+}
+
+export interface EmbeddingUsageMetrics {
+  cost?: string;
+  costUSD?: number;
+  estimated?: boolean;
+  inputTokens?: number;
+}
+
+export interface EmbeddingResponse {
+  embeddings: EmbeddingResultItem[];
+  model: string;
+  provider: EmbeddingProvider;
+  raw: unknown;
+  usage?: EmbeddingUsageMetrics;
+}
+
 export interface CanonicalResponse {
   content: CanonicalPart[];
   finishReason: CanonicalFinishReason;
@@ -216,11 +269,20 @@ export interface ModelInfo {
   cacheReadPrice?: number;
   cacheWritePrice?: number;
   contextWindow: number;
+  embeddingDimensions?: {
+    default: number;
+    max?: number;
+    min?: number;
+    recommended?: number[];
+  };
   id: string;
   inputPrice: number;
+  kind?: 'completion' | 'embedding';
   lastUpdated: string;
+  maxInputTokens?: number;
   outputPrice: number;
   provider: CanonicalProvider;
+  supportedInputModalities?: Array<'audio' | 'document' | 'image' | 'text' | 'video'>;
   supportsStreaming: boolean;
   supportsTools: boolean;
   supportsVision: boolean;

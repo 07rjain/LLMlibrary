@@ -133,4 +133,22 @@ export const defaultModelPrices = {
         supportsTools: true,
         supportsVision: true,
     },
+    'gemini-embedding-2': {
+        contextWindow: 8192,
+        embeddingDimensions: {
+            default: 3072,
+            max: 3072,
+            recommended: [768, 1536, 3072],
+        },
+        inputPrice: 0,
+        kind: 'embedding',
+        lastUpdated: '2026-04-24',
+        maxInputTokens: 8192,
+        outputPrice: 0,
+        provider: 'google',
+        supportedInputModalities: ['audio', 'document', 'image', 'text'],
+        supportsStreaming: false,
+        supportsTools: false,
+        supportsVision: false,
+    },
 };

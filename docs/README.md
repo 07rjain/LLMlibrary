@@ -23,6 +23,8 @@ If you are opening the repository for the first time, read the pages below in or
 - Live provider model discovery through `client.models.listRemote({ provider })`
 - A framework-agnostic Session API built on `Request` and `Response`
 - Routing and fallback rules for production traffic
+- Google Embedding 2 support through `client.embed()`
+- Optional retrieval helpers through `unified-llm-client/retrieval`
 
 ## Which Page To Read For Which Task
 
@@ -56,7 +58,86 @@ If you are opening the repository for the first time, read the pages below in or
 - Anthropic uses part-level `cacheControl`, tool-level `cacheControl`, and request-level `providerOptions.anthropic.cacheControl`.
 - Gemini uses `providerOptions.google.promptCaching.cachedContent`, and explicit cache resources can be managed with `client.googleCaches`.
 - `client.models.listRemote({ provider })` fetches the provider's live model list without changing the local routing registry.
+- `client.embed()` is now available for Google Embedding 2.
+- Retrieval remains explicit app orchestration; the helper module gives you `createDenseRetriever()`, `createHybridRetriever()`, and `formatRetrievedContext()` without changing `complete()` or `conversation()`.
 - The active implementation tracker is stored in the repository root as `prompt_caching_todo.md`.
+- The embeddings implementation tracker is stored in the repository root as `embeddings_todo.md`.
+
+## Embeddings And Retrieval Quick Start
+
+```ts
+import { LLMClient } from 'unified-llm-client';
+import {
+  createDenseRetriever,
+  createPostgresKnowledgeStore,
+  formatRetrievedContext,
+} from 'unified-llm-client/retrieval';
+
+const client = LLMClient.fromEnv({
+  defaultEmbeddingModel: 'gemini-embedding-2',
+  defaultModel: 'gpt-4o',
+});
+
+const knowledgeStore = createPostgresKnowledgeStore({
+  connectionString: process.env.DATABASE_URL,
+});
+
+await knowledgeStore.ensureSchema();
+
+const retriever = createDenseRetriever({
+  embed: client,
+  embedding: { model: 'gemini-embedding-2' },
+  store: knowledgeStore,
+});
+
+const results = await retriever.search({
+  filter: {
+    botId: 'bot-1',
+    embeddingProfileId: 'profile-2026-04-24',
+    knowledgeSpaceId: 'kb-support',
+    tenantId: 'tenant-1',
+  },
+  query: 'What is the refund window?',
+  topK: 4,
+});
+
+const context = formatRetrievedContext(results, {
+  maxResults: 4,
+  maxTokens: 900,
+});
+
+const answer = await client.complete({
+  messages: [
+    {
+      content: `Question: What is the refund window?\n\n${context.text}`,
+      role: 'user',
+    },
+  ],
+});
+```
+
+The embedding request itself stays separate:
+
+```ts
+const embedding = await client.embed({
+  input: 'Refunds are available for 30 days after purchase.',
+  purpose: 'retrieval_document',
+  providerOptions: {
+    google: {
+      title: 'Refund Policy',
+    },
+  },
+});
+```
+
+`PostgresKnowledgeStore` enforces strict retrieval filters before it will run a dense or lexical search:
+
+- `tenantId`
+- `botId`
+- `knowledgeSpaceId`
+- `embeddingProfileId`
+
+That is intentional. The store fails closed rather than broadening the search scope. Keep stored chunk embeddings and live query embeddings on the same embedding profile. Chunking, ingestion queues, reranking, and automatic retrieval inside `complete()` / `conversation()` remain outside the core library.
 
 ## Prompt Caching Quick Start
 

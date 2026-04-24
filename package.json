@@ -50,6 +50,11 @@
       "import": "./dist/providers-openai.js",
       "require": "./dist/providers-openai.cjs"
     },
+    "./retrieval": {
+      "types": "./dist/retrieval.d.ts",
+      "import": "./dist/retrieval.js",
+      "require": "./dist/retrieval.cjs"
+    },
     "./session-api": {
       "types": "./dist/session-api.d.ts",
       "import": "./dist/session-api.js",
