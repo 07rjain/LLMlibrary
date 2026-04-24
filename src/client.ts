@@ -30,6 +30,7 @@ import type { SessionStore } from './session-store.js';
 import type { ModelRouter, ResolvedModelRoute, RouterContext } from './router.js';
 import type {
   CanonicalFinishReason,
+  CanonicalPart,
   CanonicalMessage,
   CanonicalProvider,
   CanonicalResponse,
@@ -37,9 +38,12 @@ import type {
   CanonicalToolChoice,
   BudgetExceededAction,
   CancelableStream,
+  EmbeddingInput,
+  EmbeddingInputItem,
   EmbeddingProvider,
   EmbeddingRequestOptions,
   EmbeddingResponse,
+  ModelInfo,
   ProviderOptions,
   RemoteModelInfo,
   RemoteModelListOptions,
@@ -629,6 +633,8 @@ export class LLMClient {
       );
     }
 
+    validateEmbeddingRequest(options, modelInfo, model);
+
     return {
       ...options,
       model,
@@ -1169,6 +1175,235 @@ function shouldTryFallback(error: unknown): boolean {
     error instanceof RateLimitError ||
     (error instanceof LLMError && error.retryable)
   );
+}
+
+function validateEmbeddingRequest(
+  options: EmbeddingRequestOptions,
+  modelInfo: ModelInfo,
+  model: string,
+): void {
+  validateEmbeddingDimensions(options.dimensions, modelInfo, model);
+  validateEmbeddingTitle(options, modelInfo, model);
+  validateEmbeddingInput(options.input, modelInfo, model);
+}
+
+function validateEmbeddingDimensions(
+  dimensions: number | undefined,
+  modelInfo: ModelInfo,
+  model: string,
+): void {
+  if (dimensions === undefined) {
+    return;
+  }
+
+  if (!Number.isInteger(dimensions) || dimensions <= 0) {
+    throw new ProviderCapabilityError(
+      `Embedding dimensions must be a positive integer. Received "${dimensions}".`,
+      {
+        model,
+        provider: modelInfo.provider,
+      },
+    );
+  }
+
+  const limits = modelInfo.embeddingDimensions;
+  if (!limits) {
+    return;
+  }
+
+  if (limits.min !== undefined && dimensions < limits.min) {
+    throw new ProviderCapabilityError(
+      `Model "${model}" requires embedding dimensions >= ${limits.min}. Received ${dimensions}.`,
+      {
+        model,
+        provider: modelInfo.provider,
+      },
+    );
+  }
+
+  if (limits.max !== undefined && dimensions > limits.max) {
+    throw new ProviderCapabilityError(
+      `Model "${model}" supports embedding dimensions <= ${limits.max}. Received ${dimensions}.`,
+      {
+        model,
+        provider: modelInfo.provider,
+      },
+    );
+  }
+}
+
+function validateEmbeddingTitle(
+  options: EmbeddingRequestOptions,
+  modelInfo: ModelInfo,
+  model: string,
+): void {
+  const title = options.providerOptions?.google?.title;
+  if (!title) {
+    return;
+  }
+
+  if (options.purpose !== 'retrieval_document') {
+    throw new ProviderCapabilityError(
+      'Embedding titles are only supported for retrieval_document requests.',
+      {
+        model,
+        provider: modelInfo.provider,
+      },
+    );
+  }
+}
+
+function validateEmbeddingInput(
+  input: EmbeddingInput,
+  modelInfo: ModelInfo,
+  model: string,
+): void {
+  const items = normalizeEmbeddingInputItems(input);
+  if (items.length === 0) {
+    throw new ProviderCapabilityError('Embedding requests require at least one input item.', {
+      model,
+      provider: modelInfo.provider,
+    });
+  }
+
+  for (const item of items) {
+    validateEmbeddingInputItem(item, modelInfo, model);
+  }
+}
+
+function validateEmbeddingInputItem(
+  item: EmbeddingInputItem,
+  modelInfo: ModelInfo,
+  model: string,
+): void {
+  if (typeof item === 'string') {
+    if (item.trim().length === 0) {
+      throw new ProviderCapabilityError(
+        'Embedding text inputs cannot be empty.',
+        {
+          model,
+          provider: modelInfo.provider,
+        },
+      );
+    }
+
+    return;
+  }
+
+  if (!Array.isArray(item) || item.length === 0) {
+    throw new ProviderCapabilityError(
+      'Embedding part-array inputs cannot be empty.',
+      {
+        model,
+        provider: modelInfo.provider,
+      },
+    );
+  }
+
+  const supportedModalities = new Set(modelInfo.supportedInputModalities ?? ['text']);
+  let binaryPartCount = 0;
+  const binaryModalities = new Set<string>();
+
+  for (const part of item) {
+    const modality = mapEmbeddingPartToModality(part);
+    if (!supportedModalities.has(modality)) {
+      throw new ProviderCapabilityError(
+        `Model "${model}" does not support ${modality} embedding inputs.`,
+        {
+          model,
+          provider: modelInfo.provider,
+        },
+      );
+    }
+
+    if (part.type === 'text' && part.text.trim().length === 0) {
+      throw new ProviderCapabilityError(
+        'Embedding text parts cannot be empty.',
+        {
+          model,
+          provider: modelInfo.provider,
+        },
+      );
+    }
+
+    if (modality !== 'text') {
+      binaryPartCount += 1;
+      binaryModalities.add(modality);
+    }
+  }
+
+  if (binaryPartCount > 1) {
+    throw new ProviderCapabilityError(
+      'Embedding requests currently support only one binary file part per input item. Split multi-file inputs into separate embed() calls.',
+      {
+        model,
+        provider: modelInfo.provider,
+      },
+    );
+  }
+
+  if (binaryModalities.size > 1) {
+    throw new ProviderCapabilityError(
+      'Embedding requests currently support only one binary modality per input item. Split mixed file inputs into separate embed() calls.',
+      {
+        model,
+        provider: modelInfo.provider,
+      },
+    );
+  }
+}
+
+function normalizeEmbeddingInputItems(input: EmbeddingInput): EmbeddingInputItem[] {
+  if (typeof input === 'string') {
+    return [input];
+  }
+
+  if (!Array.isArray(input)) {
+    return [input];
+  }
+
+  if (input.length === 0) {
+    return [];
+  }
+
+  if (isCanonicalPartArray(input)) {
+    return [input];
+  }
+
+  return input;
+}
+
+function isCanonicalPartArray(input: EmbeddingInput): input is CanonicalPart[] {
+  return (
+    Array.isArray(input) &&
+    input.every(
+      (value) =>
+        typeof value === 'object' &&
+        value !== null &&
+        'type' in value,
+    )
+  );
+}
+
+function mapEmbeddingPartToModality(
+  part: CanonicalPart,
+): 'audio' | 'document' | 'image' | 'text' {
+  switch (part.type) {
+    case 'audio':
+      return 'audio';
+    case 'document':
+      return 'document';
+    case 'image_base64':
+    case 'image_url':
+      return 'image';
+    case 'text':
+      return 'text';
+    case 'tool_call':
+    case 'tool_result':
+      throw new ProviderCapabilityError(
+        'Embedding requests do not support tool call or tool result parts.',
+      );
+  }
 }
 
 function buildZeroUsage(): UsageMetrics {

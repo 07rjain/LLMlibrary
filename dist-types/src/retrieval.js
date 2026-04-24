@@ -19,7 +19,12 @@ export function createDenseRetriever(options) {
                 });
             }
             const results = await options.store.searchByEmbedding(buildDenseSearchOptions(query.filter, Math.max(query.topK ?? defaultTopK, 1), query.minScore ?? options.defaultMinScore, embedding));
-            return limitRetrievalResults(results, buildLimitOptions(query.maxPerSource, query.topK ?? defaultTopK));
+            const reranked = await applyRerankHook(options.rerank, results, {
+                embeddingResponse,
+                mode: 'dense',
+                query,
+            });
+            return limitRetrievalResults(reranked, buildLimitOptions(query.maxPerSource, query.topK ?? defaultTopK));
         },
     };
 }
@@ -48,12 +53,18 @@ export function createHybridRetriever(options) {
                 options.store.searchByEmbedding(buildDenseSearchOptions(query.filter, denseLimit, query.minScore ?? options.defaultMinScore, embedding)),
                 options.store.searchByText(buildLexicalSearchOptions(query.filter, lexicalLimit, query.minScore ?? options.defaultMinScore, query.query)),
             ]);
-            return mergeRetrievalCandidates({
+            const merged = mergeRetrievalCandidates({
                 denseResults,
                 lexicalResults,
                 topK: requestedTopK,
                 ...buildHybridMergeOptions(options.denseWeight, options.fusionK, options.lexicalWeight, query.maxPerSource),
             });
+            const reranked = await applyRerankHook(options.rerank, merged, {
+                embeddingResponse,
+                mode: 'hybrid',
+                query,
+            });
+            return limitRetrievalResults(reranked, buildLimitOptions(query.maxPerSource, requestedTopK));
         },
     };
 }
@@ -330,6 +341,16 @@ function resolveEmbedFunction(embed) {
     }
     return embed.embed.bind(embed);
 }
+async function applyRerankHook(rerank, results, context) {
+    if (!rerank) {
+        return results;
+    }
+    const reranked = await rerank(results, context);
+    if (!Array.isArray(reranked)) {
+        throw new LLMError('Retrieval rerank hooks must return an array of results.');
+    }
+    return reranked;
+}
 function roundNumber(value) {
     return Number(value.toFixed(8));
 }
@@ -559,8 +580,119 @@ export class PostgresKnowledgeStore {
        LIMIT ${limitRef}`, values);
         return result.rows.map((row) => mapPostgresRetrievalResult(row, 'lexical'));
     }
+    async activateEmbeddingProfile(options) {
+        await this.ensureSchema();
+        const timestamp = this.now().toISOString();
+        const pool = await this.getPool();
+        await pool.query(`UPDATE ${this.qualifiedTableName('spaces')}
+       SET active_embedding_profile_id = $1,
+           updated_at = $2
+       WHERE id = $3
+         AND tenant_id = $4
+         AND bot_id = $5`, [
+            options.embeddingProfileId,
+            timestamp,
+            options.knowledgeSpaceId,
+            options.tenantId,
+            options.botId,
+        ]);
+    }
+    async getActiveEmbeddingProfile(filter) {
+        await this.ensureSchema();
+        const pool = await this.getPool();
+        const result = await pool.query(`SELECT
+         p.id,
+         p.knowledge_space_id,
+         p.tenant_id,
+         p.bot_id,
+         p.provider,
+         p.model,
+         p.dimensions,
+         p.distance_metric,
+         p.purpose_defaults,
+         p.task_instruction,
+         p.status,
+         p.created_at,
+         p.updated_at
+       FROM ${this.qualifiedTableName('spaces')} s
+       INNER JOIN ${this.qualifiedTableName('profiles')} p
+         ON p.id = s.active_embedding_profile_id
+        AND p.tenant_id = s.tenant_id
+       WHERE s.id = $1
+         AND s.tenant_id = $2
+         AND s.bot_id = $3
+       LIMIT 1`, [filter.knowledgeSpaceId, filter.tenantId, filter.botId]);
+        const row = result.rows[0];
+        return row ? mapPostgresEmbeddingProfile(row) : null;
+    }
+    async listKnowledgeSources(options) {
+        await this.ensureSchema();
+        const values = [];
+        const clauses = [
+            `tenant_id = ${pushSqlValue(values, options.tenantId)}`,
+            `bot_id = ${pushSqlValue(values, options.botId)}`,
+            `knowledge_space_id = ${pushSqlValue(values, options.knowledgeSpaceId)}`,
+        ];
+        if (options.embeddingProfileId) {
+            clauses.push(`embedding_profile_id = ${pushSqlValue(values, options.embeddingProfileId)}`);
+        }
+        if (options.statuses && options.statuses.length > 0) {
+            clauses.push(`status = ANY(${pushSqlValue(values, options.statuses)})`);
+        }
+        const limitRef = pushSqlValue(values, Math.max(options.limit ?? 100, 1));
+        const pool = await this.getPool();
+        const result = await pool.query(`SELECT
+         id,
+         knowledge_space_id,
+         tenant_id,
+         bot_id,
+         embedding_profile_id,
+         source_type,
+         external_id,
+         name,
+         title,
+         canonical_url,
+         checksum,
+         status,
+         progress_percent,
+         error_message,
+         metadata,
+         created_at,
+         updated_at
+       FROM ${this.qualifiedTableName('sources')}
+       WHERE ${clauses.join(' AND ')}
+       ORDER BY updated_at DESC
+       LIMIT ${limitRef}`, values);
+        return result.rows.map(mapPostgresKnowledgeSource);
+    }
+    async markKnowledgeSourcesNeedingReindex(options) {
+        await this.ensureSchema();
+        const timestamp = this.now().toISOString();
+        const values = [
+            options.toEmbeddingProfileId,
+            timestamp,
+            options.tenantId,
+            options.botId,
+            options.knowledgeSpaceId,
+        ];
+        let where = `tenant_id = $3
+         AND bot_id = $4
+         AND knowledge_space_id = $5
+         AND (embedding_profile_id IS NULL OR embedding_profile_id <> $1)`;
+        if (options.fromEmbeddingProfileId) {
+            values.push(options.fromEmbeddingProfileId);
+            where += ` AND embedding_profile_id = $6`;
+        }
+        const pool = await this.getPool();
+        const result = await pool.query(`UPDATE ${this.qualifiedTableName('sources')}
+       SET status = 'needs_reindex',
+           updated_at = $2
+       WHERE ${where}`, values);
+        return result.rowCount ?? 0;
+    }
     async upsertEmbeddingProfile(record) {
         await this.ensureSchema();
+        await this.assertEmbeddingProfileImmutability(record);
         const timestamp = this.now().toISOString();
         const createdAt = record.createdAt ?? timestamp;
         const updatedAt = record.updatedAt ?? timestamp;
@@ -598,15 +730,6 @@ export class PostgresKnowledgeStore {
          $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13
        )
        ON CONFLICT (id) DO UPDATE SET
-         knowledge_space_id = EXCLUDED.knowledge_space_id,
-         tenant_id = EXCLUDED.tenant_id,
-         bot_id = EXCLUDED.bot_id,
-         provider = EXCLUDED.provider,
-         model = EXCLUDED.model,
-         dimensions = EXCLUDED.dimensions,
-         distance_metric = EXCLUDED.distance_metric,
-         purpose_defaults = EXCLUDED.purpose_defaults,
-         task_instruction = EXCLUDED.task_instruction,
          status = EXCLUDED.status,
          updated_at = EXCLUDED.updated_at`, values);
         return {
@@ -785,6 +908,7 @@ export class PostgresKnowledgeStore {
             record.botId,
             record.name,
             record.visibilityScope ?? 'bot',
+            record.activeEmbeddingProfileId ?? null,
             JSON.stringify(record.metadata ?? {}),
             createdAt,
             updatedAt,
@@ -796,17 +920,19 @@ export class PostgresKnowledgeStore {
          bot_id,
          name,
          visibility_scope,
+         active_embedding_profile_id,
          metadata,
          created_at,
          updated_at
        ) VALUES (
-         $1, $2, $3, $4, $5, $6::jsonb, $7, $8
+         $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9
        )
        ON CONFLICT (id) DO UPDATE SET
          tenant_id = EXCLUDED.tenant_id,
          bot_id = EXCLUDED.bot_id,
          name = EXCLUDED.name,
          visibility_scope = EXCLUDED.visibility_scope,
+         active_embedding_profile_id = EXCLUDED.active_embedding_profile_id,
          metadata = EXCLUDED.metadata,
          updated_at = EXCLUDED.updated_at`, values);
         return {
@@ -815,6 +941,63 @@ export class PostgresKnowledgeStore {
             updatedAt,
             ...(record.visibilityScope === undefined ? { visibilityScope: 'bot' } : {}),
         };
+    }
+    async assertEmbeddingProfileImmutability(record) {
+        const pool = await this.getPool();
+        const result = await pool.query(`SELECT
+         id,
+         knowledge_space_id,
+         tenant_id,
+         bot_id,
+         provider,
+         model,
+         dimensions,
+         distance_metric,
+         purpose_defaults,
+         task_instruction,
+         status,
+         created_at,
+         updated_at
+       FROM ${this.qualifiedTableName('profiles')}
+       WHERE id = $1
+       LIMIT 1`, [record.id]);
+        const existing = result.rows[0];
+        if (!existing) {
+            return;
+        }
+        const immutableChanges = [];
+        if (existing.knowledge_space_id !== record.knowledgeSpaceId) {
+            immutableChanges.push('knowledgeSpaceId');
+        }
+        if (existing.tenant_id !== record.tenantId) {
+            immutableChanges.push('tenantId');
+        }
+        if (existing.bot_id !== record.botId) {
+            immutableChanges.push('botId');
+        }
+        if (existing.provider !== record.provider) {
+            immutableChanges.push('provider');
+        }
+        if (existing.model !== record.model) {
+            immutableChanges.push('model');
+        }
+        if (existing.dimensions !== record.dimensions) {
+            immutableChanges.push('dimensions');
+        }
+        if ((existing.distance_metric ?? 'cosine') !== (record.distanceMetric ?? 'cosine')) {
+            immutableChanges.push('distanceMetric');
+        }
+        if ((existing.task_instruction ?? null) !== (record.taskInstruction ?? null)) {
+            immutableChanges.push('taskInstruction');
+        }
+        const existingPurposes = JSON.stringify(normalizePurposeDefaults(existing.purpose_defaults));
+        const incomingPurposes = JSON.stringify(record.purposeDefaults ?? []);
+        if (existingPurposes !== incomingPurposes) {
+            immutableChanges.push('purposeDefaults');
+        }
+        if (immutableChanges.length > 0) {
+            throw new LLMError(`Embedding profiles are immutable. Create a new profile id instead of changing: ${immutableChanges.join(', ')}.`);
+        }
     }
     qualifiedTableName(tableName) {
         return `${quoteIdentifier(this.schemaName)}.${quoteIdentifier(this.tableNames[tableName])}`;
@@ -872,6 +1055,8 @@ export class PostgresKnowledgeStore {
          created_at TIMESTAMPTZ NOT NULL,
          updated_at TIMESTAMPTZ NOT NULL
        )`);
+        await pool.query(`ALTER TABLE ${spacesTable}
+       ADD COLUMN IF NOT EXISTS active_embedding_profile_id TEXT REFERENCES ${profilesTable}(id) ON DELETE SET NULL`);
         await pool.query(`CREATE TABLE IF NOT EXISTS ${sourcesTable} (
          id TEXT PRIMARY KEY,
          knowledge_space_id TEXT NOT NULL REFERENCES ${spacesTable}(id) ON DELETE CASCADE,
@@ -920,6 +1105,8 @@ export class PostgresKnowledgeStore {
        )`);
         await pool.query(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${this.tableNames.spaces}_tenant_bot_idx`)}
        ON ${spacesTable} (tenant_id, bot_id)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${this.tableNames.spaces}_active_profile_idx`)}
+       ON ${spacesTable} (active_embedding_profile_id)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${this.tableNames.profiles}_tenant_bot_status_idx`)}
        ON ${profilesTable} (tenant_id, bot_id, knowledge_space_id, status)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${this.tableNames.sources}_tenant_bot_status_idx`)}
@@ -1059,6 +1246,57 @@ function mapPostgresRetrievalResult(row, strategy) {
         result.citation = citation;
     }
     return result;
+}
+function mapPostgresEmbeddingProfile(row) {
+    return {
+        botId: row.bot_id,
+        createdAt: row.created_at,
+        dimensions: row.dimensions,
+        distanceMetric: row.distance_metric,
+        id: row.id,
+        knowledgeSpaceId: row.knowledge_space_id,
+        model: row.model,
+        provider: row.provider,
+        purposeDefaults: normalizePurposeDefaults(row.purpose_defaults),
+        ...(row.task_instruction ? { taskInstruction: row.task_instruction } : {}),
+        status: row.status,
+        tenantId: row.tenant_id,
+        updatedAt: row.updated_at,
+    };
+}
+function mapPostgresKnowledgeSource(row) {
+    return {
+        botId: row.bot_id,
+        ...(row.canonical_url ? { canonicalUrl: row.canonical_url } : {}),
+        ...(row.checksum ? { checksum: row.checksum } : {}),
+        createdAt: row.created_at,
+        ...(row.embedding_profile_id ? { embeddingProfileId: row.embedding_profile_id } : {}),
+        ...(row.error_message ? { errorMessage: row.error_message } : {}),
+        ...(row.external_id ? { externalId: row.external_id } : {}),
+        id: row.id,
+        knowledgeSpaceId: row.knowledge_space_id,
+        metadata: isJsonRecord(row.metadata) ? row.metadata : {},
+        name: row.name,
+        progressPercent: row.progress_percent,
+        sourceType: row.source_type,
+        status: row.status,
+        tenantId: row.tenant_id,
+        ...(row.title ? { title: row.title } : {}),
+        updatedAt: row.updated_at,
+    };
+}
+function normalizePurposeDefaults(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return value.filter(isEmbeddingPurpose);
+}
+function isEmbeddingPurpose(value) {
+    return (value === 'classification' ||
+        value === 'clustering' ||
+        value === 'retrieval_document' ||
+        value === 'retrieval_query' ||
+        value === 'semantic_similarity');
 }
 function parseStoredCitation(value, result) {
     if (!value || Array.isArray(value)) {

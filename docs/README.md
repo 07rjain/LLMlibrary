@@ -137,7 +137,13 @@ const embedding = await client.embed({
 - `knowledgeSpaceId`
 - `embeddingProfileId`
 
-That is intentional. The store fails closed rather than broadening the search scope. Keep stored chunk embeddings and live query embeddings on the same embedding profile. Chunking, ingestion queues, reranking, and automatic retrieval inside `complete()` / `conversation()` remain outside the core library.
+That is intentional. The store fails closed rather than broadening the search scope. Keep stored chunk embeddings and live query embeddings on the same embedding profile. `createDenseRetriever()` and `createHybridRetriever()` now accept optional rerank hooks, while `PostgresKnowledgeStore` exposes active-profile and reindex helpers such as `activateEmbeddingProfile()`, `getActiveEmbeddingProfile()`, `listKnowledgeSources()`, and `markKnowledgeSourcesNeedingReindex()`. Chunking, ingestion queues, provider-managed reranking services, and automatic retrieval inside `complete()` / `conversation()` remain outside the core library.
+
+Live embedding validation is opt-in:
+
+```bash
+LIVE_TESTS=1 pnpm test:embeddings:live
+```
 
 ## Prompt Caching Quick Start
 

@@ -274,6 +274,54 @@ describe('LLMClient', () => {
             model: 'gemini-2.5-flash',
         })).rejects.toBeInstanceOf(ProviderCapabilityError);
     });
+    it('rejects unsupported embedding dimensions', async () => {
+        const client = new LLMClient({
+            defaultEmbeddingModel: 'gemini-embedding-2',
+            geminiApiKey: 'gemini-key',
+        });
+        await expect(client.embed({
+            dimensions: 4096,
+            input: 'Hello',
+        })).rejects.toBeInstanceOf(ProviderCapabilityError);
+    });
+    it('rejects embedding titles outside retrieval_document requests', async () => {
+        const client = new LLMClient({
+            defaultEmbeddingModel: 'gemini-embedding-2',
+            geminiApiKey: 'gemini-key',
+        });
+        await expect(client.embed({
+            input: 'Hello',
+            providerOptions: {
+                google: {
+                    title: 'Refund Policy',
+                },
+            },
+            purpose: 'retrieval_query',
+        })).rejects.toBeInstanceOf(ProviderCapabilityError);
+    });
+    it('rejects multi-file embedding inputs in a single item', async () => {
+        const client = new LLMClient({
+            defaultEmbeddingModel: 'gemini-embedding-2',
+            geminiApiKey: 'gemini-key',
+        });
+        await expect(client.embed({
+            input: [
+                [
+                    {
+                        data: 'cGRm',
+                        mediaType: 'application/pdf',
+                        type: 'document',
+                    },
+                    {
+                        mediaType: 'audio/wav',
+                        type: 'audio',
+                        url: 'https://example.test/audio.wav',
+                    },
+                ],
+            ],
+            purpose: 'retrieval_document',
+        })).rejects.toBeInstanceOf(ProviderCapabilityError);
+    });
     it('provides deterministic queued embeddings through LLMClient.mock()', async () => {
         const client = LLMClient.mock({
             defaultEmbeddingModel: 'gemini-embedding-2',

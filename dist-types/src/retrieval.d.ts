@@ -67,6 +67,12 @@ export interface KnowledgeStore {
 export interface Retriever {
     search(query: RetrievalQuery): Promise<RetrievalResult[]>;
 }
+export interface RetrievalRerankContext {
+    embeddingResponse: EmbeddingResponse;
+    mode: 'dense' | 'hybrid';
+    query: RetrievalQuery;
+}
+export type RetrievalRerankHook = (results: RetrievalResult[], context: RetrievalRerankContext) => Promise<RetrievalResult[]> | RetrievalResult[];
 export interface EmbeddingInvoker {
     embed(options: EmbeddingRequestOptions): Promise<EmbeddingResponse>;
 }
@@ -83,6 +89,7 @@ export interface DenseRetrieverOptions {
     defaultTopK?: number;
     embed: EmbedFunction | EmbeddingInvoker;
     embedding?: DenseRetrieverEmbeddingOptions;
+    rerank?: RetrievalRerankHook;
     store: KnowledgeStore;
 }
 export interface HybridRetrieverOptions extends DenseRetrieverOptions {
@@ -147,6 +154,7 @@ export interface PostgresKnowledgeStoreOptions {
     tableNames?: PostgresKnowledgeStoreTableNames;
 }
 export interface PostgresKnowledgeSpaceRecord {
+    activeEmbeddingProfileId?: string;
     botId: string;
     createdAt?: string;
     id: string;
@@ -171,6 +179,14 @@ export interface PostgresEmbeddingProfileRecord {
     tenantId: string;
     updatedAt?: string;
 }
+export interface PostgresActiveEmbeddingProfileFilter {
+    botId: string;
+    knowledgeSpaceId: string;
+    tenantId: string;
+}
+export interface PostgresActivateEmbeddingProfileOptions extends PostgresActiveEmbeddingProfileFilter {
+    embeddingProfileId: string;
+}
 export interface PostgresKnowledgeSourceRecord {
     botId: string;
     canonicalUrl?: string;
@@ -189,6 +205,21 @@ export interface PostgresKnowledgeSourceRecord {
     tenantId: string;
     title?: string;
     updatedAt?: string;
+}
+export interface PostgresKnowledgeSourceListOptions {
+    botId: string;
+    embeddingProfileId?: string;
+    knowledgeSpaceId: string;
+    limit?: number;
+    statuses?: KnowledgeSourceStatus[];
+    tenantId: string;
+}
+export interface PostgresMarkKnowledgeSourcesNeedingReindexOptions {
+    botId: string;
+    fromEmbeddingProfileId?: string;
+    knowledgeSpaceId: string;
+    tenantId: string;
+    toEmbeddingProfileId: string;
 }
 export interface PostgresKnowledgeChunkRecord {
     botId: string;
@@ -240,10 +271,15 @@ export declare class PostgresKnowledgeStore implements KnowledgeStore {
     ensureSchema(): Promise<void>;
     searchByEmbedding(options: DenseKnowledgeSearchOptions): Promise<RetrievalResult[]>;
     searchByText(options: LexicalKnowledgeSearchOptions): Promise<RetrievalResult[]>;
+    activateEmbeddingProfile(options: PostgresActivateEmbeddingProfileOptions): Promise<void>;
+    getActiveEmbeddingProfile(filter: PostgresActiveEmbeddingProfileFilter): Promise<PostgresEmbeddingProfileRecord | null>;
+    listKnowledgeSources(options: PostgresKnowledgeSourceListOptions): Promise<PostgresKnowledgeSourceRecord[]>;
+    markKnowledgeSourcesNeedingReindex(options: PostgresMarkKnowledgeSourcesNeedingReindexOptions): Promise<number>;
     upsertEmbeddingProfile(record: PostgresEmbeddingProfileRecord): Promise<PostgresEmbeddingProfileRecord>;
     upsertKnowledgeChunk(record: PostgresKnowledgeChunkRecord): Promise<PostgresKnowledgeChunkRecord>;
     upsertKnowledgeSource(record: PostgresKnowledgeSourceRecord): Promise<PostgresKnowledgeSourceRecord>;
     upsertKnowledgeSpace(record: PostgresKnowledgeSpaceRecord): Promise<PostgresKnowledgeSpaceRecord>;
+    private assertEmbeddingProfileImmutability;
     private qualifiedTableName;
     private getPool;
     private runEnsureSchema;

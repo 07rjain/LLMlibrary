@@ -234,6 +234,96 @@ describe('retrieval helpers', () => {
     expect(results[0]?.score).toBeGreaterThan(results[1]?.score ?? 0);
   });
 
+  it('applies dense rerank hooks before final limiting', async () => {
+    const rerank = vi.fn(async (results: RetrievalResult[]) => [...results].reverse());
+    const retriever = createDenseRetriever({
+      defaultTopK: 2,
+      embed: async () => ({
+        embeddings: [{ index: 0, values: [0.12, 0.34, 0.56] }],
+        model: 'gemini-embedding-2',
+        provider: 'google',
+        raw: { ok: true },
+      }),
+      rerank,
+      store: {
+        searchByEmbedding: async () => [
+          {
+            chunkId: 'chunk-1',
+            score: 0.91,
+            sourceId: 'source-1',
+            text: 'First result',
+          },
+          {
+            chunkId: 'chunk-2',
+            score: 0.82,
+            sourceId: 'source-2',
+            text: 'Second result',
+          },
+        ],
+      },
+    });
+
+    const results = await retriever.search({ query: 'refund policy' });
+
+    expect(rerank).toHaveBeenCalledOnce();
+    expect(results.map((result) => result.chunkId)).toEqual(['chunk-2', 'chunk-1']);
+  });
+
+  it('applies hybrid rerank hooks after candidate fusion', async () => {
+    const rerank = vi.fn(async (results: RetrievalResult[]) => results.slice(0, 1));
+    const retriever = createHybridRetriever({
+      embed: async () => ({
+        embeddings: [{ index: 0, values: [0.4, 0.6] }],
+        model: 'gemini-embedding-2',
+        provider: 'google',
+        raw: { ok: true },
+      }),
+      rerank,
+      store: {
+        searchByEmbedding: async () => [
+          {
+            chunkId: 'chunk-1',
+            score: 0.91,
+            sourceId: 'source-1',
+            text: 'Dense result',
+          },
+        ],
+        searchByText: async () => [
+          {
+            chunkId: 'chunk-2',
+            score: 12,
+            sourceId: 'source-2',
+            text: 'Lexical result',
+          },
+        ],
+      },
+    });
+
+    const results = await retriever.search({ query: 'refund policy', topK: 2 });
+
+    expect(rerank).toHaveBeenCalledOnce();
+    expect(results).toHaveLength(1);
+  });
+
+  it('throws when a rerank hook returns a non-array result', async () => {
+    const retriever = createDenseRetriever({
+      embed: async () => ({
+        embeddings: [{ index: 0, values: [0.1, 0.2] }],
+        model: 'gemini-embedding-2',
+        provider: 'google',
+        raw: { ok: true },
+      }),
+      rerank: async () => 'invalid' as unknown as RetrievalResult[],
+      store: {
+        searchByEmbedding: async () => [],
+      },
+    });
+
+    await expect(retriever.search({ query: 'refund policy' })).rejects.toBeInstanceOf(
+      LLMError,
+    );
+  });
+
   it('throws when hybrid retrieval is requested without lexical support', async () => {
     const retriever = createHybridRetriever({
       embed: async () => ({

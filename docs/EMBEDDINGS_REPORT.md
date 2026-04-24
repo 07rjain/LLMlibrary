@@ -47,12 +47,14 @@ The current codebase now exposes the first embeddings slice:
 - the Gemini adapter implements the selected Google Embedding 2 transport
 - canonical embedding request/response types now live in `src/types.ts`
 - the package now ships optional retrieval primitives in `src/retrieval.ts`
-- the retrieval module now includes `PostgresKnowledgeStore` for app-owned `pgvector` storage, strict filtered search, and schema bootstrap helpers
+- the retrieval module now includes `PostgresKnowledgeStore` for app-owned `pgvector` storage, strict filtered search, schema bootstrap helpers, active-profile helpers, and source reindex helpers
+- dense and hybrid retrievers now accept optional rerank hooks
+- live embedding smoke coverage now exists under `pnpm test:embeddings:live`
 
 What is still intentionally missing:
 
-- ingestion queues and source lifecycle management
-- rerank integrations
+- full ingestion queue orchestration
+- provider-hosted rerank integrations
 - automatic retrieval inside `complete()` or `conversation()`
 
 ## Provider Decision For V1
@@ -108,6 +110,7 @@ Current implementation status:
 - unsupported providers fail clearly
 - optional retrieval helpers now ship through the package root and `unified-llm-client/retrieval`
 - `PostgresKnowledgeStore` now ships for the recommended `Postgres + pgvector` architecture
+- live validation now exists for Gemini text embeddings, Postgres-backed retrieval smoke, and an opt-in tiny-PDF embedding smoke
 
 ### Critical design rule
 

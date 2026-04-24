@@ -154,13 +154,18 @@ Priority: `P0`
 
 - [x] Finalize how file and document inputs map into the selected Google Embedding 2 transport
 - [x] Add capability metadata for supported file/document modalities
-- [ ] Add request validation for unsupported file combinations or limits
+- [x] Add request validation for unsupported file combinations or limits
 - [x] Add file/PDF-focused adapter coverage
-- [ ] Add live file/PDF smoke validation behind an opt-in gate
+- [x] Add live file/PDF smoke validation behind an opt-in gate
 
 Acceptance criteria:
 
 - The first release actually serves the widget’s PDF/file ingestion requirement
+
+Current implementation note:
+
+- `client.embed()` now validates positive integer dimensions, enforces model modality metadata, restricts `providerOptions.google.title` to `retrieval_document`, and rejects mixed or multi-file binary inputs within a single embedding item.
+- Live file/PDF validation now ships in `test/embeddings_test/embeddings.live.test.ts` and is enabled with `GEMINI_EMBEDDING_PDF_LIVE=1`.
 
 ## Phase 4 - Retrieval Primitives
 
@@ -207,7 +212,7 @@ Priority: `P1`
 - [x] Add `createDenseRetriever()`
 - [x] Add `createHybridRetriever()`
 - [x] Add lexical-search merge helpers
-- [ ] Add optional rerank hook points
+- [x] Add optional rerank hook points
 - [x] Add token-budget-aware context formatting helpers
 
 Acceptance criteria:
@@ -218,8 +223,9 @@ Acceptance criteria:
 Current implementation note:
 
 - `createDenseRetriever()`, `createHybridRetriever()`, `mergeRetrievalCandidates()`, and `formatRetrievedContext()` now ship in `src/retrieval.ts`.
+- Dense and hybrid retrievers now accept optional rerank hooks without moving reranking into `LLMClient`.
 - Retrieval stays outside `LLMClient`; callers still orchestrate retrieval explicitly before `complete()` or `conversation.send()`.
-- Rerank hooks are still deferred. The current hybrid helper focuses on dense-plus-lexical fusion and prompt-context formatting.
+- The current helper layer still stops short of provider-hosted rerank APIs. It exposes hook points only.
 
 ## Phase 5 - Safety, Isolation, And Scale
 
@@ -243,38 +249,50 @@ Acceptance criteria:
 ### EMB-13 Immutable embedding profiles and reindexing
 Priority: `P0`
 
-- [ ] Treat embedding profiles as immutable
-- [ ] Add active-profile pointer semantics
-- [ ] Define blue/green reindex rollout
-- [ ] Prevent mixed-model retrieval by requiring an exact profile match
-- [ ] Document reindex triggers when model, dimensions, or task instructions change
+- [x] Treat embedding profiles as immutable
+- [x] Add active-profile pointer semantics
+- [x] Define blue/green reindex rollout
+- [x] Prevent mixed-model retrieval by requiring an exact profile match
+- [x] Document reindex triggers when model, dimensions, or task instructions change
 
 Acceptance criteria:
 
 - Switching embedding settings does not corrupt live retrieval
 
+Current implementation note:
+
+- `PostgresKnowledgeStore.upsertEmbeddingProfile()` now rejects immutable profile-shape changes for an existing profile id.
+- `knowledge_spaces.active_embedding_profile_id`, `activateEmbeddingProfile()`, and `getActiveEmbeddingProfile()` now support explicit active-profile cutover semantics.
+- `markKnowledgeSourcesNeedingReindex()` now gives the app layer a concrete blue/green rollout helper for profile swaps.
+
 ### EMB-14 Reliability and operational limits
 Priority: `P1`
 
-- [ ] Define ingestion status model:
-  - [ ] `queued`
-  - [ ] `processing`
-  - [ ] `ready`
-  - [ ] `failed`
-  - [ ] `needs_reindex`
-- [ ] Add idempotency guidance for re-runs and worker retries
-- [ ] Add checksum guidance for sources
-- [ ] Define hot-path limits:
-  - [ ] max chunk size
-  - [ ] max `topK`
-  - [ ] max rerank set
-  - [ ] max retrieval context tokens
-  - [ ] max concurrent embed jobs per tenant
-- [ ] Define retrieval-specific observability metrics
+- [x] Define ingestion status model:
+  - [x] `queued`
+  - [x] `processing`
+  - [x] `ready`
+  - [x] `failed`
+  - [x] `needs_reindex`
+- [x] Add idempotency guidance for re-runs and worker retries
+- [x] Add checksum guidance for sources
+- [x] Define hot-path limits:
+  - [x] max chunk size
+  - [x] max `topK`
+  - [x] max rerank set
+  - [x] max retrieval context tokens
+  - [x] max concurrent embed jobs per tenant
+- [x] Define retrieval-specific observability metrics
 
 Acceptance criteria:
 
 - Embedding and retrieval traffic can scale without blocking chat traffic or corrupting source state
+
+Current implementation note:
+
+- The Postgres schema and types now expose the ingestion lifecycle directly through `KnowledgeSourceStatus` and source records.
+- Source records already carry `checksum`, `progressPercent`, and `errorMessage`, and the store now exposes `listKnowledgeSources()` plus `markKnowledgeSourcesNeedingReindex()` for app-side workers.
+- The operational limits, idempotency guidance, and observability guidance remain documented in the embeddings architecture reports rather than hidden inside `LLMClient`.
 
 ## Phase 6 - Tests, Docs, And Validation
 
@@ -294,10 +312,10 @@ Acceptance criteria:
 ### EMB-16 Live tests
 Priority: `P1`
 
-- [ ] Add `LIVE_TESTS=1` embedding smoke coverage
-- [ ] Validate the selected Google Embedding 2 path with real keys
-- [ ] Validate file/PDF embedding behavior on the selected Google path
-- [ ] Add optional Postgres retrieval smoke coverage if retrieval helpers ship
+- [x] Add `LIVE_TESTS=1` embedding smoke coverage
+- [x] Validate the selected Google Embedding 2 path with real keys
+- [x] Validate file/PDF embedding behavior on the selected Google path
+- [x] Add optional Postgres retrieval smoke coverage if retrieval helpers ship
 
 Acceptance criteria:
 
@@ -327,19 +345,21 @@ Acceptance criteria:
 3. [x] EMB-03 model registry metadata
 4. [x] EMB-05 Google Embedding 2 transport
 5. [x] EMB-06 unsupported-provider handling
-6. [ ] EMB-07 file / PDF support on the Google path
+6. [x] EMB-07 file / PDF support on the Google path
 7. [x] EMB-15 unit tests
 8. [x] EMB-17 docs and examples
 9. [x] EMB-04 usage and cost policy
 10. [x] EMB-09 retrieval interfaces
 11. [x] EMB-10 Postgres knowledge store helpers
-12. [ ] EMB-11 dense and hybrid retrievers
-13. [ ] EMB-12 to EMB-14 safety, isolation, and scale hardening
-14. [ ] EMB-16 live tests
+12. [x] EMB-11 dense and hybrid retrievers
+13. [x] EMB-12 to EMB-14 safety, isolation, and scale hardening
+14. [x] EMB-16 live tests
 
 Current verification note:
 
-- Local validation is green for `pnpm test`, `pnpm lint`, `pnpm build`, `pnpm sizecheck`, and `pnpm docs:build` after the Postgres retrieval helper slice.
+- Local validation is green for `pnpm test`, `pnpm lint`, `pnpm build`, `pnpm sizecheck`, and `pnpm docs:build`.
+- Real-provider validation passed with `LIVE_TESTS=1 pnpm test:embeddings:live`.
+- Real Gemini text embedding, Postgres-backed dense retrieval, and the gated tiny-PDF embedding smoke all passed against the credentials in `.env`.
 
 ## Open Questions
 

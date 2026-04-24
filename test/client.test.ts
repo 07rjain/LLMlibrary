@@ -373,6 +373,125 @@ describe('LLMClient', () => {
     ).rejects.toBeInstanceOf(ProviderCapabilityError);
   });
 
+  it('rejects unsupported embedding dimensions', async () => {
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.embed({
+        dimensions: 4096,
+        input: 'Hello',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+  });
+
+  it('rejects embedding titles outside retrieval_document requests', async () => {
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.embed({
+        input: 'Hello',
+        providerOptions: {
+          google: {
+            title: 'Refund Policy',
+          },
+        },
+        purpose: 'retrieval_query',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+  });
+
+  it('rejects multi-file embedding inputs in a single item', async () => {
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.embed({
+        input: [
+          [
+            {
+              data: 'cGRm',
+              mediaType: 'application/pdf',
+              type: 'document',
+            },
+            {
+              mediaType: 'audio/wav',
+              type: 'audio',
+              url: 'https://example.test/audio.wav',
+            },
+          ],
+        ],
+        purpose: 'retrieval_document',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+  });
+
+  it('rejects multiple files of the same modality in one embedding item', async () => {
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.embed({
+        input: [
+          [
+            {
+              data: 'cGRm',
+              mediaType: 'application/pdf',
+              type: 'document',
+            },
+            {
+              data: 'cGRmMg==',
+              mediaType: 'application/pdf',
+              type: 'document',
+            },
+          ],
+        ],
+        purpose: 'retrieval_document',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+  });
+
+  it('rejects empty embedding text and tool parts before dispatch', async () => {
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.embed({
+        input: '   ',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+
+    await expect(
+      client.embed({
+        input: [],
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+
+    await expect(
+      client.embed({
+        input: [
+          {
+            args: {},
+            id: 'call_1',
+            name: 'lookup',
+            type: 'tool_call',
+          },
+        ] as never,
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+  });
+
   it('provides deterministic queued embeddings through LLMClient.mock()', async () => {
     const client = LLMClient.mock({
       defaultEmbeddingModel: 'gemini-embedding-2',

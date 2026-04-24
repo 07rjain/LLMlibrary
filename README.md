@@ -350,7 +350,9 @@ The retrieval module currently includes:
 - `mergeRetrievalCandidates()`
 - `formatRetrievedContext()`
 
-When you use `PostgresKnowledgeStore`, search requests must stay fully scoped. Pass `tenantId`, `botId`, `knowledgeSpaceId`, and `embeddingProfileId`, and use the same embedding profile for chunk ingestion and live query embedding. The retrieval helpers intentionally do not take over chunking, ingestion queues, reranking, or automatic retrieval inside `complete()` / `conversation()`.
+`createDenseRetriever()` and `createHybridRetriever()` now also accept optional rerank hooks, and `PostgresKnowledgeStore` now exposes active-profile and reindex helpers such as `activateEmbeddingProfile()`, `getActiveEmbeddingProfile()`, `listKnowledgeSources()`, and `markKnowledgeSourcesNeedingReindex()`.
+
+When you use `PostgresKnowledgeStore`, search requests must stay fully scoped. Pass `tenantId`, `botId`, `knowledgeSpaceId`, and `embeddingProfileId`, and use the same embedding profile for chunk ingestion and live query embedding. The retrieval helpers intentionally do not take over chunking, ingestion queues, provider-managed reranking services, or automatic retrieval inside `complete()` / `conversation()`.
 
 ## Runtime Support
 
@@ -494,6 +496,7 @@ Optional live-provider smoke tests stay opt-in:
 
 ```bash
 LIVE_TESTS=1 pnpm test:live
+LIVE_TESTS=1 pnpm test:embeddings:live
 pnpm test:prompt-caching:live
 ```
 

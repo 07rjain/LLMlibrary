@@ -79,6 +79,9 @@ describe('PostgresKnowledgeStore', () => {
         query.text.includes('"knowledge_chunks_search_document_idx"'),
       ),
     ).toBe(true);
+    expect(
+      pool.queries.some((query) => query.text.includes('active_embedding_profile_id')),
+    ).toBe(true);
   });
 
   it('can skip extension creation when the database is already prepared', async () => {
@@ -152,6 +155,118 @@ describe('PostgresKnowledgeStore', () => {
       url: 'https://example.test/refunds.pdf',
     });
     expect(chunk.scopeType).toBe('bot');
+  });
+
+  it('activates and resolves the active embedding profile for a knowledge space', async () => {
+    const profileRow = {
+      bot_id: 'bot-1',
+      created_at: '2026-04-24T00:00:00.000Z',
+      dimensions: 768,
+      distance_metric: 'cosine',
+      id: 'profile-2',
+      knowledge_space_id: 'space-1',
+      model: 'gemini-embedding-2',
+      provider: 'google',
+      purpose_defaults: ['retrieval_document', 'retrieval_query'],
+      status: 'active',
+      task_instruction: 'Embed support content.',
+      tenant_id: 'tenant-1',
+      updated_at: '2026-04-24T00:00:00.000Z',
+    };
+    const pool = new MockPgPool((text) => {
+      if (text.startsWith('SELECT')) {
+        return { rowCount: 1, rows: [profileRow] };
+      }
+
+      return { rowCount: 1, rows: [] };
+    });
+    const store = new PostgresKnowledgeStore({ pool });
+
+    await store.activateEmbeddingProfile({
+      botId: 'bot-1',
+      embeddingProfileId: 'profile-2',
+      knowledgeSpaceId: 'space-1',
+      tenantId: 'tenant-1',
+    });
+
+    const active = await store.getActiveEmbeddingProfile({
+      botId: 'bot-1',
+      knowledgeSpaceId: 'space-1',
+      tenantId: 'tenant-1',
+    });
+
+    const updateQuery = pool.queries.find((query) => query.text.startsWith('UPDATE'));
+    expect(updateQuery?.text).toContain('active_embedding_profile_id');
+    expect(active).toMatchObject({
+      dimensions: 768,
+      id: 'profile-2',
+      knowledgeSpaceId: 'space-1',
+      model: 'gemini-embedding-2',
+      purposeDefaults: ['retrieval_document', 'retrieval_query'],
+      taskInstruction: 'Embed support content.',
+    });
+  });
+
+  it('returns null when no active embedding profile is configured', async () => {
+    const pool = new MockPgPool((text) => {
+      if (text.startsWith('SELECT')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      return { rowCount: 0, rows: [] };
+    });
+    const store = new PostgresKnowledgeStore({ pool });
+
+    const active = await store.getActiveEmbeddingProfile({
+      botId: 'bot-1',
+      knowledgeSpaceId: 'space-1',
+      tenantId: 'tenant-1',
+    });
+
+    expect(active).toBeNull();
+  });
+
+  it('treats embedding profile shape as immutable', async () => {
+    const pool = new MockPgPool((text) => {
+      if (text.startsWith('SELECT')) {
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              bot_id: 'bot-1',
+              created_at: '2026-04-24T00:00:00.000Z',
+              dimensions: 768,
+              distance_metric: 'cosine',
+              id: 'profile-immutable',
+              knowledge_space_id: 'space-1',
+              model: 'gemini-embedding-2',
+              provider: 'google',
+              purpose_defaults: ['retrieval_document'],
+              status: 'active',
+              task_instruction: null,
+              tenant_id: 'tenant-1',
+              updated_at: '2026-04-24T00:00:00.000Z',
+            },
+          ],
+        };
+      }
+
+      return { rowCount: 0, rows: [] };
+    });
+    const store = new PostgresKnowledgeStore({ pool });
+
+    await expect(
+      store.upsertEmbeddingProfile({
+        botId: 'bot-1',
+        dimensions: 1536,
+        id: 'profile-immutable',
+        knowledgeSpaceId: 'space-1',
+        model: 'gemini-embedding-2',
+        provider: 'google',
+        purposeDefaults: ['retrieval_document'],
+        tenantId: 'tenant-1',
+      }),
+    ).rejects.toBeInstanceOf(LLMError);
   });
 
   it('requires strict filters for Postgres retrieval', async () => {
@@ -395,6 +510,88 @@ describe('PostgresKnowledgeStore', () => {
       sourceName: 'Fees FAQ',
       text: 'Processing fees are non-refundable.',
     });
+  });
+
+  it('lists knowledge sources and can mark them as needing reindex', async () => {
+    const pool = new MockPgPool((text) => {
+      if (text.startsWith('SELECT')) {
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              bot_id: 'bot-1',
+              canonical_url: 'https://example.test/refunds.pdf',
+              checksum: 'abc123',
+              created_at: '2026-04-24T00:00:00.000Z',
+              embedding_profile_id: 'profile-1',
+              error_message: null,
+              external_id: 'ext-1',
+              id: 'source-1',
+              knowledge_space_id: 'space-1',
+              metadata: { locale: 'en' },
+              name: 'Refund Policy PDF',
+              progress_percent: 100,
+              source_type: 'pdf',
+              status: 'ready',
+              tenant_id: 'tenant-1',
+              title: 'Refund Policy',
+              updated_at: '2026-04-24T00:00:00.000Z',
+            },
+          ],
+        };
+      }
+
+      return { rowCount: 2, rows: [] };
+    });
+    const store = new PostgresKnowledgeStore({ pool });
+
+    const sources = await store.listKnowledgeSources({
+      botId: 'bot-1',
+      embeddingProfileId: 'profile-1',
+      knowledgeSpaceId: 'space-1',
+      statuses: ['ready'],
+      tenantId: 'tenant-1',
+    });
+    const updated = await store.markKnowledgeSourcesNeedingReindex({
+      botId: 'bot-1',
+      fromEmbeddingProfileId: 'profile-1',
+      knowledgeSpaceId: 'space-1',
+      tenantId: 'tenant-1',
+      toEmbeddingProfileId: 'profile-2',
+    });
+
+    const selectQuery = pool.queries.find(
+      (query) => query.text.startsWith('SELECT') && query.text.includes('FROM "public"."knowledge_sources"'),
+    );
+    const updateQuery = pool.queries.find(
+      (query) => query.text.startsWith('UPDATE') && query.text.includes('"public"."knowledge_sources"'),
+    );
+
+    expect(selectQuery?.text).toContain('status = ANY');
+    expect(updateQuery?.text).toContain("status = 'needs_reindex'");
+    expect(sources[0]).toMatchObject({
+      checksum: 'abc123',
+      embeddingProfileId: 'profile-1',
+      sourceType: 'pdf',
+      status: 'ready',
+    });
+    expect(updated).toBe(2);
+  });
+
+  it('can mark knowledge sources for reindex without restricting the previous profile id', async () => {
+    const pool = new MockPgPool(() => ({ rowCount: 3, rows: [] }));
+    const store = new PostgresKnowledgeStore({ pool });
+
+    const updated = await store.markKnowledgeSourcesNeedingReindex({
+      botId: 'bot-1',
+      knowledgeSpaceId: 'space-1',
+      tenantId: 'tenant-1',
+      toEmbeddingProfileId: 'profile-2',
+    });
+
+    const updateQuery = pool.queries.find((query) => query.text.startsWith('UPDATE'));
+    expect(updateQuery?.text).not.toContain('embedding_profile_id = $6');
+    expect(updated).toBe(3);
   });
 
   it('maps explicit stored citations from Postgres rows', async () => {
