@@ -1,7 +1,7 @@
 # Embeddings Integration Report
 
 Prepared: `2026-04-22`  
-Updated: `2026-04-24`
+Updated: `2026-04-25`
 
 This report describes how embeddings should be added to `unified-llm-client` for the chatbot widget product.
 
@@ -48,8 +48,12 @@ The current codebase now exposes the first embeddings slice:
 - the Gemini adapter implements the selected Google Embedding 2 transport
 - canonical embedding request/response types now live in `src/types.ts`
 - the package now ships optional retrieval primitives in `src/retrieval.ts`
+- the retrieval package now includes `createInMemoryKnowledgeStore()` for demos, tests, and single-process apps
 - the retrieval module now includes `PostgresKnowledgeStore` for app-owned `pgvector` storage, strict filtered search, schema bootstrap helpers, active-profile helpers, and source reindex helpers
+- reusable text cleanup and splitting helpers now ship through `unified-llm-client/chunking`
 - dense and hybrid retrievers now accept optional rerank hooks
+- `formatRetrievedContext()` now supports explicit score-display modes so retrieval scores are not mislabeled as probabilities in logs or UI text
+- `client.models.listRemote({ provider })` now exists for discovery, but it still does not auto-register new models into the local routing registry
 - live embedding smoke coverage now exists under `pnpm test:embeddings:live`
 
 What is still intentionally missing:

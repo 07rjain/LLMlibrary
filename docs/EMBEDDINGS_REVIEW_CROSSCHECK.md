@@ -10,31 +10,32 @@ This note cross-checks six follow-up suggestions from an external review against
 
 ## Summary
 
-- `InMemoryKnowledgeStore` and `JsonFileKnowledgeStore` are valid, high-leverage follow-ups.
-- A small `chunking` helper module is also a strong fit for the library.
-- Internal Gemini batching is a valid optimization, and current public docs do cover `gemini-embedding-2` multimodal inputs including PDF.
-- `client.extractText()` is useful in products, but it is not a clean fit for the core `LLMClient` surface.
-- OpenAI embeddings are a valid future provider addition, but not a missing v1 feature.
-- Score normalization is a reasonable low-priority formatting enhancement.
+- `createInMemoryKnowledgeStore()` is now shipped.
+- `unified-llm-client/chunking` is now shipped.
+- Retrieval score-display normalization is now shipped through `scoreDisplay: 'raw' | 'relative_top_1'`.
+- `createJsonFileKnowledgeStore()` is still a valid follow-up, but it remains unimplemented.
+- Internal Gemini batching is still a valid optimization target, and current public docs do cover `gemini-embedding-2` multimodal inputs including PDF.
+- `client.extractText()` is still product-useful, but it remains a poor fit for the core `LLMClient` surface.
+- OpenAI embeddings remain a valid future provider addition, but not a missing v1 feature.
 
 ## 1. `InMemoryKnowledgeStore` / `JsonFileKnowledgeStore`
 
-Verdict: `Valid`
+Verdict: `Partially addressed`
 
 Why this concern is real:
 
-- The retrieval module currently ships `PostgresKnowledgeStore`, but no lightweight store for demos, unit tests, or simple local deployments.
-- That means small projects still need custom storage glue even when they do not want Postgres.
+- The original review correctly identified a real gap: the retrieval module used to ship only `PostgresKnowledgeStore`.
+- That gap is now only partially open because the in-memory store has landed, but a file-backed local store still does not exist.
 
 Current repo state:
 
-- `src/retrieval.ts` exports `KnowledgeStore`, `createDenseRetriever()`, `createHybridRetriever()`, `mergeRetrievalCandidates()`, `formatRetrievedContext()`, and `PostgresKnowledgeStore`.
-- There is no built-in in-memory or JSON-file implementation today.
+- `src/retrieval.ts` now exports `createInMemoryKnowledgeStore()` alongside `KnowledgeStore`, `createDenseRetriever()`, `createHybridRetriever()`, `mergeRetrievalCandidates()`, `formatRetrievedContext()`, and `PostgresKnowledgeStore`.
+- There is still no built-in JSON-file implementation today.
 
 Recommended direction:
 
-- Add `createInMemoryKnowledgeStore()` first.
-- Add `createJsonFileKnowledgeStore()` second as a Node-only convenience layer.
+- Keep `createInMemoryKnowledgeStore()` as the lightweight built-in path.
+- Add `createJsonFileKnowledgeStore()` next as a Node-only convenience layer.
 - Keep both explicitly positioned as test/demo/single-process helpers, not as the production default.
 
 Why I would not overreach:
@@ -44,21 +45,18 @@ Why I would not overreach:
 
 ## 2. `unified-llm-client/chunking`
 
-Verdict: `Valid`
+Verdict: `Addressed`
 
 Why this concern is real:
 
 - The current library intentionally leaves chunking in the app layer.
 - That is clean architecturally, but it does force every RAG consumer to rewrite the same text cleanup and splitting utilities.
 
-Recommended direction:
+Current repo state:
 
-- Add a small helper subpath such as `unified-llm-client/chunking`.
-- Keep the first version deterministic and dependency-light:
-  - `cleanText()`
-  - `stripHtml()`
-  - `chunkText()`
-  - optional Markdown-aware chunking if needed
+- The library now ships `unified-llm-client/chunking`.
+- The current public helpers are `cleanText()`, `stripHtml()`, and `chunkText()`.
+- The implementation is deterministic and dependency-light, which is the right first release shape.
 
 Important limit:
 
@@ -143,7 +141,7 @@ Recommended direction:
 
 ## 6. Score normalization in `formatRetrievedContext()`
 
-Verdict: `Valid, low priority`
+Verdict: `Addressed`
 
 Why this concern is real:
 
@@ -152,14 +150,15 @@ Why this concern is real:
 
 Current repo state:
 
-- `formatRetrievedContext()` supports `includeScores`, but not normalized display scores.
+- `formatRetrievedContext()` now supports `scoreDisplay: 'raw' | 'relative_top_1'`.
+- Raw score output is explicitly labeled as `raw dense similarity`, `raw lexical relevance`, `raw fused rank score`, or `raw retrieval score`.
+- Relative display scores are clearly labeled as display-only and not probabilities.
 
-Recommended direction:
+What remains important:
 
-- If a consumer needs cleaner score display, add a display-only option such as:
-  - `normalizeScores: true`
-  - or `scoreDisplay: 'raw' | 'relative'`
-- Keep raw `RetrievalResult.score` unchanged so callers can still inspect the underlying ranking output.
+- Keep `RetrievalResult.score` unchanged.
+- Treat `scoreDisplay` as formatting only, not ranking logic.
+- Only surface relative scores in UI or logs when that presentation is actually useful.
 
 ## Recommended Follow-Up Order
 

@@ -1,8 +1,16 @@
 # OpenAI Responses Migration Report
 
-Prepared: `2026-04-21`
+Prepared: `2026-04-21`  
+Updated: `2026-04-25`
 
 This report documents the replacement of the OpenAI adapter's use of `POST /v1/chat/completions` with `POST /v1/responses` while keeping this library's own `Conversation` and `SessionApi` as the source of truth for history and persistence.
+
+Current status:
+
+- the OpenAI adapter now uses the Responses API only
+- `store: false` is sent explicitly
+- library-owned `Conversation` and `SessionApi` state remain the source of truth
+- the earlier dual-transport rollout notes below are historical migration planning, not the current runtime design
 
 ## Objective
 
@@ -329,7 +337,9 @@ Suggested rollout-safe behavior:
 
 ## Smooth Transition Plan
 
-Do not replace the adapter in one destructive step.
+Historical note:
+
+This section describes the recommended rollout before implementation. The repo has since completed the migration and removed the Chat Completions transport path.
 
 Use a phased rollout:
 
@@ -477,17 +487,15 @@ Recommendation:
 
 ## Recommended Decision
 
-Proceed with the migration, but do it as a dual-transport rollout rather than a hard delete of Chat Completions in the first implementation step.
+The migration is complete.
 
-The practical target state should be:
+The current target state described in this report is now the implemented state:
 
-- OpenAI adapter uses Responses by default
+- OpenAI adapter uses Responses only
 - `store: false` is always explicit
 - no OpenAI conversation state is used
 - `Conversation` and `SessionApi` remain the state layer
-- Chat Completions fallback exists only briefly, then is removed
-
-That is the smoothest path that matches both the current codebase and the current OpenAI docs.
+- Chat Completions fallback has been removed
 
 ## Source Links
 

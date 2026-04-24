@@ -4,6 +4,8 @@ This guide shows how to move from raw provider SDK calls to the unified client s
 
 ## OpenAI Chat Completions to `LLMClient`
 
+The unified client still accepts canonical `messages`, but the OpenAI adapter now translates them onto the Responses API internally. You do not need to migrate your application code to raw Responses payloads.
+
 Raw SDK shape:
 
 ```ts

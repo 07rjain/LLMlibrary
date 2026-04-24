@@ -84,15 +84,15 @@ That means the current embeddings implementation is complete for the v1 product 
 
 ## Fix 1: Add Lightweight Knowledge Stores
 
+Status: `Partially shipped`
+
 ### Why this is worth doing
 
-The retrieval module currently has a production-grade Postgres path, but no low-friction local path.
+The retrieval module now has a production-grade Postgres path and a shipped in-memory path, but it still has no file-backed local path.
 
-That leaves three avoidable problems:
+That leaves the remaining practical gap:
 
-- examples need custom storage code
-- tests need custom fake stores
-- simple deployments pay a Postgres complexity tax too early
+- simple single-process apps still do not get a persistence option between RAM and Postgres
 
 ### What to ship
 
@@ -107,7 +107,7 @@ import {
 
 Recommended first surface:
 
-- `createInMemoryKnowledgeStore()`
+- `createInMemoryKnowledgeStore()` `Shipped`
 - `createJsonFileKnowledgeStore(path, options?)`
 
 ### Proposed behavior
@@ -161,6 +161,8 @@ Add:
 
 ## Fix 2: Add `unified-llm-client/chunking`
 
+Status: `Shipped`
+
 ### Why this is worth doing
 
 Chunking is still the most duplicated part of every RAG app built on top of this library.
@@ -181,9 +183,9 @@ import {
 
 Recommended v1 surface:
 
-- `cleanText(input: string): string`
-- `stripHtml(input: string): string`
-- `chunkText(input: string, options?): TextChunk[]`
+- `cleanText(input: string): string` `Shipped`
+- `stripHtml(input: string): string` `Shipped`
+- `chunkText(input: string, options?): TextChunk[]` `Shipped`
 
 Recommended chunk output:
 
@@ -210,9 +212,9 @@ Reasons:
 
 Add:
 
-- `src/chunking.ts`
-- `./chunking` export in `package.json`
-- `chunking` entry in `tsup.config.ts`
+- `src/chunking.ts` `Shipped`
+- `./chunking` export in `package.json` `Shipped`
+- `chunking` entry in `tsup.config.ts` `Shipped`
 
 This keeps it symmetrical with `./retrieval`.
 
@@ -308,6 +310,8 @@ formatRetrievedContext(results, {
 ```
 
 I would avoid a vague `normalizeScores: true` flag. A named display mode is easier to interpret later.
+
+Status: `Shipped`
 
 ### Concrete code change
 
