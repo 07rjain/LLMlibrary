@@ -31,7 +31,7 @@ export function stripHtml(input) {
         .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
         .replace(/<(br|hr)\b[^>]*\/?>/gi, '\n')
         .replace(/<li\b[^>]*>/gi, '\n- ')
-        .replace(/<\/(p|div|section|article|header|footer|aside|nav|ul|ol|li|table|thead|tbody|tfoot|tr|td|th|blockquote|pre|h[1-6])>/gi, '\n')
+        .replace(/<\/(p|div|section|article|header|footer|aside|nav|ul|ol|table|thead|tbody|tfoot|tr|td|th|blockquote|pre|h[1-6])>/gi, '\n')
         .replace(/<(p|div|section|article|header|footer|aside|nav|ul|ol|table|thead|tbody|tfoot|tr|blockquote|pre|h[1-6])\b[^>]*>/gi, '\n')
         .replace(/<[^>]+>/g, ' ');
     return cleanText(decodeHtmlEntities(withStructure));

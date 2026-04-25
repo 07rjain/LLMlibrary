@@ -1470,8 +1470,70 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
     options: ActivateEmbeddingProfileOptions,
   ): Promise<void> {
     const existing = this.spaces.get(options.knowledgeSpaceId);
-    if (!existing || existing.tenantId !== options.tenantId || existing.botId !== options.botId) {
-      return;
+    if (!existing) {
+      throw new LLMError(
+        `Cannot activate embedding profile "${options.embeddingProfileId}" because knowledge space "${options.knowledgeSpaceId}" does not exist.`,
+        {
+          details: {
+            botId: options.botId,
+            embeddingProfileId: options.embeddingProfileId,
+            knowledgeSpaceId: options.knowledgeSpaceId,
+            tenantId: options.tenantId,
+          },
+        },
+      );
+    }
+
+    if (existing.tenantId !== options.tenantId || existing.botId !== options.botId) {
+      throw new LLMError(
+        `Cannot activate embedding profile "${options.embeddingProfileId}" because knowledge space "${options.knowledgeSpaceId}" does not belong to tenant "${options.tenantId}" and bot "${options.botId}".`,
+        {
+          details: {
+            actualBotId: existing.botId,
+            actualTenantId: existing.tenantId,
+            botId: options.botId,
+            embeddingProfileId: options.embeddingProfileId,
+            knowledgeSpaceId: options.knowledgeSpaceId,
+            tenantId: options.tenantId,
+          },
+        },
+      );
+    }
+
+    const profile = this.profiles.get(options.embeddingProfileId);
+    if (!profile) {
+      throw new LLMError(
+        `Cannot activate embedding profile "${options.embeddingProfileId}" because the profile does not exist.`,
+        {
+          details: {
+            botId: options.botId,
+            embeddingProfileId: options.embeddingProfileId,
+            knowledgeSpaceId: options.knowledgeSpaceId,
+            tenantId: options.tenantId,
+          },
+        },
+      );
+    }
+
+    if (
+      profile.tenantId !== options.tenantId ||
+      profile.botId !== options.botId ||
+      profile.knowledgeSpaceId !== options.knowledgeSpaceId
+    ) {
+      throw new LLMError(
+        `Cannot activate embedding profile "${options.embeddingProfileId}" because it does not belong to knowledge space "${options.knowledgeSpaceId}" for tenant "${options.tenantId}" and bot "${options.botId}".`,
+        {
+          details: {
+            actualBotId: profile.botId,
+            actualKnowledgeSpaceId: profile.knowledgeSpaceId,
+            actualTenantId: profile.tenantId,
+            botId: options.botId,
+            embeddingProfileId: options.embeddingProfileId,
+            knowledgeSpaceId: options.knowledgeSpaceId,
+            tenantId: options.tenantId,
+          },
+        },
+      );
     }
 
     const timestamp = this.now().toISOString();
@@ -1816,10 +1878,11 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
     options: PostgresActivateEmbeddingProfileOptions,
   ): Promise<void> {
     await this.ensureSchema();
+    await this.assertActivatableEmbeddingProfile(options);
 
     const timestamp = this.now().toISOString();
     const pool = await this.getPool();
-    await pool.query(
+    const result = await pool.query(
       `UPDATE ${this.qualifiedTableName('spaces')}
        SET active_embedding_profile_id = $1,
            updated_at = $2
@@ -1834,6 +1897,20 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
         options.botId,
       ],
     );
+
+    if ((result.rowCount ?? 0) === 0) {
+      throw new LLMError(
+        `Failed to activate embedding profile "${options.embeddingProfileId}" for knowledge space "${options.knowledgeSpaceId}".`,
+        {
+          details: {
+            botId: options.botId,
+            embeddingProfileId: options.embeddingProfileId,
+            knowledgeSpaceId: options.knowledgeSpaceId,
+            tenantId: options.tenantId,
+          },
+        },
+      );
+    }
   }
 
   async getActiveEmbeddingProfile(
@@ -2322,6 +2399,68 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
     tableName: keyof Required<PostgresKnowledgeStoreTableNames>,
   ): string {
     return `${quoteIdentifier(this.schemaName)}.${quoteIdentifier(this.tableNames[tableName])}`;
+  }
+
+  private async assertActivatableEmbeddingProfile(
+    options: PostgresActivateEmbeddingProfileOptions,
+  ): Promise<void> {
+    const pool = await this.getPool();
+    const result = await pool.query<{
+      profile_exists: boolean;
+      space_exists: boolean;
+    }>(
+      `SELECT
+         EXISTS(
+           SELECT 1
+           FROM ${this.qualifiedTableName('spaces')}
+           WHERE id = $1
+             AND tenant_id = $2
+             AND bot_id = $3
+         ) AS space_exists,
+         EXISTS(
+           SELECT 1
+           FROM ${this.qualifiedTableName('profiles')}
+           WHERE id = $4
+             AND knowledge_space_id = $1
+             AND tenant_id = $2
+             AND bot_id = $3
+         ) AS profile_exists`,
+      [
+        options.knowledgeSpaceId,
+        options.tenantId,
+        options.botId,
+        options.embeddingProfileId,
+      ],
+    );
+
+    const row = result.rows[0];
+    if (!row?.space_exists) {
+      throw new LLMError(
+        `Cannot activate embedding profile "${options.embeddingProfileId}" because knowledge space "${options.knowledgeSpaceId}" does not exist for tenant "${options.tenantId}" and bot "${options.botId}".`,
+        {
+          details: {
+            botId: options.botId,
+            embeddingProfileId: options.embeddingProfileId,
+            knowledgeSpaceId: options.knowledgeSpaceId,
+            tenantId: options.tenantId,
+          },
+        },
+      );
+    }
+
+    if (!row.profile_exists) {
+      throw new LLMError(
+        `Cannot activate embedding profile "${options.embeddingProfileId}" because it does not belong to knowledge space "${options.knowledgeSpaceId}" for tenant "${options.tenantId}" and bot "${options.botId}".`,
+        {
+          details: {
+            botId: options.botId,
+            embeddingProfileId: options.embeddingProfileId,
+            knowledgeSpaceId: options.knowledgeSpaceId,
+            tenantId: options.tenantId,
+          },
+        },
+      );
+    }
   }
 
   private async getPool(): Promise<PostgresKnowledgeStorePool> {

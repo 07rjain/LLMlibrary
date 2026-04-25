@@ -174,6 +174,13 @@ describe('PostgresKnowledgeStore', () => {
       updated_at: '2026-04-24T00:00:00.000Z',
     };
     const pool = new MockPgPool((text) => {
+      if (text.includes('AS space_exists')) {
+        return {
+          rowCount: 1,
+          rows: [{ profile_exists: true, space_exists: true }],
+        };
+      }
+
       if (text.startsWith('SELECT')) {
         return { rowCount: 1, rows: [profileRow] };
       }
@@ -205,6 +212,52 @@ describe('PostgresKnowledgeStore', () => {
       purposeDefaults: ['retrieval_document', 'retrieval_query'],
       taskInstruction: 'Embed support content.',
     });
+  });
+
+  it('throws when Postgres activation targets a missing scoped space', async () => {
+    const pool = new MockPgPool((text) => {
+      if (text.includes('AS space_exists')) {
+        return {
+          rowCount: 1,
+          rows: [{ profile_exists: false, space_exists: false }],
+        };
+      }
+
+      return { rowCount: 0, rows: [] };
+    });
+    const store = new PostgresKnowledgeStore({ pool });
+
+    await expect(
+      store.activateEmbeddingProfile({
+        botId: 'bot-1',
+        embeddingProfileId: 'profile-2',
+        knowledgeSpaceId: 'space-1',
+        tenantId: 'tenant-1',
+      }),
+    ).rejects.toThrow(/does not exist for tenant "tenant-1" and bot "bot-1"/);
+  });
+
+  it('throws when Postgres activation targets a profile outside the scoped space', async () => {
+    const pool = new MockPgPool((text) => {
+      if (text.includes('AS space_exists')) {
+        return {
+          rowCount: 1,
+          rows: [{ profile_exists: false, space_exists: true }],
+        };
+      }
+
+      return { rowCount: 0, rows: [] };
+    });
+    const store = new PostgresKnowledgeStore({ pool });
+
+    await expect(
+      store.activateEmbeddingProfile({
+        botId: 'bot-1',
+        embeddingProfileId: 'profile-foreign',
+        knowledgeSpaceId: 'space-1',
+        tenantId: 'tenant-1',
+      }),
+    ).rejects.toThrow(/does not belong to knowledge space "space-1"/);
   });
 
   it('returns null when no active embedding profile is configured', async () => {

@@ -14,7 +14,7 @@ hero:
       link: /README
     - theme: alt
       text: API Reference
-      link: /api/
+      link: /api/index.html
 
 features:
   - title: One client surface

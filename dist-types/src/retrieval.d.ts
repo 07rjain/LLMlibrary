@@ -315,6 +315,7 @@ export declare class PostgresKnowledgeStore implements KnowledgeStore {
     upsertKnowledgeSpace(record: PostgresKnowledgeSpaceRecord): Promise<PostgresKnowledgeSpaceRecord>;
     private assertEmbeddingProfileImmutability;
     private qualifiedTableName;
+    private assertActivatableEmbeddingProfile;
     private getPool;
     private runEnsureSchema;
 }

@@ -77,7 +77,7 @@ const response = await client.complete({
 console.log(response.text);
 console.log(response.model);
 console.log(response.provider);
-console.log(response.usage.cost);
+console.log(response.usage.costUSD);
 ```
 
 The response is provider-agnostic. The most commonly used fields are:
@@ -92,6 +92,8 @@ The response is provider-agnostic. The most commonly used fields are:
   Why the generation ended
 - `response.usage`
   Input tokens, output tokens, cached tokens, and estimated cost
+
+For numeric operations, use `response.usage.costUSD`. `response.usage.cost` is the formatted display string.
 
 ## 5. Override Model Or Provider Per Request
 

@@ -133,6 +133,26 @@ export declare const defaultModelPrices: {
         supportsTools: true;
         supportsVision: true;
     };
+    'gemini-3.1-pro-preview': {
+        contextWindow: number;
+        inputPrice: number;
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "google";
+        supportsStreaming: true;
+        supportsTools: true;
+        supportsVision: true;
+    };
+    'gemini-3.1-flash-lite-preview': {
+        contextWindow: number;
+        inputPrice: number;
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "google";
+        supportsStreaming: true;
+        supportsTools: true;
+        supportsVision: true;
+    };
     'gemini-embedding-2': {
         contextWindow: number;
         embeddingDimensions: {
@@ -146,7 +166,7 @@ export declare const defaultModelPrices: {
         maxInputTokens: number;
         outputPrice: number;
         provider: "google";
-        supportedInputModalities: ("text" | "document" | "audio" | "image")[];
+        supportedInputModalities: ("audio" | "document" | "image" | "text")[];
         supportsStreaming: false;
         supportsTools: false;
         supportsVision: false;

@@ -311,6 +311,8 @@ await store.activateEmbeddingProfile({
 });
 ```
 
+`activateEmbeddingProfile()` is fail-closed. If the knowledge space does not exist, or if the embedding profile belongs to a different tenant, bot, or knowledge space, it throws instead of silently doing nothing.
+
 ## 6. Retrieval Safety Rules
 
 Production retrieval should always stay fully scoped.

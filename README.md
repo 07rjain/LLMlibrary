@@ -83,8 +83,10 @@ const response = await client.complete({
 });
 
 console.log(response.text);
-console.log(response.usage.cost);
+console.log(response.usage.costUSD);
 ```
+
+Use `response.usage.costUSD` for arithmetic, alerts, and persistence. `response.usage.cost` is the pre-formatted display string.
 
 ## Conversations
 
@@ -369,6 +371,8 @@ The retrieval module currently includes:
 - `formatRetrievedContext()`
 
 `createDenseRetriever()` and `createHybridRetriever()` now also accept optional rerank hooks, and `PostgresKnowledgeStore` now exposes active-profile and reindex helpers such as `activateEmbeddingProfile()`, `getActiveEmbeddingProfile()`, `listKnowledgeSources()`, and `markKnowledgeSourcesNeedingReindex()`.
+
+`activateEmbeddingProfile()` now throws a clear runtime error when the target knowledge space is missing or when the embedding profile does not belong to that scoped space. It no longer fails silently on scope mismatches.
 
 When you use `PostgresKnowledgeStore`, search requests must stay fully scoped. Pass `tenantId`, `botId`, `knowledgeSpaceId`, and `embeddingProfileId`, and use the same embedding profile for chunk ingestion and live query embedding. The retrieval helpers intentionally do not take over chunking, ingestion queues, provider-managed reranking services, or automatic retrieval inside `complete()` / `conversation()`.
 

@@ -860,7 +860,7 @@ describe('retrieval helpers', () => {
             tenantId: 'tenant-1',
         })).rejects.toBeInstanceOf(LLMError);
     });
-    it('treats mismatched in-memory activation and profile ownership as no-op/null', async () => {
+    it('throws when in-memory activation scope or profile ownership does not match', async () => {
         const store = createInMemoryKnowledgeStore();
         await store.upsertKnowledgeSpace({
             botId: 'bot-1',
@@ -877,17 +877,23 @@ describe('retrieval helpers', () => {
             provider: 'google',
             tenantId: 'tenant-2',
         });
-        await store.activateEmbeddingProfile({
+        await expect(store.activateEmbeddingProfile({
             botId: 'bot-x',
             embeddingProfileId: 'profile-foreign',
             knowledgeSpaceId: 'space-1',
             tenantId: 'tenant-x',
-        });
+        })).rejects.toThrow(/does not belong to tenant "tenant-x" and bot "bot-x"/);
         await expect(store.getActiveEmbeddingProfile({
             botId: 'bot-1',
             knowledgeSpaceId: 'space-1',
             tenantId: 'tenant-1',
         })).resolves.toBeNull();
+        await expect(store.activateEmbeddingProfile({
+            botId: 'bot-1',
+            embeddingProfileId: 'profile-missing',
+            knowledgeSpaceId: 'space-1',
+            tenantId: 'tenant-1',
+        })).rejects.toThrow(/profile does not exist/);
         await store.upsertKnowledgeSpace({
             activeEmbeddingProfileId: 'profile-foreign',
             botId: 'bot-1',
@@ -900,6 +906,12 @@ describe('retrieval helpers', () => {
             knowledgeSpaceId: 'space-1',
             tenantId: 'tenant-1',
         })).resolves.toBeNull();
+        await expect(store.activateEmbeddingProfile({
+            botId: 'bot-1',
+            embeddingProfileId: 'profile-foreign',
+            knowledgeSpaceId: 'space-1',
+            tenantId: 'tenant-1',
+        })).rejects.toThrow(/does not belong to knowledge space "space-1"/);
     });
     it('supports in-memory scope and metadata-array filters and can clear stored data', async () => {
         const store = createInMemoryKnowledgeStore();

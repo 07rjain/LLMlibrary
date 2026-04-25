@@ -19,7 +19,7 @@ export default defineConfig({
       { text: 'Home', link: '/' },
       { text: 'Getting Started', link: '/GETTING_STARTED' },
       { text: 'Guides', link: '/README' },
-      { text: 'API', link: '/api/' },
+      { text: 'API', link: '/api/index.html' },
       { text: 'GitHub', link: repo },
     ],
     sidebar: [
@@ -49,7 +49,7 @@ export default defineConfig({
           { text: 'Cost And Pricing', link: '/COST_AND_PRICING' },
           { text: 'PRD Decisions', link: '/PRD_DECISIONS' },
           { text: 'Roadmap', link: '/ROADMAP' },
-          { text: 'API Reference', link: '/api/' },
+          { text: 'API Reference', link: '/api/index.html' },
         ],
       },
     ],
