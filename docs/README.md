@@ -9,7 +9,8 @@ If you are opening the repository for the first time, read the pages below in or
 3. [Conversations And Tools](./CONVERSATIONS_AND_TOOLS.md)
 4. [Persistence And Session API](./PERSISTENCE_AND_SESSION_API.md)
 5. [Session API Reference](./SESSION_API_REFERENCE.md)
-6. [Production Guide](./PRODUCTION_GUIDE.md)
+6. [Production Setup](./PRODUCTION_SETUP.md)
+7. [Production Guide](./PRODUCTION_GUIDE.md)
 
 ## What This Library Gives You
 
@@ -39,6 +40,8 @@ If you are opening the repository for the first time, read the pages below in or
   Read [Persistence And Session API](./PERSISTENCE_AND_SESSION_API.md)
 - "I need routing, budgets, testing, or rollout guidance"
   Read [Production Guide](./PRODUCTION_GUIDE.md)
+- "I need production env setup, Postgres wiring, or embedding storage details"
+  Read [Production Setup](./PRODUCTION_SETUP.md)
 
 ## Reference Docs
 
@@ -52,6 +55,7 @@ If you are opening the repository for the first time, read the pages below in or
 - OpenAI Responses migration report: [OPENAI_RESPONSES_MIGRATION_REPORT.md](./OPENAI_RESPONSES_MIGRATION_REPORT.md)
 - Migration notes: [MIGRATION_GUIDE.md](./MIGRATION_GUIDE.md)
 - Cost policy and pricing notes: [COST_AND_PRICING.md](./COST_AND_PRICING.md)
+- Production setup guide: [PRODUCTION_SETUP.md](./PRODUCTION_SETUP.md)
 
 ## Current Provider Notes
 

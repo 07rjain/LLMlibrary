@@ -51,9 +51,12 @@ The fastest path through the docs is:
 2. [Completions And Streaming](./COMPLETIONS_AND_STREAMING.md)
 3. [Conversations And Tools](./CONVERSATIONS_AND_TOOLS.md)
 4. [Persistence And Session API](./PERSISTENCE_AND_SESSION_API.md)
-5. [Production Guide](./PRODUCTION_GUIDE.md)
+5. [Production Setup](./PRODUCTION_SETUP.md)
+6. [Production Guide](./PRODUCTION_GUIDE.md)
 
 If you want the lower-level generated API surface, open [API Reference](./api/index.html).
+
+If you want a concrete production deployment checklist for `.env`, explicit Postgres wiring, and where embeddings are persisted, read [Production Setup](./PRODUCTION_SETUP.md).
 
 If you need the providers' current live catalogs, use `client.models.listRemote({ provider })` and treat the result as discovery data. It does not automatically replace the checked-in model registry.
 

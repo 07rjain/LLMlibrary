@@ -2,6 +2,8 @@
 
 This page covers the parts of the library that matter once the first happy-path integration already works.
 
+If you want the concrete production setup details for `.env`, Postgres wiring, and where embedding vectors are actually stored, read [Production Setup](./PRODUCTION_SETUP.md) alongside this guide.
+
 ## Route Traffic With `ModelRouter`
 
 `ModelRouter` lets you centralize model selection logic instead of scattering it across request handlers.
@@ -169,5 +171,6 @@ That gives consumers a pinned dependency instead of tracking `main`.
 
 - API reference: [./api/index.html](./api/index.html)
 - Session API contract: [SESSION_API_REFERENCE.md](./SESSION_API_REFERENCE.md)
+- Production setup: [PRODUCTION_SETUP.md](./PRODUCTION_SETUP.md)
 - Provider comparison: [PROVIDER_COMPARISON.md](./PROVIDER_COMPARISON.md)
 - Cost policy: [COST_AND_PRICING.md](./COST_AND_PRICING.md)
