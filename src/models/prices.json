@@ -9,7 +9,7 @@
     "outputPrice": 15,
     "cacheReadPrice": 0.3,
     "cacheWritePrice": 3.75,
-    "lastUpdated": "2026-03-15"
+    "lastUpdated": "2026-05-18"
   },
   "claude-haiku-4-5": {
     "provider": "anthropic",
@@ -17,11 +17,11 @@
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
-    "inputPrice": 0.8,
-    "outputPrice": 4,
-    "cacheReadPrice": 0.08,
-    "cacheWritePrice": 1,
-    "lastUpdated": "2026-03-15"
+    "inputPrice": 1,
+    "outputPrice": 5,
+    "cacheReadPrice": 0.1,
+    "cacheWritePrice": 1.25,
+    "lastUpdated": "2026-05-18"
   },
   "claude-opus-4-6": {
     "provider": "anthropic",
@@ -29,11 +29,11 @@
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
-    "inputPrice": 15,
-    "outputPrice": 75,
-    "cacheReadPrice": 1.5,
-    "cacheWritePrice": 18.75,
-    "lastUpdated": "2026-03-15"
+    "inputPrice": 5,
+    "outputPrice": 25,
+    "cacheReadPrice": 0.5,
+    "cacheWritePrice": 6.25,
+    "lastUpdated": "2026-05-18"
   },
   "gpt-5.4": {
     "provider": "openai",
@@ -42,9 +42,9 @@
     "supportsTools": true,
     "supportsStreaming": true,
     "inputPrice": 2.5,
-    "outputPrice": 10,
-    "cacheReadPrice": 1.25,
-    "lastUpdated": "2026-03-15"
+    "outputPrice": 15,
+    "cacheReadPrice": 0.25,
+    "lastUpdated": "2026-05-18"
   },
   "gpt-5.4-mini": {
     "provider": "openai",
@@ -52,10 +52,10 @@
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
-    "inputPrice": 0.4,
-    "outputPrice": 1.6,
-    "cacheReadPrice": 0.2,
-    "lastUpdated": "2026-03-15"
+    "inputPrice": 0.75,
+    "outputPrice": 4.5,
+    "cacheReadPrice": 0.075,
+    "lastUpdated": "2026-05-18"
   },
   "gpt-5.4-nano": {
     "provider": "openai",
@@ -63,10 +63,10 @@
     "supportsVision": false,
     "supportsTools": true,
     "supportsStreaming": true,
-    "inputPrice": 0.1,
-    "outputPrice": 0.4,
-    "cacheReadPrice": 0.05,
-    "lastUpdated": "2026-03-15"
+    "inputPrice": 0.2,
+    "outputPrice": 1.25,
+    "cacheReadPrice": 0.02,
+    "lastUpdated": "2026-05-18"
   },
   "gpt-4o": {
     "provider": "openai",
@@ -77,7 +77,7 @@
     "inputPrice": 2.5,
     "outputPrice": 10,
     "cacheReadPrice": 1.25,
-    "lastUpdated": "2026-03-15"
+    "lastUpdated": "2026-05-18"
   },
   "gpt-4o-mini": {
     "provider": "openai",
@@ -88,7 +88,7 @@
     "inputPrice": 0.15,
     "outputPrice": 0.6,
     "cacheReadPrice": 0.075,
-    "lastUpdated": "2026-03-15"
+    "lastUpdated": "2026-05-18"
   },
   "o3": {
     "provider": "openai",
@@ -96,10 +96,10 @@
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
-    "inputPrice": 10,
-    "outputPrice": 40,
-    "cacheReadPrice": 2.5,
-    "lastUpdated": "2026-03-15"
+    "inputPrice": 2,
+    "outputPrice": 8,
+    "cacheReadPrice": 0.5,
+    "lastUpdated": "2026-05-18"
   },
   "gemini-2.5-pro": {
     "provider": "google",
@@ -109,7 +109,7 @@
     "supportsStreaming": true,
     "inputPrice": 1.25,
     "outputPrice": 10,
-    "lastUpdated": "2026-03-15"
+    "lastUpdated": "2026-05-18"
   },
   "gemini-2.5-flash": {
     "provider": "google",
@@ -117,9 +117,9 @@
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
-    "inputPrice": 0.075,
-    "outputPrice": 0.3,
-    "lastUpdated": "2026-03-15"
+    "inputPrice": 0.3,
+    "outputPrice": 2.5,
+    "lastUpdated": "2026-05-18"
   },
   "gemini-2.5-flash-lite": {
     "provider": "google",
@@ -127,9 +127,9 @@
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
-    "inputPrice": 0.015,
-    "outputPrice": 0.06,
-    "lastUpdated": "2026-03-15"
+    "inputPrice": 0.1,
+    "outputPrice": 0.4,
+    "lastUpdated": "2026-05-18"
   },
   "gemini-3.1-pro-preview": {
     "provider": "google",
