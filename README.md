@@ -18,6 +18,7 @@ Provider-agnostic TypeScript client for Anthropic, OpenAI, and Google Gemini wit
 - Model routing, fallback chains, weighted A/B routing, and usage logging
 - Live provider model discovery via `client.models.listRemote({ provider })`
 - Google Embedding 2 support through `client.embed()`
+- OpenAI batch speech support through `client.speak()` and `client.transcribe()`
 - Optional retrieval helpers via `unified-llm-client/retrieval`
 - Budget breach policies: `throw`, `warn`, or `skip`
 - Usage aggregation export as JSON or CSV
@@ -137,6 +138,44 @@ const csv = await client.exportUsage('csv', {
 
 console.log(csv);
 ```
+
+Speech usage is tracked separately because the units are different from text tokens:
+
+```ts
+const speechCsv = await client.exportSpeechUsage('csv', {
+  tenantId: 'tenant-1',
+});
+```
+
+## Speech
+
+OpenAI batch text-to-speech and speech-to-text are available as explicit APIs:
+
+```ts
+const speech = await client.speak({
+  input: 'Your appointment is confirmed for 10 AM.',
+  model: 'gpt-4o-mini-tts',
+  voice: 'alloy',
+  format: 'mp3',
+  estimatedOutputSeconds: 4,
+});
+
+const transcript = await client.transcribe({
+  input: {
+    data: audioBase64,
+    filename: 'call.wav',
+    mediaType: 'audio/wav',
+  },
+  inputAudioSeconds: 42,
+  model: 'gpt-4o-mini-transcribe',
+});
+
+console.log(speech.audio); // Uint8Array
+console.log(transcript.text);
+console.log(speech.usage?.costUSD);
+```
+
+Use `usage.costUSD` for arithmetic and billing. `usage.cost` is a formatted display string. Speech audio and transcripts are not stored by the library; keep storage and retention in your application layer.
 
 ## Summarisation Strategy
 
@@ -512,6 +551,7 @@ Gemini cache names are returned in the provider format `cachedContents/{id}` and
 - Session API contract: [SESSION_API.md](SESSION_API.md)
 - PRD decisions: [docs/PRD_DECISIONS.md](docs/PRD_DECISIONS.md)
 - Provider comparison: [docs/PROVIDER_COMPARISON.md](docs/PROVIDER_COMPARISON.md)
+- Speech API research report: [docs/SPEECH_API_RESEARCH_REPORT.md](docs/SPEECH_API_RESEARCH_REPORT.md)
 - Prompt caching report: [docs/PROMPT_CACHING_REPORT.md](docs/PROMPT_CACHING_REPORT.md)
 - Prompt caching task tracker: [prompt_caching_todo.md](prompt_caching_todo.md)
 - OpenAI Responses migration report: [docs/OPENAI_RESPONSES_MIGRATION_REPORT.md](docs/OPENAI_RESPONSES_MIGRATION_REPORT.md)

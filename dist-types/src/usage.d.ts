@@ -1,4 +1,4 @@
-import type { CanonicalProvider, UsageEvent } from './types.js';
+import type { CanonicalProvider, SpeechProvider, SpeechUsageMetrics, UsageEvent } from './types.js';
 import type { PostgresSessionStorePool, PostgresSessionStoreQueryResult } from './session-store.js';
 /** Filter options for usage aggregation queries. */
 export interface UsageQuery {
@@ -29,13 +29,60 @@ export interface UsageSummary {
     totalInputTokens: number;
     totalOutputTokens: number;
 }
+export interface SpeechUsageQuery {
+    botId?: string;
+    kind?: 'speech' | 'transcription';
+    model?: string;
+    provider?: SpeechProvider;
+    sessionId?: string;
+    since?: string;
+    tenantId?: string;
+    until?: string;
+}
+export interface SpeechUsageBreakdown {
+    kind: 'speech' | 'transcription';
+    model: string;
+    provider: SpeechProvider;
+    requestCount: number;
+    totalAudioInputSeconds: number;
+    totalAudioOutputSeconds: number;
+    totalCostUSD: number;
+    totalInputCharacters: number;
+    totalInputTokens: number;
+    totalOutputCharacters: number;
+    totalOutputTokens: number;
+}
+export interface SpeechUsageSummary {
+    breakdown: SpeechUsageBreakdown[];
+    requestCount: number;
+    totalAudioInputSeconds: number;
+    totalAudioOutputSeconds: number;
+    totalCostUSD: number;
+    totalInputCharacters: number;
+    totalInputTokens: number;
+    totalOutputCharacters: number;
+    totalOutputTokens: number;
+}
+export interface SpeechUsageEvent {
+    botId?: string;
+    durationMs: number;
+    kind: 'speech' | 'transcription';
+    model: string;
+    provider: SpeechProvider;
+    sessionId?: string;
+    speechUsage: SpeechUsageMetrics;
+    tenantId?: string;
+    timestamp: string;
+}
 export type UsageExportFormat = 'csv' | 'json';
 /** Contract for development and persistent usage logging backends. */
 export interface UsageLogger {
     close?(): Promise<void>;
     flush?(): Promise<void>;
+    getSpeechUsage?(query?: SpeechUsageQuery): Promise<SpeechUsageSummary>;
     getUsage?(query?: UsageQuery): Promise<UsageSummary>;
     log(event: UsageEvent): Promise<void> | void;
+    logSpeech?(event: SpeechUsageEvent): Promise<void> | void;
 }
 /** Configuration for the console usage logger. */
 export interface ConsoleLoggerOptions {
@@ -57,6 +104,7 @@ export declare class ConsoleLogger implements UsageLogger {
     private readonly write;
     constructor(options?: ConsoleLoggerOptions);
     log(event: UsageEvent): void;
+    logSpeech(event: SpeechUsageEvent): void;
 }
 /**
  * Batched Postgres-backed usage logger that can also aggregate usage totals.
@@ -79,6 +127,7 @@ export declare class PostgresUsageLogger implements UsageLogger {
     private readonly onError;
     private readonly pool;
     private queue;
+    private speechQueue;
     private readonly schemaName;
     private readonly tableName;
     constructor(options?: PostgresUsageLoggerOptions);
@@ -87,12 +136,18 @@ export declare class PostgresUsageLogger implements UsageLogger {
     ensureSchema(): Promise<void>;
     flush(): Promise<void>;
     getUsage(query?: UsageQuery): Promise<UsageSummary>;
+    getSpeechUsage(query?: SpeechUsageQuery): Promise<SpeechUsageSummary>;
     log(event: UsageEvent): Promise<void>;
+    logSpeech(event: SpeechUsageEvent): Promise<void>;
     private flushBatch;
+    private flushSpeechBatch;
     private getPool;
     private qualifiedTableName;
+    private speechQualifiedTableName;
 }
 export type { PostgresSessionStorePool, PostgresSessionStoreQueryResult };
 /** Serializes aggregated usage into either JSON or CSV output. */
 export declare function exportUsageSummary(summary: UsageSummary, format: UsageExportFormat): string;
+/** Serializes aggregated speech usage into either JSON or CSV output. */
+export declare function exportSpeechUsageSummary(summary: SpeechUsageSummary, format: UsageExportFormat): string;
 //# sourceMappingURL=usage.d.ts.map

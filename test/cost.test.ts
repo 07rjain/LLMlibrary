@@ -4,9 +4,11 @@ import { ModelRegistry } from '../src/models/registry.js';
 import {
   anthropicUsageToCanonical,
   calcCostUSD,
+  calcSpeechCostUSD,
   formatCost,
   geminiUsageToCanonical,
   openaiUsageToCanonical,
+  speechUsageWithCost,
   usageWithCost,
 } from '../src/utils/cost.js';
 
@@ -238,5 +240,51 @@ describe('cost utilities', () => {
       (50 / 1_000_000) * gemini.outputPrice;
 
     expect(usageWithCost(gemini, usage).costUSD).toBeCloseTo(expected, 9);
+  });
+
+  it('calculates text-to-speech costs from text and audio billing units', () => {
+    const result = calcSpeechCostUSD(
+      {
+        inputTokens: 1_000,
+        model: 'gpt-4o-mini-tts',
+        outputAudioSeconds: 10,
+      },
+      registry,
+    );
+
+    expect(result.costUSD).toBeCloseTo(0.0006 + 0.0025, 9);
+    expect(result.costBreakdown).toEqual([
+      {
+        amountUSD: 0.0006,
+        estimated: true,
+        label: 'Text input',
+        quantity: 1000,
+        rateUSD: 0.6,
+        unit: 'text_input_token',
+      },
+      {
+        amountUSD: 0.0025,
+        estimated: true,
+        label: 'Output audio duration',
+        quantity: 10,
+        rateUSD: 0.00025,
+        unit: 'audio_second',
+      },
+    ]);
+  });
+
+  it('attaches speech cost and billing units to speech usage metrics', () => {
+    const model = registry.get('gpt-4o-mini-transcribe');
+    const usage = speechUsageWithCost(model, {
+      estimated: true,
+      inputAudioSeconds: 30,
+      outputCharacters: 120,
+      outputTokens: 24,
+    });
+
+    expect(usage.costUSD).toBeCloseTo(0.0015, 9);
+    expect(usage.cost).toBe('$0.0015');
+    expect(usage.billingUnits?.inputAudioSeconds).toBe(30);
+    expect(usage.estimated).toBe(true);
   });
 });

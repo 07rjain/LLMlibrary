@@ -24,7 +24,7 @@ features:
   - title: Responses-first OpenAI transport
     details: OpenAI requests already use the stateless Responses API while library-owned history and session storage stay provider-agnostic.
   - title: Production-oriented primitives
-    details: Add budgets, routing, usage logging, Postgres storage, Redis storage, and a framework-agnostic Session API when the app grows up.
+    details: Add budgets, routing, usage logging, speech usage logging, Postgres storage, Redis storage, and a framework-agnostic Session API when the app grows up.
 ---
 
 ## Start Here
@@ -51,8 +51,9 @@ The fastest path through the docs is:
 2. [Completions And Streaming](./COMPLETIONS_AND_STREAMING.md)
 3. [Conversations And Tools](./CONVERSATIONS_AND_TOOLS.md)
 4. [Persistence And Session API](./PERSISTENCE_AND_SESSION_API.md)
-5. [Production Setup](./PRODUCTION_SETUP.md)
-6. [Production Guide](./PRODUCTION_GUIDE.md)
+5. [Speech](./SPEECH.md)
+6. [Production Setup](./PRODUCTION_SETUP.md)
+7. [Production Guide](./PRODUCTION_GUIDE.md)
 
 If you want the lower-level generated API surface, open [API Reference](./api/index.html).
 
@@ -67,6 +68,8 @@ For a cross-check of the recent follow-up review and the recommended post-v1 ord
 For the detailed implementation plan covering lightweight stores, chunking helpers, Gemini batching, OpenAI embeddings, and extraction helpers, see [Embeddings Follow-Up Fix Plan](./EMBEDDINGS_FOLLOW_UP_FIX_PLAN.md).
 For the broader retrieval architecture, storage model, and rollout strategy, see [Embeddings And Retrieval Architecture Report](./EMBEDDINGS_RETRIEVAL_ARCHITECTURE_REPORT.md).
 For the concrete multitenant retrieval API, safety, and scaling plan, see [Retrieval API Integration Report](./RETRIEVAL_API_INTEGRATION_REPORT.md).
+For speech-to-text and text-to-speech architecture planning, see [Speech API Research Report](./SPEECH_API_RESEARCH_REPORT.md).
+OpenAI batch speech is implemented through [Speech](./SPEECH.md) with separate `client.speak()`, `client.transcribe()`, `client.getSpeechUsage()`, and `client.exportSpeechUsage()` APIs.
 Embeddings implementation work is tracked in the repository root as `embeddings_todo.md`.
 For provider-specific implementation planning, see [Prompt Caching Report](./PROMPT_CACHING_REPORT.md).
 Prompt caching work is tracked in the repository root as `prompt_caching_todo.md`.

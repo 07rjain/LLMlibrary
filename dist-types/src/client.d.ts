@@ -5,8 +5,8 @@ import type { ConversationOptions, ConversationSnapshot } from './conversation.j
 import type { GeminiCachedContent, GeminiCachedContentPage, GeminiCreateCacheOptions, GeminiListCachesOptions, GeminiUpdateCacheOptions } from './providers/gemini.js';
 import type { SessionStore } from './session-store.js';
 import type { ModelRouter } from './router.js';
-import type { CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, BudgetExceededAction, CancelableStream, EmbeddingProvider, EmbeddingRequestOptions, EmbeddingResponse, ProviderOptions, RemoteModelInfo, RemoteModelListOptions, StreamChunk } from './types.js';
-import type { UsageExportFormat, UsageLogger, UsageQuery, UsageSummary } from './usage.js';
+import type { CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, BudgetExceededAction, CancelableStream, EmbeddingProvider, EmbeddingRequestOptions, EmbeddingResponse, ProviderOptions, RemoteModelInfo, RemoteModelListOptions, SpeechProvider, SpeechRequestOptions, SpeechResponse, StreamChunk, TranscriptionRequestOptions, TranscriptionResponse } from './types.js';
+import type { UsageExportFormat, UsageLogger, UsageQuery, UsageSummary, SpeechUsageQuery, SpeechUsageSummary } from './usage.js';
 import type { RetryOptions } from './utils/retry.js';
 /** Constructor options for `LLMClient`. */
 export interface LLMClientOptions {
@@ -63,6 +63,14 @@ export interface MockLLMClientOptions extends Omit<LLMClientOptions, 'anthropicA
         model: string;
         provider: CanonicalProvider;
     }) => AsyncIterable<StreamChunk> | Promise<AsyncIterable<StreamChunk> | StreamChunk[]> | StreamChunk[])>;
+    speeches?: Array<SpeechResponse | ((options: SpeechRequestOptions & {
+        model: string;
+        provider: SpeechProvider;
+    }) => Promise<SpeechResponse> | SpeechResponse)>;
+    transcriptions?: Array<TranscriptionResponse | ((options: TranscriptionRequestOptions & {
+        model: string;
+        provider: SpeechProvider;
+    }) => Promise<TranscriptionResponse> | TranscriptionResponse)>;
 }
 /**
  * Unified entry point for provider-agnostic completions, streaming,
@@ -118,6 +126,10 @@ export declare class LLMClient {
     complete(options: LLMRequestOptions): Promise<CanonicalResponse>;
     /** Executes a single non-streaming embedding request. */
     embed(options: EmbeddingRequestOptions): Promise<EmbeddingResponse>;
+    /** Executes a single non-streaming text-to-speech request. */
+    speak(options: SpeechRequestOptions): Promise<SpeechResponse>;
+    /** Executes a single non-streaming speech-to-text request. */
+    transcribe(options: TranscriptionRequestOptions): Promise<TranscriptionResponse>;
     /** Executes a streaming completion request and yields canonical chunks. */
     stream(options: LLMRequestOptions): CancelableStream<StreamChunk>;
     /**
@@ -129,8 +141,12 @@ export declare class LLMClient {
     updatePrices(overrides: ModelPriceOverrides): void;
     /** Returns aggregated usage from the configured usage logger. */
     getUsage(query?: UsageQuery): Promise<UsageSummary>;
+    /** Returns aggregated speech usage from the configured usage logger. */
+    getSpeechUsage(query?: SpeechUsageQuery): Promise<SpeechUsageSummary>;
     /** Returns aggregated usage serialized as JSON or CSV. */
     exportUsage(format: UsageExportFormat, query?: UsageQuery): Promise<string>;
+    /** Returns aggregated speech usage serialized as JSON or CSV. */
+    exportSpeechUsage(format: UsageExportFormat, query?: SpeechUsageQuery): Promise<string>;
     /** Returns the session store configured on this client, if any. */
     getSessionStore(): SessionStore<ConversationSnapshot> | undefined;
     private getAnthropicAdapter;
@@ -139,15 +155,22 @@ export declare class LLMClient {
     private listRemoteModels;
     private dispatchComplete;
     private dispatchEmbed;
+    private dispatchSpeak;
+    private dispatchTranscribe;
     private dispatchStream;
     private resolveRequest;
     private resolveEmbeddingRequest;
+    private resolveSpeechRequest;
+    private resolveTranscriptionRequest;
     private resolveRequestPlan;
     private resolveRoute;
     private buildRouterContext;
     private resolveBudgetExceededError;
     private handleBudgetExceededAction;
+    private handleSpeechBudgetExceededAction;
+    private throwIfSpeechBudgetExceeded;
     private logUsageEvent;
+    private logSpeechUsageEvent;
     private streamWithFallback;
 }
 //# sourceMappingURL=client.d.ts.map

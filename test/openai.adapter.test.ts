@@ -386,6 +386,100 @@ describe('OpenAI adapter', () => {
     expect(request[1].signal).toBe(signal);
   });
 
+  it('performs a text-to-speech request and returns audio bytes with estimated usage', async () => {
+    const fetchImplementation = vi.fn(async () =>
+      new Response(new Uint8Array([1, 2, 3, 4]), {
+        headers: { 'content-type': 'audio/mpeg' },
+        status: 200,
+      }),
+    );
+    const adapter = new OpenAIAdapter({
+      apiKey: 'openai-key',
+      fetchImplementation,
+    });
+
+    const result = await adapter.speak({
+      estimatedOutputSeconds: 4,
+      format: 'mp3',
+      input: 'Hello from speech',
+      instructions: 'Speak clearly.',
+      model: 'gpt-4o-mini-tts',
+      provider: 'openai',
+      speed: 1.05,
+      voice: 'alloy',
+    });
+    const request = fetchImplementation.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    const headers = request[1].headers as Record<string, string>;
+
+    expect(request[0]).toContain('/v1/audio/speech');
+    expect(headers.Authorization).toBe('Bearer openai-key');
+    expect(JSON.parse(String(request[1].body))).toMatchObject({
+      input: 'Hello from speech',
+      instructions: 'Speak clearly.',
+      model: 'gpt-4o-mini-tts',
+      response_format: 'mp3',
+      speed: 1.05,
+      voice: 'alloy',
+    });
+    expect([...result.audio]).toEqual([1, 2, 3, 4]);
+    expect(result.mediaType).toBe('audio/mpeg');
+    expect(result.usage?.outputAudioSeconds).toBe(4);
+    expect(result.usage?.costUSD).toBeGreaterThan(0);
+  });
+
+  it('performs a speech-to-text request with multipart form data', async () => {
+    const fetchImplementation = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          duration: 2.5,
+          language: 'en',
+          text: 'Hello world',
+        }),
+        {
+          headers: { 'content-type': 'application/json' },
+          status: 200,
+        },
+      ),
+    );
+    const adapter = new OpenAIAdapter({
+      apiKey: 'openai-key',
+      fetchImplementation,
+    });
+
+    const result = await adapter.transcribe({
+      input: {
+        data: Buffer.from('audio').toString('base64'),
+        filename: 'sample.wav',
+        mediaType: 'audio/wav',
+      },
+      inputAudioSeconds: 2.5,
+      language: 'en',
+      model: 'gpt-4o-mini-transcribe',
+      provider: 'openai',
+      responseFormat: 'json',
+    });
+    const request = fetchImplementation.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    const form = request[1].body as FormData;
+    const headers = request[1].headers as Record<string, string>;
+
+    expect(request[0]).toContain('/v1/audio/transcriptions');
+    expect(headers['Content-Type']).toBeUndefined();
+    expect(form.get('model')).toBe('gpt-4o-mini-transcribe');
+    expect(form.get('language')).toBe('en');
+    expect(form.get('response_format')).toBe('json');
+    expect(form.get('file')).toBeInstanceOf(Blob);
+    expect(result.text).toBe('Hello world');
+    expect(result.durationSeconds).toBe(2.5);
+    expect(result.usage?.inputAudioSeconds).toBe(2.5);
+    expect(result.usage?.costUSD).toBeGreaterThan(0);
+  });
+
   it('streams text deltas and done events', async () => {
     const adapter = new OpenAIAdapter({
       apiKey: 'openai-key',

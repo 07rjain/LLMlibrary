@@ -1,5 +1,5 @@
 import { ModelRegistry } from '../models/registry.js';
-import type { ModelInfo, UsageMetrics } from '../types.js';
+import type { ModelInfo, SpeechBillingUnits, SpeechCostLineItem, SpeechUsageMetrics, UsageMetrics } from '../types.js';
 export interface CostCalculationInput {
     billedInputTokens?: number;
     cachedReadTokens?: number;
@@ -15,6 +15,25 @@ export interface CanonicalUsageCounts {
     cachedWriteTokens?: number;
     inputTokens: number;
     outputTokens: number;
+}
+export interface SpeechCostCalculationInput {
+    audioInputTokens?: number;
+    audioOutputTokens?: number;
+    estimated?: boolean;
+    inputAudioSeconds?: number;
+    inputCharacters?: number;
+    inputTokens?: number;
+    model: string;
+    outputAudioSeconds?: number;
+    outputCharacters?: number;
+    outputTokens?: number;
+}
+export interface SpeechCostResult {
+    billingUnits: SpeechBillingUnits;
+    cost?: string;
+    costBreakdown: SpeechCostLineItem[];
+    costUSD?: number;
+    estimated: boolean;
 }
 export interface OpenAIUsagePayload {
     completion_tokens?: number;
@@ -40,6 +59,8 @@ export interface GeminiUsagePayload {
     promptTokenCount?: number;
 }
 export declare function calcCostUSD(input: CostCalculationInput, registry?: ModelRegistry): number;
+export declare function calcSpeechCostUSD(input: SpeechCostCalculationInput, registry?: ModelRegistry): SpeechCostResult;
+export declare function speechUsageWithCost(model: ModelInfo, usage: Omit<SpeechUsageMetrics, 'billingUnits' | 'cost' | 'costBreakdown' | 'costUSD'>): SpeechUsageMetrics;
 export declare function formatCost(usd: number): string;
 export declare function anthropicUsageToCanonical(usage: AnthropicUsagePayload | undefined): CanonicalUsageCounts;
 export declare function openaiUsageToCanonical(usage: OpenAIUsagePayload | undefined): CanonicalUsageCounts;

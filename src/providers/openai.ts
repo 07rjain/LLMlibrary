@@ -6,11 +6,17 @@ import {
   RateLimitError,
 } from '../errors.js';
 import { ModelRegistry } from '../models/registry.js';
-import { openaiUsageToCanonical, usageWithCost } from '../utils/cost.js';
+import {
+  openaiUsageToCanonical,
+  speechUsageWithCost,
+  usageWithCost,
+} from '../utils/cost.js';
 import { parseSSE } from '../utils/parse-sse.js';
 import { withRetry } from '../utils/retry.js';
+import { estimateTokens } from '../utils/token-estimator.js';
 
 import type {
+  AudioInput,
   CanonicalFinishReason,
   CanonicalMessage,
   CanonicalPart,
@@ -22,7 +28,13 @@ import type {
   JsonValue,
   ProviderOptions,
   RemoteModelInfo,
+  SpeechRequestOptions,
+  SpeechResponse,
   StreamChunk,
+  TranscriptionRequestOptions,
+  TranscriptionResponse,
+  TranscriptionSegment,
+  TranscriptionWord,
 } from '../types.js';
 import type { OpenAIUsagePayload } from '../utils/cost.js';
 import type { RetryOptions } from '../utils/retry.js';
@@ -245,6 +257,17 @@ export interface OpenAICompletionOptions {
   tools?: CanonicalTool[];
 }
 
+export interface OpenAIAdapterSpeechOptions extends SpeechRequestOptions {
+  model: string;
+  provider: 'openai';
+}
+
+export interface OpenAIAdapterTranscriptionOptions
+  extends TranscriptionRequestOptions {
+  model: string;
+  provider: 'openai';
+}
+
 export class OpenAIAdapter {
   private readonly apiKey: string;
   private readonly baseUrl: string;
@@ -369,6 +392,106 @@ export class OpenAIAdapter {
     });
   }
 
+  async speak(options: OpenAIAdapterSpeechOptions): Promise<SpeechResponse> {
+    const format = options.format ?? 'mp3';
+    const response = await withRetry(
+      async () =>
+        this.fetchImplementation(
+          `${this.baseUrl}/v1/audio/speech`,
+          buildRequestInit(
+            {
+              body: JSON.stringify(translateOpenAISpeechRequest(options, format)),
+              headers: this.buildHeaders(),
+              method: 'POST',
+            },
+            options.signal,
+          ),
+        ),
+      this.retryOptions,
+    );
+
+    if (!response.ok) {
+      throw await mapOpenAIError(response, options.model);
+    }
+
+    const audio = new Uint8Array(await response.arrayBuffer());
+    const model = this.modelRegistry.get(options.model);
+    const outputAudioSeconds =
+      options.estimatedOutputSeconds ??
+      deriveAudioDurationSeconds(audio, format) ??
+      options.maxOutputSeconds;
+    const usage = speechUsageWithCost(model, {
+      estimated: true,
+      inputCharacters: options.input.length,
+      inputTokens: estimateTokens(options.input),
+      ...(outputAudioSeconds !== undefined ? { outputAudioSeconds } : {}),
+    });
+
+    return {
+      audio,
+      format,
+      mediaType: response.headers.get('content-type') ?? mediaTypeForSpeechFormat(format),
+      model: options.model,
+      provider: 'openai',
+      raw: {
+        headers: Object.fromEntries(response.headers.entries()),
+      },
+      usage,
+    };
+  }
+
+  async transcribe(
+    options: OpenAIAdapterTranscriptionOptions,
+  ): Promise<TranscriptionResponse> {
+    const body = await buildOpenAITranscriptionFormData(options);
+    const response = await withRetry(
+      async () =>
+        this.fetchImplementation(
+          `${this.baseUrl}/v1/audio/transcriptions`,
+          buildRequestInit(
+            {
+              body,
+              headers: this.buildHeaders({ contentType: false }),
+              method: 'POST',
+            },
+            options.signal,
+          ),
+        ),
+      this.retryOptions,
+    );
+
+    if (!response.ok) {
+      throw await mapOpenAIError(response, options.model);
+    }
+
+    const contentType = response.headers.get('content-type') ?? '';
+    const raw =
+      contentType.includes('application/json') || contentType.includes('+json')
+        ? ((await response.json()) as OpenAITranscriptionPayload)
+        : await response.text();
+    const normalized = normalizeOpenAITranscription(raw);
+    const model = this.modelRegistry.get(options.model);
+    const inputAudioSeconds =
+      options.inputAudioSeconds ?? deriveAudioInputDurationSeconds(options.input);
+    const usage = speechUsageWithCost(model, {
+      estimated: true,
+      ...(inputAudioSeconds !== undefined ? { inputAudioSeconds } : {}),
+      outputCharacters: normalized.text.length,
+      outputTokens: estimateTokens(normalized.text),
+    });
+
+    return {
+      ...normalized,
+      ...(inputAudioSeconds !== undefined && normalized.durationSeconds === undefined
+        ? { durationSeconds: inputAudioSeconds }
+        : {}),
+      model: options.model,
+      provider: 'openai',
+      raw,
+      usage,
+    };
+  }
+
   private assertCapabilities(
     options: OpenAICompletionOptions & { stream?: boolean },
   ): void {
@@ -395,13 +518,265 @@ export class OpenAIAdapter {
     }
   }
 
-  private buildHeaders(): Record<string, string> {
+  private buildHeaders(
+    options: { contentType?: false | string } = {},
+  ): Record<string, string> {
+    const contentType =
+      options.contentType === false
+        ? {}
+        : { 'Content-Type': options.contentType ?? 'application/json' };
     return {
       Authorization: `Bearer ${this.apiKey}`,
-      'Content-Type': 'application/json',
+      ...contentType,
       ...(this.organization ? { 'OpenAI-Organization': this.organization } : {}),
       ...(this.project ? { 'OpenAI-Project': this.project } : {}),
     };
+  }
+}
+
+interface OpenAITranscriptionPayload {
+  duration?: number;
+  language?: string;
+  segments?: TranscriptionSegment[];
+  text?: string;
+  words?: TranscriptionWord[];
+  [key: string]: unknown;
+}
+
+function translateOpenAISpeechRequest(
+  options: OpenAIAdapterSpeechOptions,
+  format: string,
+): Record<string, unknown> {
+  return {
+    input: options.input,
+    model: options.model,
+    response_format: format,
+    voice: options.voice ?? 'alloy',
+    ...(options.instructions !== undefined
+      ? { instructions: options.instructions }
+      : {}),
+    ...(options.speed !== undefined ? { speed: options.speed } : {}),
+  };
+}
+
+async function buildOpenAITranscriptionFormData(
+  options: OpenAIAdapterTranscriptionOptions,
+): Promise<FormData> {
+  const formData = new FormData();
+  formData.set('file', await audioInputToBlob(options.input), options.input.filename ?? 'audio');
+  formData.set('model', options.model);
+
+  if (options.language !== undefined) {
+    formData.set('language', options.language);
+  }
+
+  if (options.prompt !== undefined) {
+    formData.set('prompt', options.prompt);
+  }
+
+  const responseFormat =
+    options.responseFormat ??
+    (options.diarization || options.model === 'gpt-4o-transcribe-diarize'
+      ? 'diarized_json'
+      : undefined);
+  if (responseFormat !== undefined) {
+    formData.set('response_format', responseFormat);
+  }
+
+  if (options.temperature !== undefined) {
+    formData.set('temperature', String(options.temperature));
+  }
+
+  for (const granularity of options.timestampGranularities ?? []) {
+    formData.append('timestamp_granularities[]', granularity);
+  }
+
+  const openaiOptions = options.providerOptions?.openai;
+  if (openaiOptions?.chunkingStrategy !== undefined) {
+    formData.set(
+      'chunking_strategy',
+      typeof openaiOptions.chunkingStrategy === 'string'
+        ? openaiOptions.chunkingStrategy
+        : JSON.stringify(openaiOptions.chunkingStrategy),
+    );
+  } else if (options.diarization || options.model === 'gpt-4o-transcribe-diarize') {
+    formData.set('chunking_strategy', 'auto');
+  }
+
+  for (const include of openaiOptions?.include ?? []) {
+    formData.append('include[]', include);
+  }
+
+  for (const name of openaiOptions?.knownSpeakerNames ?? []) {
+    formData.append('known_speaker_names[]', name);
+  }
+
+  for (const reference of openaiOptions?.knownSpeakerReferences ?? []) {
+    formData.append('known_speaker_references[]', reference);
+  }
+
+  return formData;
+}
+
+async function audioInputToBlob(input: AudioInput): Promise<Blob> {
+  if (input.file instanceof Blob) {
+    return input.file;
+  }
+
+  if (input.file instanceof ArrayBuffer) {
+    return new Blob([input.file], { type: input.mediaType });
+  }
+
+  if (input.file instanceof Uint8Array) {
+    return new Blob([bytesToArrayBuffer(input.file)], { type: input.mediaType });
+  }
+
+  if (input.data !== undefined) {
+    return new Blob([bytesToArrayBuffer(base64ToBytes(input.data))], {
+      type: input.mediaType,
+    });
+  }
+
+  if (input.url !== undefined) {
+    const response = await fetch(input.url);
+    if (!response.ok) {
+      throw new ProviderError(
+        `Failed to fetch transcription audio URL with status ${response.status}.`,
+        {
+          provider: 'openai',
+          statusCode: response.status,
+        },
+      );
+    }
+    return await response.blob();
+  }
+
+  throw new ProviderCapabilityError(
+    'Transcription audio input requires file, data, or url.',
+    {
+      provider: 'openai',
+    },
+  );
+}
+
+function normalizeOpenAITranscription(
+  raw: OpenAITranscriptionPayload | string,
+): Omit<TranscriptionResponse, 'model' | 'provider' | 'raw' | 'usage'> {
+  if (typeof raw === 'string') {
+    return {
+      text: raw,
+    };
+  }
+
+  return {
+    ...(typeof raw.duration === 'number' ? { durationSeconds: raw.duration } : {}),
+    ...(typeof raw.language === 'string' ? { language: raw.language } : {}),
+    ...(Array.isArray(raw.segments) ? { segments: raw.segments } : {}),
+    text: typeof raw.text === 'string' ? raw.text : '',
+    ...(Array.isArray(raw.words) ? { words: raw.words } : {}),
+  };
+}
+
+function base64ToBytes(data: string): Uint8Array {
+  const base64 = data.includes(',') ? data.slice(data.indexOf(',') + 1) : data;
+  if (typeof Buffer !== 'undefined') {
+    return new Uint8Array(Buffer.from(base64, 'base64'));
+  }
+
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+}
+
+function deriveAudioDurationSeconds(
+  audio: Uint8Array,
+  format: string,
+): number | undefined {
+  if (format === 'pcm') {
+    return audio.length / (24_000 * 2);
+  }
+
+  if (format !== 'wav') {
+    return undefined;
+  }
+
+  return deriveWavDurationSeconds(audio);
+}
+
+function deriveAudioInputDurationSeconds(input: AudioInput): number | undefined {
+  const bytes =
+    input.file instanceof Uint8Array
+      ? input.file
+      : input.file instanceof ArrayBuffer
+        ? new Uint8Array(input.file)
+        : input.data !== undefined
+          ? base64ToBytes(input.data)
+          : undefined;
+
+  if (!bytes || !/wav|x-wav/i.test(input.mediaType)) {
+    return undefined;
+  }
+
+  return deriveWavDurationSeconds(bytes);
+}
+
+function deriveWavDurationSeconds(audio: Uint8Array): number | undefined {
+  if (audio.length < 44 || textDecoder.decode(audio.subarray(0, 4)) !== 'RIFF') {
+    return undefined;
+  }
+
+  const view = new DataView(audio.buffer, audio.byteOffset, audio.byteLength);
+  const byteRate = view.getUint32(28, true);
+  const dataSize = findWavDataSize(audio);
+  if (!byteRate || dataSize === undefined) {
+    return undefined;
+  }
+
+  return dataSize / byteRate;
+}
+
+const textDecoder = new TextDecoder();
+
+function findWavDataSize(audio: Uint8Array): number | undefined {
+  for (let offset = 12; offset + 8 <= audio.length; ) {
+    const chunkId = textDecoder.decode(audio.subarray(offset, offset + 4));
+    const chunkSize = new DataView(
+      audio.buffer,
+      audio.byteOffset + offset + 4,
+      4,
+    ).getUint32(0, true);
+    if (chunkId === 'data') {
+      return chunkSize;
+    }
+    offset += 8 + chunkSize + (chunkSize % 2);
+  }
+  return undefined;
+}
+
+function mediaTypeForSpeechFormat(format: string): string {
+  switch (format) {
+    case 'aac':
+      return 'audio/aac';
+    case 'flac':
+      return 'audio/flac';
+    case 'opus':
+      return 'audio/opus';
+    case 'pcm':
+      return 'audio/pcm';
+    case 'wav':
+      return 'audio/wav';
+    case 'mp3':
+    default:
+      return 'audio/mpeg';
   }
 }
 

@@ -148,7 +148,37 @@ console.log(remoteOpenAIModels[0]?.id);
 console.log(remoteOpenAIModels[0]?.ownedBy);
 ```
 
-This is discovery-only. It does not automatically make newly discovered models routable through `complete()` or `stream()`. If you want to use an unshipped model with this library today, register it explicitly with `client.models.register(...)` first.
+This is discovery-only. It does not automatically make newly discovered models routable through `complete()`, `stream()`, `speak()`, or `transcribe()`. If you want to use an unshipped model with this library today, register it explicitly with `client.models.register(...)` first.
+
+## 9. Use Speech APIs
+
+OpenAI batch text-to-speech and speech-to-text use separate methods.
+
+```ts
+const speech = await client.speak({
+  input: 'Your appointment is confirmed for 10 AM.',
+  model: 'gpt-4o-mini-tts',
+  voice: 'alloy',
+  format: 'mp3',
+  estimatedOutputSeconds: 4,
+});
+
+const transcript = await client.transcribe({
+  input: {
+    data: audioBase64,
+    filename: 'call.wav',
+    mediaType: 'audio/wav',
+  },
+  inputAudioSeconds: 42,
+  model: 'gpt-4o-mini-transcribe',
+});
+
+console.log(speech.audio);
+console.log(transcript.text);
+console.log(speech.usage?.costUSD);
+```
+
+Speech usage uses different units from text generation, including audio seconds and characters. Use `usage.costUSD` for numeric operations and `usage.cost` only as a formatted display string. See [Speech](./SPEECH.md) for the full guide.
 
 ## Common Import Patterns
 

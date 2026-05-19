@@ -10,6 +10,130 @@ export function calcCostUSD(input, registry = new ModelRegistry()) {
         costForTokens(input.cachedReadTokens ?? 0, model.cacheReadPrice ?? model.inputPrice * 0.1) +
         costForTokens(input.cachedWriteTokens ?? 0, model.cacheWritePrice ?? model.inputPrice * 1.25));
 }
+export function calcSpeechCostUSD(input, registry = new ModelRegistry()) {
+    const billingUnits = buildSpeechBillingUnits(input);
+    if (!registry.isSupported(input.model)) {
+        return {
+            billingUnits,
+            costBreakdown: [],
+            estimated: input.estimated ?? true,
+        };
+    }
+    const model = registry.get(input.model);
+    const prices = model.speechPrices;
+    if (!prices) {
+        return {
+            billingUnits,
+            costBreakdown: [],
+            estimated: input.estimated ?? true,
+        };
+    }
+    const estimated = input.estimated ?? true;
+    const costBreakdown = [];
+    addSpeechCostLine(costBreakdown, {
+        estimated,
+        label: 'Text input',
+        quantity: input.inputTokens,
+        rateUSD: prices.textInputTokenPrice,
+        unit: 'text_input_token',
+    });
+    addSpeechCostLine(costBreakdown, {
+        estimated,
+        label: 'Text output',
+        quantity: input.outputTokens,
+        rateUSD: prices.textOutputTokenPrice,
+        unit: 'text_output_token',
+    });
+    addSpeechCostLine(costBreakdown, {
+        estimated,
+        label: 'Audio input tokens',
+        quantity: input.audioInputTokens,
+        rateUSD: prices.audioInputTokenPrice,
+        unit: 'audio_input_token',
+    });
+    addSpeechCostLine(costBreakdown, {
+        estimated,
+        label: 'Audio output tokens',
+        quantity: input.audioOutputTokens,
+        rateUSD: prices.audioOutputTokenPrice,
+        unit: 'audio_output_token',
+    });
+    addSpeechCostLine(costBreakdown, {
+        estimated,
+        label: 'Input audio duration',
+        quantity: input.inputAudioSeconds,
+        rateUSD: prices.inputAudioSecondPrice,
+        unit: 'audio_second',
+    });
+    addSpeechCostLine(costBreakdown, {
+        estimated,
+        label: 'Output audio duration',
+        quantity: input.outputAudioSeconds,
+        rateUSD: prices.outputAudioSecondPrice,
+        unit: 'audio_second',
+    });
+    addSpeechCostLine(costBreakdown, {
+        estimated,
+        label: 'Input characters',
+        quantity: input.inputCharacters,
+        rateUSD: prices.characterInputPrice,
+        unit: 'character',
+    });
+    addSpeechCostLine(costBreakdown, {
+        estimated,
+        label: 'Output characters',
+        quantity: input.outputCharacters,
+        rateUSD: prices.characterOutputPrice,
+        unit: 'character',
+    });
+    addSpeechCostLine(costBreakdown, {
+        estimated,
+        label: 'Request',
+        quantity: prices.requestPrice === undefined ? undefined : 1,
+        rateUSD: prices.requestPrice,
+        unit: 'request',
+    });
+    if (costBreakdown.length === 0) {
+        return {
+            billingUnits,
+            costBreakdown,
+            estimated,
+        };
+    }
+    const costUSD = roundUsd(costBreakdown.reduce((sum, item) => sum + item.amountUSD, 0));
+    return {
+        billingUnits,
+        cost: formatCost(costUSD),
+        costBreakdown,
+        costUSD,
+        estimated,
+    };
+}
+export function speechUsageWithCost(model, usage) {
+    const registry = new ModelRegistry({
+        [model.id]: toRegistryEntry(model),
+    });
+    const cost = calcSpeechCostUSD({
+        ...(usage.audioInputTokens !== undefined ? { audioInputTokens: usage.audioInputTokens } : {}),
+        ...(usage.audioOutputTokens !== undefined ? { audioOutputTokens: usage.audioOutputTokens } : {}),
+        ...(usage.estimated !== undefined ? { estimated: usage.estimated } : {}),
+        ...(usage.inputAudioSeconds !== undefined ? { inputAudioSeconds: usage.inputAudioSeconds } : {}),
+        ...(usage.inputCharacters !== undefined ? { inputCharacters: usage.inputCharacters } : {}),
+        ...(usage.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
+        model: model.id,
+        ...(usage.outputAudioSeconds !== undefined ? { outputAudioSeconds: usage.outputAudioSeconds } : {}),
+        ...(usage.outputCharacters !== undefined ? { outputCharacters: usage.outputCharacters } : {}),
+        ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
+    }, registry);
+    return {
+        ...usage,
+        billingUnits: cost.billingUnits,
+        ...(cost.cost !== undefined ? { cost: cost.cost } : {}),
+        ...(cost.costUSD !== undefined ? { costUSD: cost.costUSD } : {}),
+        costBreakdown: cost.costBreakdown,
+        estimated: cost.estimated,
+    };
+}
 export function formatCost(usd) {
     if (usd === 0) {
         return '$0.00';
@@ -82,6 +206,12 @@ export function usageWithCost(model, usage) {
 function costForTokens(tokens, pricePerMillion) {
     return (tokens / 1_000_000) * pricePerMillion;
 }
+function costForCharacters(characters, pricePerMillion) {
+    return (characters / 1_000_000) * pricePerMillion;
+}
+function costForSeconds(seconds, pricePerSecond) {
+    return seconds * pricePerSecond;
+}
 function roundUsd(value) {
     return Math.round(value * 1_000_000_000) / 1_000_000_000;
 }
@@ -102,5 +232,52 @@ function toRegistryEntry(model) {
     if (model.cacheWritePrice !== undefined) {
         entry.cacheWritePrice = model.cacheWritePrice;
     }
+    if (model.kind !== undefined) {
+        entry.kind = model.kind;
+    }
+    if (model.speechPrices !== undefined) {
+        entry.speechPrices = model.speechPrices;
+    }
+    if (model.supportedOutputModalities !== undefined) {
+        entry.supportedOutputModalities = model.supportedOutputModalities;
+    }
     return entry;
+}
+function buildSpeechBillingUnits(input) {
+    return {
+        ...(input.audioInputTokens !== undefined ? { audioInputTokens: input.audioInputTokens } : {}),
+        ...(input.audioOutputTokens !== undefined ? { audioOutputTokens: input.audioOutputTokens } : {}),
+        ...(input.inputAudioSeconds !== undefined ? { inputAudioSeconds: input.inputAudioSeconds } : {}),
+        ...(input.inputCharacters !== undefined ? { inputCharacters: input.inputCharacters } : {}),
+        ...(input.inputTokens !== undefined ? { inputTokens: input.inputTokens } : {}),
+        ...(input.outputAudioSeconds !== undefined ? { outputAudioSeconds: input.outputAudioSeconds } : {}),
+        ...(input.outputCharacters !== undefined ? { outputCharacters: input.outputCharacters } : {}),
+        ...(input.outputTokens !== undefined ? { outputTokens: input.outputTokens } : {}),
+    };
+}
+function addSpeechCostLine(items, input) {
+    if (input.quantity === undefined ||
+        input.rateUSD === undefined ||
+        input.quantity <= 0 ||
+        input.rateUSD < 0) {
+        return;
+    }
+    const amountUSD = input.unit === 'text_input_token' ||
+        input.unit === 'text_output_token' ||
+        input.unit === 'audio_input_token' ||
+        input.unit === 'audio_output_token'
+        ? costForTokens(input.quantity, input.rateUSD)
+        : input.unit === 'character'
+            ? costForCharacters(input.quantity, input.rateUSD)
+            : input.unit === 'audio_second'
+                ? costForSeconds(input.quantity, input.rateUSD)
+                : input.quantity * input.rateUSD;
+    items.push({
+        amountUSD: roundUsd(amountUSD),
+        estimated: input.estimated,
+        label: input.label,
+        quantity: input.quantity,
+        rateUSD: input.rateUSD,
+        unit: input.unit,
+    });
 }

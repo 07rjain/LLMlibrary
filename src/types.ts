@@ -234,6 +234,161 @@ export interface EmbeddingResponse {
   usage?: EmbeddingUsageMetrics;
 }
 
+export type SpeechProvider = Extract<CanonicalProvider, 'google' | 'mock' | 'openai'>;
+
+export interface AudioInput {
+  data?: string;
+  file?: ArrayBuffer | Blob | Uint8Array;
+  filename?: string;
+  mediaType: string;
+  url?: string;
+}
+
+export type SpeechOutputFormat = 'aac' | 'flac' | 'mp3' | 'opus' | 'pcm' | 'wav';
+
+export interface OpenAISpeechOptions {
+  chunkingStrategy?: 'auto' | JsonObject;
+  include?: string[];
+  knownSpeakerNames?: string[];
+  knownSpeakerReferences?: string[];
+}
+
+export interface SpeechProviderOptions {
+  openai?: OpenAISpeechOptions;
+}
+
+export interface SpeechRequestOptions {
+  botId?: string;
+  budgetExceededAction?: BudgetExceededAction;
+  budgetUsd?: number;
+  estimatedOutputSeconds?: number;
+  format?: SpeechOutputFormat;
+  input: string;
+  maxOutputSeconds?: number;
+  model?: string;
+  provider?: SpeechProvider;
+  providerOptions?: SpeechProviderOptions;
+  sessionId?: string;
+  signal?: AbortSignal;
+  speed?: number;
+  tenantId?: string;
+  voice?: string | { id: string };
+  instructions?: string;
+}
+
+export type TranscriptionResponseFormat =
+  | 'diarized_json'
+  | 'json'
+  | 'srt'
+  | 'text'
+  | 'verbose_json'
+  | 'vtt';
+
+export interface TranscriptionRequestOptions {
+  botId?: string;
+  budgetExceededAction?: BudgetExceededAction;
+  budgetUsd?: number;
+  diarization?: boolean;
+  input: AudioInput;
+  inputAudioSeconds?: number;
+  language?: string;
+  model?: string;
+  prompt?: string;
+  provider?: SpeechProvider;
+  providerOptions?: SpeechProviderOptions;
+  responseFormat?: TranscriptionResponseFormat;
+  sessionId?: string;
+  signal?: AbortSignal;
+  temperature?: number;
+  tenantId?: string;
+  timestampGranularities?: Array<'segment' | 'word'>;
+}
+
+export interface SpeechBillingUnits {
+  audioInputTokens?: number;
+  audioOutputTokens?: number;
+  inputAudioSeconds?: number;
+  inputCharacters?: number;
+  inputTokens?: number;
+  outputAudioSeconds?: number;
+  outputCharacters?: number;
+  outputTokens?: number;
+}
+
+export type SpeechCostUnit =
+  | 'audio_input_token'
+  | 'audio_output_token'
+  | 'audio_second'
+  | 'character'
+  | 'request'
+  | 'text_input_token'
+  | 'text_output_token';
+
+export interface SpeechCostLineItem {
+  amountUSD: number;
+  estimated: boolean;
+  label: string;
+  quantity: number;
+  rateUSD: number;
+  unit: SpeechCostUnit;
+}
+
+export interface SpeechUsageMetrics {
+  audioInputTokens?: number;
+  audioOutputTokens?: number;
+  billingUnits?: SpeechBillingUnits;
+  cost?: string;
+  costBreakdown?: SpeechCostLineItem[];
+  costUSD?: number;
+  durationSeconds?: number;
+  estimated?: boolean;
+  inputAudioSeconds?: number;
+  inputCharacters?: number;
+  inputTokens?: number;
+  outputAudioSeconds?: number;
+  outputCharacters?: number;
+  outputTokens?: number;
+}
+
+export interface SpeechResponse {
+  audio: Uint8Array;
+  format: SpeechOutputFormat | string;
+  mediaType: string;
+  model: string;
+  provider: SpeechProvider;
+  raw: unknown;
+  usage?: SpeechUsageMetrics;
+}
+
+export interface TranscriptionSegment {
+  confidence?: number;
+  end?: number;
+  id?: number | string;
+  language?: string;
+  speaker?: string;
+  start?: number;
+  text: string;
+}
+
+export interface TranscriptionWord {
+  confidence?: number;
+  end?: number;
+  start?: number;
+  text: string;
+}
+
+export interface TranscriptionResponse {
+  durationSeconds?: number;
+  language?: string;
+  model: string;
+  provider: SpeechProvider;
+  raw: unknown;
+  segments?: TranscriptionSegment[];
+  text: string;
+  usage?: SpeechUsageMetrics;
+  words?: TranscriptionWord[];
+}
+
 export interface CanonicalResponse {
   content: CanonicalPart[];
   finishReason: CanonicalFinishReason;
@@ -277,15 +432,29 @@ export interface ModelInfo {
   };
   id: string;
   inputPrice: number;
-  kind?: 'completion' | 'embedding';
+  kind?: 'completion' | 'embedding' | 'speech' | 'transcription';
   lastUpdated: string;
   maxInputTokens?: number;
   outputPrice: number;
   provider: CanonicalProvider;
   supportedInputModalities?: Array<'audio' | 'document' | 'image' | 'text' | 'video'>;
+  speechPrices?: SpeechPriceBook;
+  supportedOutputModalities?: Array<'audio' | 'text'>;
   supportsStreaming: boolean;
   supportsTools: boolean;
   supportsVision: boolean;
+}
+
+export interface SpeechPriceBook {
+  audioInputTokenPrice?: number;
+  audioOutputTokenPrice?: number;
+  characterInputPrice?: number;
+  characterOutputPrice?: number;
+  inputAudioSecondPrice?: number;
+  outputAudioSecondPrice?: number;
+  requestPrice?: number;
+  textInputTokenPrice?: number;
+  textOutputTokenPrice?: number;
 }
 
 export type ModelCapability = keyof Pick<

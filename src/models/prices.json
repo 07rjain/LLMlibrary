@@ -168,5 +168,153 @@
     },
     "supportedInputModalities": ["audio", "document", "image", "text"],
     "lastUpdated": "2026-04-24"
+  },
+  "gpt-4o-mini-tts": {
+    "provider": "openai",
+    "kind": "speech",
+    "contextWindow": 2000,
+    "maxInputTokens": 2000,
+    "supportsVision": false,
+    "supportsTools": false,
+    "supportsStreaming": false,
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "speechPrices": {
+      "textInputTokenPrice": 0.6,
+      "outputAudioSecondPrice": 0.00025
+    },
+    "supportedInputModalities": ["text"],
+    "supportedOutputModalities": ["audio"],
+    "lastUpdated": "2026-05-19"
+  },
+  "gpt-4o-mini-tts-2025-12-15": {
+    "provider": "openai",
+    "kind": "speech",
+    "contextWindow": 2000,
+    "maxInputTokens": 2000,
+    "supportsVision": false,
+    "supportsTools": false,
+    "supportsStreaming": false,
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "speechPrices": {
+      "textInputTokenPrice": 0.6,
+      "outputAudioSecondPrice": 0.00025
+    },
+    "supportedInputModalities": ["text"],
+    "supportedOutputModalities": ["audio"],
+    "lastUpdated": "2026-05-19"
+  },
+  "tts-1": {
+    "provider": "openai",
+    "kind": "speech",
+    "contextWindow": 4096,
+    "supportsVision": false,
+    "supportsTools": false,
+    "supportsStreaming": false,
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "speechPrices": {
+      "characterInputPrice": 15
+    },
+    "supportedInputModalities": ["text"],
+    "supportedOutputModalities": ["audio"],
+    "lastUpdated": "2026-05-19"
+  },
+  "tts-1-hd": {
+    "provider": "openai",
+    "kind": "speech",
+    "contextWindow": 4096,
+    "supportsVision": false,
+    "supportsTools": false,
+    "supportsStreaming": false,
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "speechPrices": {
+      "characterInputPrice": 30
+    },
+    "supportedInputModalities": ["text"],
+    "supportedOutputModalities": ["audio"],
+    "lastUpdated": "2026-05-19"
+  },
+  "gpt-4o-mini-transcribe": {
+    "provider": "openai",
+    "kind": "transcription",
+    "contextWindow": 0,
+    "supportsVision": false,
+    "supportsTools": false,
+    "supportsStreaming": false,
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "speechPrices": {
+      "inputAudioSecondPrice": 0.00005
+    },
+    "supportedInputModalities": ["audio"],
+    "supportedOutputModalities": ["text"],
+    "lastUpdated": "2026-05-19"
+  },
+  "gpt-4o-mini-transcribe-2025-12-15": {
+    "provider": "openai",
+    "kind": "transcription",
+    "contextWindow": 0,
+    "supportsVision": false,
+    "supportsTools": false,
+    "supportsStreaming": false,
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "speechPrices": {
+      "inputAudioSecondPrice": 0.00005
+    },
+    "supportedInputModalities": ["audio"],
+    "supportedOutputModalities": ["text"],
+    "lastUpdated": "2026-05-19"
+  },
+  "gpt-4o-transcribe": {
+    "provider": "openai",
+    "kind": "transcription",
+    "contextWindow": 0,
+    "supportsVision": false,
+    "supportsTools": false,
+    "supportsStreaming": false,
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "speechPrices": {
+      "inputAudioSecondPrice": 0.0001
+    },
+    "supportedInputModalities": ["audio"],
+    "supportedOutputModalities": ["text"],
+    "lastUpdated": "2026-05-19"
+  },
+  "gpt-4o-transcribe-diarize": {
+    "provider": "openai",
+    "kind": "transcription",
+    "contextWindow": 0,
+    "supportsVision": false,
+    "supportsTools": false,
+    "supportsStreaming": false,
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "speechPrices": {
+      "inputAudioSecondPrice": 0.0001
+    },
+    "supportedInputModalities": ["audio"],
+    "supportedOutputModalities": ["text"],
+    "lastUpdated": "2026-05-19"
+  },
+  "whisper-1": {
+    "provider": "openai",
+    "kind": "transcription",
+    "contextWindow": 0,
+    "supportsVision": false,
+    "supportsTools": false,
+    "supportsStreaming": false,
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "speechPrices": {
+      "inputAudioSecondPrice": 0.0001
+    },
+    "supportedInputModalities": ["audio"],
+    "supportedOutputModalities": ["text"],
+    "lastUpdated": "2026-05-19"
   }
 }

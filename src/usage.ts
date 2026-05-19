@@ -2,7 +2,12 @@ import { loadPgPoolConstructor } from './node-pg-loader.js';
 import { sanitizeForLogging } from './redaction.js';
 import { getEnvironmentVariable, isProductionRuntime } from './runtime.js';
 
-import type { CanonicalProvider, UsageEvent } from './types.js';
+import type {
+  CanonicalProvider,
+  SpeechProvider,
+  SpeechUsageMetrics,
+  UsageEvent,
+} from './types.js';
 import type {
   PostgresSessionStorePool,
   PostgresSessionStoreQueryResult,
@@ -40,14 +45,65 @@ export interface UsageSummary {
   totalOutputTokens: number;
 }
 
+export interface SpeechUsageQuery {
+  botId?: string;
+  kind?: 'speech' | 'transcription';
+  model?: string;
+  provider?: SpeechProvider;
+  sessionId?: string;
+  since?: string;
+  tenantId?: string;
+  until?: string;
+}
+
+export interface SpeechUsageBreakdown {
+  kind: 'speech' | 'transcription';
+  model: string;
+  provider: SpeechProvider;
+  requestCount: number;
+  totalAudioInputSeconds: number;
+  totalAudioOutputSeconds: number;
+  totalCostUSD: number;
+  totalInputCharacters: number;
+  totalInputTokens: number;
+  totalOutputCharacters: number;
+  totalOutputTokens: number;
+}
+
+export interface SpeechUsageSummary {
+  breakdown: SpeechUsageBreakdown[];
+  requestCount: number;
+  totalAudioInputSeconds: number;
+  totalAudioOutputSeconds: number;
+  totalCostUSD: number;
+  totalInputCharacters: number;
+  totalInputTokens: number;
+  totalOutputCharacters: number;
+  totalOutputTokens: number;
+}
+
+export interface SpeechUsageEvent {
+  botId?: string;
+  durationMs: number;
+  kind: 'speech' | 'transcription';
+  model: string;
+  provider: SpeechProvider;
+  sessionId?: string;
+  speechUsage: SpeechUsageMetrics;
+  tenantId?: string;
+  timestamp: string;
+}
+
 export type UsageExportFormat = 'csv' | 'json';
 
 /** Contract for development and persistent usage logging backends. */
 export interface UsageLogger {
   close?(): Promise<void>;
   flush?(): Promise<void>;
+  getSpeechUsage?(query?: SpeechUsageQuery): Promise<SpeechUsageSummary>;
   getUsage?(query?: UsageQuery): Promise<UsageSummary>;
   log(event: UsageEvent): Promise<void> | void;
+  logSpeech?(event: SpeechUsageEvent): Promise<void> | void;
 }
 
 /** Configuration for the console usage logger. */
@@ -77,6 +133,20 @@ interface PostgresUsageSummaryRow {
   total_output_tokens: number | string;
 }
 
+interface PostgresSpeechUsageSummaryRow {
+  kind: 'speech' | 'transcription';
+  model: string;
+  provider: SpeechProvider;
+  request_count: number | string;
+  total_audio_input_seconds: number | string;
+  total_audio_output_seconds: number | string;
+  total_cost_usd: number | string;
+  total_input_characters: number | string;
+  total_input_tokens: number | string;
+  total_output_characters: number | string;
+  total_output_tokens: number | string;
+}
+
 export class ConsoleLogger implements UsageLogger {
   private readonly enabled: boolean;
   private readonly write: (message: string) => void;
@@ -92,6 +162,14 @@ export class ConsoleLogger implements UsageLogger {
     }
 
     this.write(`llm-usage ${JSON.stringify(sanitizeForLogging(event))}`);
+  }
+
+  logSpeech(event: SpeechUsageEvent): void {
+    if (!this.enabled) {
+      return;
+    }
+
+    this.write(`llm-speech-usage ${JSON.stringify(sanitizeForLogging(event))}`);
   }
 }
 
@@ -116,6 +194,7 @@ export class PostgresUsageLogger implements UsageLogger {
   private readonly onError: (error: unknown) => void;
   private readonly pool: PostgresSessionStorePool | undefined;
   private queue: UsageEvent[] = [];
+  private speechQueue: SpeechUsageEvent[] = [];
   private readonly schemaName: string;
   private readonly tableName: string;
 
@@ -202,6 +281,40 @@ export class PostgresUsageLogger implements UsageLogger {
           `${this.tableName}_provider_model_timestamp_idx`,
         )} ON ${this.qualifiedTableName()} (provider, model, timestamp DESC)`,
       );
+      await pool.query(
+        `CREATE TABLE IF NOT EXISTS ${this.speechQualifiedTableName()} (
+          id BIGSERIAL PRIMARY KEY,
+          timestamp TIMESTAMPTZ NOT NULL,
+          provider TEXT NOT NULL,
+          model TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          audio_input_tokens INTEGER NOT NULL DEFAULT 0,
+          audio_output_tokens INTEGER NOT NULL DEFAULT 0,
+          input_audio_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+          output_audio_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+          input_characters INTEGER NOT NULL DEFAULT 0,
+          output_characters INTEGER NOT NULL DEFAULT 0,
+          cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+          estimated BOOLEAN NOT NULL DEFAULT FALSE,
+          cost_breakdown_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+          duration_ms INTEGER NOT NULL,
+          tenant_id TEXT NOT NULL DEFAULT '',
+          session_id TEXT,
+          bot_id TEXT
+        )`,
+      );
+      await pool.query(
+        `CREATE INDEX IF NOT EXISTS ${quoteIdentifier(
+          `${this.tableName}_speech_tenant_timestamp_idx`,
+        )} ON ${this.speechQualifiedTableName()} (tenant_id, timestamp DESC)`,
+      );
+      await pool.query(
+        `CREATE INDEX IF NOT EXISTS ${quoteIdentifier(
+          `${this.tableName}_speech_provider_model_timestamp_idx`,
+        )} ON ${this.speechQualifiedTableName()} (provider, model, timestamp DESC)`,
+      );
     })();
 
     try {
@@ -217,18 +330,26 @@ export class PostgresUsageLogger implements UsageLogger {
       return this.flushPromise;
     }
 
-    if (this.queue.length === 0) {
+    if (this.queue.length === 0 && this.speechQueue.length === 0) {
       return;
     }
 
     clearScheduledFlush(this);
     const batch = this.queue.splice(0, this.queue.length);
-    this.flushPromise = this.flushBatch(batch).finally(() => {
-      this.flushPromise = null;
-      if (this.queue.length > 0) {
-        scheduleFlush(this);
+    const speechBatch = this.speechQueue.splice(0, this.speechQueue.length);
+
+    this.flushPromise = (async () => {
+      try {
+        await this.flushBatch(batch);
+        await this.flushSpeechBatch(speechBatch);
+      } finally {
+        this.flushPromise = null;
+        if (this.speechQueue.length > 0 || this.queue.length > 0) {
+          scheduleFlush(this);
+        }
       }
-    });
+    })();
+
     return this.flushPromise;
   }
 
@@ -286,10 +407,90 @@ export class PostgresUsageLogger implements UsageLogger {
     );
   }
 
+  async getSpeechUsage(
+    query: SpeechUsageQuery = {},
+  ): Promise<SpeechUsageSummary> {
+    await this.flush().catch(() => undefined);
+    await this.ensureSchema();
+
+    const { conditions, values } = buildSpeechUsageFilters(query);
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const pool = await this.getPool();
+    const result = await pool.query<PostgresSpeechUsageSummaryRow>(
+      `SELECT
+         provider,
+         model,
+         kind,
+         COUNT(*) AS request_count,
+         COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
+         COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+         COALESCE(SUM(input_audio_seconds), 0) AS total_audio_input_seconds,
+         COALESCE(SUM(output_audio_seconds), 0) AS total_audio_output_seconds,
+         COALESCE(SUM(input_characters), 0) AS total_input_characters,
+         COALESCE(SUM(output_characters), 0) AS total_output_characters,
+         COALESCE(SUM(cost_usd), 0) AS total_cost_usd
+       FROM ${this.speechQualifiedTableName()}
+       ${whereClause}
+       GROUP BY provider, model, kind
+       ORDER BY provider ASC, model ASC, kind ASC`,
+      values,
+    );
+
+    const breakdown = result.rows.map((row) => ({
+      kind: row.kind,
+      model: row.model,
+      provider: row.provider,
+      requestCount: Number(row.request_count),
+      totalAudioInputSeconds: Number(row.total_audio_input_seconds),
+      totalAudioOutputSeconds: Number(row.total_audio_output_seconds),
+      totalCostUSD: Number(row.total_cost_usd),
+      totalInputCharacters: Number(row.total_input_characters),
+      totalInputTokens: Number(row.total_input_tokens),
+      totalOutputCharacters: Number(row.total_output_characters),
+      totalOutputTokens: Number(row.total_output_tokens),
+    }));
+
+    return breakdown.reduce<SpeechUsageSummary>(
+      (summary, row) => {
+        summary.breakdown.push(row);
+        summary.requestCount += row.requestCount;
+        summary.totalAudioInputSeconds += row.totalAudioInputSeconds;
+        summary.totalAudioOutputSeconds += row.totalAudioOutputSeconds;
+        summary.totalCostUSD += row.totalCostUSD;
+        summary.totalInputCharacters += row.totalInputCharacters;
+        summary.totalInputTokens += row.totalInputTokens;
+        summary.totalOutputCharacters += row.totalOutputCharacters;
+        summary.totalOutputTokens += row.totalOutputTokens;
+        return summary;
+      },
+      {
+        breakdown: [],
+        requestCount: 0,
+        totalAudioInputSeconds: 0,
+        totalAudioOutputSeconds: 0,
+        totalCostUSD: 0,
+        totalInputCharacters: 0,
+        totalInputTokens: 0,
+        totalOutputCharacters: 0,
+        totalOutputTokens: 0,
+      },
+    );
+  }
+
   async log(event: UsageEvent): Promise<void> {
     this.queue.push(cloneUsageEvent(event));
 
     if (this.queue.length >= this.batchSize) {
+      return this.flush();
+    }
+
+    scheduleFlush(this);
+  }
+
+  async logSpeech(event: SpeechUsageEvent): Promise<void> {
+    this.speechQueue.push(cloneSpeechUsageEvent(event));
+
+    if (this.speechQueue.length >= this.batchSize) {
       return this.flush();
     }
 
@@ -356,6 +557,75 @@ export class PostgresUsageLogger implements UsageLogger {
     }
   }
 
+  private async flushSpeechBatch(batch: SpeechUsageEvent[]): Promise<void> {
+    if (batch.length === 0) {
+      return;
+    }
+
+    try {
+      await this.ensureSchema();
+      const columns = [
+        'timestamp',
+        'provider',
+        'model',
+        'kind',
+        'input_tokens',
+        'output_tokens',
+        'audio_input_tokens',
+        'audio_output_tokens',
+        'input_audio_seconds',
+        'output_audio_seconds',
+        'input_characters',
+        'output_characters',
+        'cost_usd',
+        'estimated',
+        'cost_breakdown_json',
+        'duration_ms',
+        'tenant_id',
+        'session_id',
+        'bot_id',
+      ];
+      const values: unknown[] = [];
+      const placeholders = batch.map((event, index) => {
+        const offset = index * columns.length;
+        const usage = event.speechUsage;
+        values.push(
+          event.timestamp,
+          event.provider,
+          event.model,
+          event.kind,
+          usage.inputTokens ?? 0,
+          usage.outputTokens ?? 0,
+          usage.audioInputTokens ?? usage.billingUnits?.audioInputTokens ?? 0,
+          usage.audioOutputTokens ?? usage.billingUnits?.audioOutputTokens ?? 0,
+          usage.inputAudioSeconds ?? usage.billingUnits?.inputAudioSeconds ?? 0,
+          usage.outputAudioSeconds ?? usage.billingUnits?.outputAudioSeconds ?? 0,
+          usage.inputCharacters ?? usage.billingUnits?.inputCharacters ?? 0,
+          usage.outputCharacters ?? usage.billingUnits?.outputCharacters ?? 0,
+          usage.costUSD ?? 0,
+          usage.estimated ?? false,
+          JSON.stringify(usage.costBreakdown ?? []),
+          event.durationMs,
+          normalizeTenantId(event.tenantId),
+          event.sessionId ?? null,
+          event.botId ?? null,
+        );
+        return `(${columns.map((_, columnIndex) => `$${offset + columnIndex + 1}`).join(', ')})`;
+      });
+
+      const pool = await this.getPool();
+      await pool.query(
+        `INSERT INTO ${this.speechQualifiedTableName()} (${columns.join(', ')})
+         VALUES ${placeholders.join(', ')}`,
+        values,
+      );
+    } catch (error) {
+      this.speechQueue = [...batch, ...this.speechQueue];
+      this.onError(error);
+      throw error;
+    }
+  }
+
   private async getPool(): Promise<PostgresSessionStorePool> {
     if (this.pool) {
       return this.pool;
@@ -379,6 +649,12 @@ export class PostgresUsageLogger implements UsageLogger {
 
   private qualifiedTableName(): string {
     return `${quoteIdentifier(this.schemaName)}.${quoteIdentifier(this.tableName)}`;
+  }
+
+  private speechQualifiedTableName(): string {
+    return `${quoteIdentifier(this.schemaName)}.${quoteIdentifier(
+      `${this.tableName}_speech`,
+    )}`;
   }
 }
 
@@ -427,6 +703,56 @@ function buildUsageFilters(query: UsageQuery): {
   return { conditions, values };
 }
 
+function buildSpeechUsageFilters(query: SpeechUsageQuery): {
+  conditions: string[];
+  values: unknown[];
+} {
+  const conditions: string[] = [];
+  const values: unknown[] = [];
+
+  if (query.tenantId !== undefined) {
+    values.push(normalizeTenantId(query.tenantId));
+    conditions.push(`tenant_id = $${values.length}`);
+  }
+
+  if (query.sessionId !== undefined) {
+    values.push(query.sessionId);
+    conditions.push(`session_id = $${values.length}`);
+  }
+
+  if (query.provider !== undefined) {
+    values.push(query.provider);
+    conditions.push(`provider = $${values.length}`);
+  }
+
+  if (query.model !== undefined) {
+    values.push(query.model);
+    conditions.push(`model = $${values.length}`);
+  }
+
+  if (query.kind !== undefined) {
+    values.push(query.kind);
+    conditions.push(`kind = $${values.length}`);
+  }
+
+  if (query.botId !== undefined) {
+    values.push(query.botId);
+    conditions.push(`bot_id = $${values.length}`);
+  }
+
+  if (query.since !== undefined) {
+    values.push(query.since);
+    conditions.push(`timestamp >= $${values.length}`);
+  }
+
+  if (query.until !== undefined) {
+    values.push(query.until);
+    conditions.push(`timestamp <= $${values.length}`);
+  }
+
+  return { conditions, values };
+}
+
 function clearScheduledFlush(logger: PostgresUsageLogger): void {
   if (!logger['flushTimer']) {
     return;
@@ -439,6 +765,21 @@ function clearScheduledFlush(logger: PostgresUsageLogger): void {
 function cloneUsageEvent(event: UsageEvent): UsageEvent {
   return {
     ...event,
+  };
+}
+
+function cloneSpeechUsageEvent(event: SpeechUsageEvent): SpeechUsageEvent {
+  return {
+    ...event,
+    speechUsage: {
+      ...event.speechUsage,
+      ...(event.speechUsage.billingUnits
+        ? { billingUnits: { ...event.speechUsage.billingUnits } }
+        : {}),
+      ...(event.speechUsage.costBreakdown
+        ? { costBreakdown: event.speechUsage.costBreakdown.map((line) => ({ ...line })) }
+        : {}),
+    },
   };
 }
 
@@ -493,6 +834,54 @@ export function exportUsageSummary(
         row.totalInputTokens,
         row.totalOutputTokens,
         row.totalCachedTokens,
+        row.totalCostUSD.toFixed(6),
+      ]
+        .map((value) => escapeCsvField(String(value)))
+        .join(','),
+    );
+  }
+
+  return lines.join('\n');
+}
+
+/** Serializes aggregated speech usage into either JSON or CSV output. */
+export function exportSpeechUsageSummary(
+  summary: SpeechUsageSummary,
+  format: UsageExportFormat,
+): string {
+  if (format === 'json') {
+    return JSON.stringify(summary, null, 2);
+  }
+
+  const lines = [
+    [
+      'provider',
+      'model',
+      'kind',
+      'requestCount',
+      'totalInputTokens',
+      'totalOutputTokens',
+      'totalInputCharacters',
+      'totalOutputCharacters',
+      'totalAudioInputSeconds',
+      'totalAudioOutputSeconds',
+      'totalCostUSD',
+    ].join(','),
+  ];
+
+  for (const row of summary.breakdown) {
+    lines.push(
+      [
+        row.provider,
+        row.model,
+        row.kind,
+        row.requestCount,
+        row.totalInputTokens,
+        row.totalOutputTokens,
+        row.totalInputCharacters,
+        row.totalOutputCharacters,
+        row.totalAudioInputSeconds,
+        row.totalAudioOutputSeconds,
         row.totalCostUSD.toFixed(6),
       ]
         .map((value) => escapeCsvField(String(value)))

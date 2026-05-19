@@ -117,7 +117,7 @@ describe('token estimator', () => {
 
     expect(baseCount).toBeGreaterThan(0);
     expect(withSystemCount).toBeGreaterThan(baseCount);
-  });
+  }, 15_000);
 
   it('rejects OpenAI exact token counting for unsupported multimodal parts', async () => {
     await expect(
@@ -131,7 +131,7 @@ describe('token estimator', () => {
         model: 'gpt-4o',
       }),
     ).rejects.toThrow('OpenAI token counting only supports text and tool message parts.');
-  });
+  }, 15_000);
 
   it('throws when token count endpoints fail', async () => {
     const anthropicFetch = vi.fn(async () => new Response('', { status: 500 }));

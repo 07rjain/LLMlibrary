@@ -15,7 +15,9 @@ import { getEnvironmentVariable } from './runtime.js';
 import { PostgresSessionStore } from './session-store.js';
 import { createCancelableStream } from './stream-control.js';
 import { calcCostUSD, estimateMessageTokens, formatCost } from './utils/index.js';
-import { exportUsageSummary } from './usage.js';
+import { calcSpeechCostUSD } from './utils/cost.js';
+import { estimateTokens } from './utils/token-estimator.js';
+import { exportSpeechUsageSummary, exportUsageSummary } from './usage.js';
 
 import type { ModelRegistryOptions, ModelPriceOverrides } from './models/index.js';
 import type { ConversationOptions, ConversationSnapshot } from './conversation.js';
@@ -47,7 +49,12 @@ import type {
   ProviderOptions,
   RemoteModelInfo,
   RemoteModelListOptions,
+  SpeechProvider,
+  SpeechRequestOptions,
+  SpeechResponse,
   StreamChunk,
+  TranscriptionRequestOptions,
+  TranscriptionResponse,
   UsageEvent,
   UsageMetrics,
 } from './types.js';
@@ -56,6 +63,8 @@ import type {
   UsageLogger,
   UsageQuery,
   UsageSummary,
+  SpeechUsageQuery,
+  SpeechUsageSummary,
 } from './usage.js';
 import type { RetryOptions } from './utils/retry.js';
 
@@ -138,6 +147,24 @@ export interface MockLLMClientOptions
         | AsyncIterable<StreamChunk>
         | Promise<AsyncIterable<StreamChunk> | StreamChunk[]>
         | StreamChunk[])
+  >;
+  speeches?: Array<
+    | SpeechResponse
+    | ((
+        options: SpeechRequestOptions & {
+          model: string;
+          provider: SpeechProvider;
+        },
+      ) => Promise<SpeechResponse> | SpeechResponse)
+  >;
+  transcriptions?: Array<
+    | TranscriptionResponse
+    | ((
+        options: TranscriptionRequestOptions & {
+          model: string;
+          provider: SpeechProvider;
+        },
+      ) => Promise<TranscriptionResponse> | TranscriptionResponse)
   >;
 }
 
@@ -341,6 +368,42 @@ export class LLMClient {
     return this.dispatchEmbed(resolved);
   }
 
+  /** Executes a single non-streaming text-to-speech request. */
+  async speak(options: SpeechRequestOptions): Promise<SpeechResponse> {
+    const resolved = this.resolveSpeechRequest(options);
+    this.handleSpeechBudgetExceededAction(resolved, 'speech');
+    const startedAt = Date.now();
+    const response = await this.dispatchSpeak(resolved);
+    await this.logSpeechUsageEvent({
+      durationMs: Date.now() - startedAt,
+      kind: 'speech',
+      model: response.model,
+      options,
+      provider: response.provider,
+      usage: response.usage,
+    });
+    return response;
+  }
+
+  /** Executes a single non-streaming speech-to-text request. */
+  async transcribe(
+    options: TranscriptionRequestOptions,
+  ): Promise<TranscriptionResponse> {
+    const resolved = this.resolveTranscriptionRequest(options);
+    this.handleSpeechBudgetExceededAction(resolved, 'transcription');
+    const startedAt = Date.now();
+    const response = await this.dispatchTranscribe(resolved);
+    await this.logSpeechUsageEvent({
+      durationMs: Date.now() - startedAt,
+      kind: 'transcription',
+      model: response.model,
+      options,
+      provider: response.provider,
+      usage: response.usage,
+    });
+    return response;
+  }
+
   /** Executes a streaming completion request and yields canonical chunks. */
   stream(options: LLMRequestOptions): CancelableStream<StreamChunk> {
     const plan = this.resolveRequestPlan(options);
@@ -412,12 +475,31 @@ export class LLMClient {
     return this.usageLogger.getUsage(query);
   }
 
+  /** Returns aggregated speech usage from the configured usage logger. */
+  async getSpeechUsage(query: SpeechUsageQuery = {}): Promise<SpeechUsageSummary> {
+    if (!this.usageLogger?.getSpeechUsage) {
+      throw new ProviderCapabilityError(
+        'Speech usage aggregation requires a usage logger that implements getSpeechUsage(), such as PostgresUsageLogger.',
+      );
+    }
+
+    return this.usageLogger.getSpeechUsage(query);
+  }
+
   /** Returns aggregated usage serialized as JSON or CSV. */
   async exportUsage(
     format: UsageExportFormat,
     query: UsageQuery = {},
   ): Promise<string> {
     return exportUsageSummary(await this.getUsage(query), format);
+  }
+
+  /** Returns aggregated speech usage serialized as JSON or CSV. */
+  async exportSpeechUsage(
+    format: UsageExportFormat,
+    query: SpeechUsageQuery = {},
+  ): Promise<string> {
+    return exportSpeechUsageSummary(await this.getSpeechUsage(query), format);
   }
 
   /** Returns the session store configured on this client, if any. */
@@ -517,6 +599,52 @@ export class LLMClient {
       default:
         throw new ProviderCapabilityError(
           `Provider "${resolved.provider}" is not implemented in this client yet.`,
+          {
+            model: resolved.model,
+            provider: resolved.provider,
+          },
+        );
+    }
+  }
+
+  private dispatchSpeak(
+    resolved: SpeechRequestOptions & {
+      model: string;
+      provider: SpeechProvider;
+    },
+  ): Promise<SpeechResponse> {
+    switch (resolved.provider) {
+      case 'openai':
+        return this.getOpenAIAdapter(resolved.model).speak({
+          ...resolved,
+          provider: 'openai',
+        });
+      default:
+        throw new ProviderCapabilityError(
+          `Provider "${resolved.provider}" is not implemented for text-to-speech in this client yet.`,
+          {
+            model: resolved.model,
+            provider: resolved.provider,
+          },
+        );
+    }
+  }
+
+  private dispatchTranscribe(
+    resolved: TranscriptionRequestOptions & {
+      model: string;
+      provider: SpeechProvider;
+    },
+  ): Promise<TranscriptionResponse> {
+    switch (resolved.provider) {
+      case 'openai':
+        return this.getOpenAIAdapter(resolved.model).transcribe({
+          ...resolved,
+          provider: 'openai',
+        });
+      default:
+        throw new ProviderCapabilityError(
+          `Provider "${resolved.provider}" is not implemented for speech-to-text in this client yet.`,
           {
             model: resolved.model,
             provider: resolved.provider,
@@ -634,6 +762,87 @@ export class LLMClient {
     }
 
     validateEmbeddingRequest(options, modelInfo, model);
+
+    return {
+      ...options,
+      model,
+      provider,
+    };
+  }
+
+  private resolveSpeechRequest(
+    options: SpeechRequestOptions,
+  ): SpeechRequestOptions & {
+    model: string;
+    provider: SpeechProvider;
+  } {
+    const model = options.model ?? 'gpt-4o-mini-tts';
+    const modelInfo = this.modelRegistry.assertModelKind(model, 'speech');
+    const provider = options.provider ?? (modelInfo.provider as SpeechProvider);
+
+    if (provider !== 'openai') {
+      throw new ProviderCapabilityError(
+        `Text-to-speech currently supports provider "openai" only in v1. Received "${provider}".`,
+        {
+          model,
+          provider,
+        },
+      );
+    }
+
+    if (provider !== modelInfo.provider) {
+      throw new ProviderCapabilityError(
+        `Model "${model}" belongs to provider "${modelInfo.provider}", but speech request asked for "${provider}".`,
+        {
+          model,
+          provider,
+        },
+      );
+    }
+
+    if (options.input.length === 0) {
+      throw new ProviderCapabilityError('Text-to-speech input cannot be empty.', {
+        model,
+        provider,
+      });
+    }
+
+    return {
+      ...options,
+      model,
+      provider,
+    };
+  }
+
+  private resolveTranscriptionRequest(
+    options: TranscriptionRequestOptions,
+  ): TranscriptionRequestOptions & {
+    model: string;
+    provider: SpeechProvider;
+  } {
+    const model = options.model ?? 'gpt-4o-mini-transcribe';
+    const modelInfo = this.modelRegistry.assertModelKind(model, 'transcription');
+    const provider = options.provider ?? (modelInfo.provider as SpeechProvider);
+
+    if (provider !== 'openai') {
+      throw new ProviderCapabilityError(
+        `Speech-to-text currently supports provider "openai" only in v1. Received "${provider}".`,
+        {
+          model,
+          provider,
+        },
+      );
+    }
+
+    if (provider !== modelInfo.provider) {
+      throw new ProviderCapabilityError(
+        `Model "${model}" belongs to provider "${modelInfo.provider}", but transcription request asked for "${provider}".`,
+        {
+          model,
+          provider,
+        },
+      );
+    }
 
     return {
       ...options,
@@ -772,6 +981,132 @@ export class LLMClient {
     throw error;
   }
 
+  private handleSpeechBudgetExceededAction(
+    options:
+      | (SpeechRequestOptions & { model: string; provider: SpeechProvider })
+      | (TranscriptionRequestOptions & { model: string; provider: SpeechProvider }),
+    kind: 'speech' | 'transcription',
+  ): void {
+    if (options.budgetUsd === undefined) {
+      return;
+    }
+
+    const model = this.modelRegistry.get(options.model);
+    const speechPrices = model.speechPrices;
+    if (!speechPrices) {
+      throw new BudgetExceededError(
+        `Cannot preflight ${kind} budget for "${options.model}" because speech pricing metadata is missing.`,
+        {
+          model: options.model,
+          provider: options.provider,
+        },
+      );
+    }
+
+    if (kind === 'speech') {
+      const speechOptions = options as SpeechRequestOptions & {
+        model: string;
+        provider: SpeechProvider;
+      };
+      const outputAudioSeconds =
+        speechOptions.estimatedOutputSeconds ?? speechOptions.maxOutputSeconds;
+      if (
+        speechPrices.outputAudioSecondPrice !== undefined &&
+        outputAudioSeconds === undefined
+      ) {
+        throw new BudgetExceededError(
+          'Speech budget preflight requires estimatedOutputSeconds or maxOutputSeconds when output audio duration affects cost.',
+          {
+            model: options.model,
+            provider: options.provider,
+          },
+        );
+      }
+
+      const estimatedCost = calcSpeechCostUSD(
+        {
+          estimated: true,
+          inputCharacters: speechOptions.input.length,
+          inputTokens: estimateTokens(speechOptions.input),
+          model: options.model,
+          ...(outputAudioSeconds !== undefined ? { outputAudioSeconds } : {}),
+        },
+        this.modelRegistry,
+      );
+      this.throwIfSpeechBudgetExceeded(options, estimatedCost.costUSD);
+      return;
+    }
+
+    const transcriptionOptions = options as TranscriptionRequestOptions & {
+      model: string;
+      provider: SpeechProvider;
+    };
+    if (
+      speechPrices.inputAudioSecondPrice !== undefined &&
+      transcriptionOptions.inputAudioSeconds === undefined
+    ) {
+      throw new BudgetExceededError(
+        'Transcription budget preflight requires inputAudioSeconds when audio duration affects cost.',
+        {
+          model: options.model,
+          provider: options.provider,
+        },
+      );
+    }
+
+    const estimatedCost = calcSpeechCostUSD(
+      {
+        estimated: true,
+        ...(transcriptionOptions.inputAudioSeconds !== undefined
+          ? { inputAudioSeconds: transcriptionOptions.inputAudioSeconds }
+          : {}),
+        model: options.model,
+      },
+      this.modelRegistry,
+    );
+    this.throwIfSpeechBudgetExceeded(options, estimatedCost.costUSD);
+  }
+
+  private throwIfSpeechBudgetExceeded(
+    options: {
+      budgetExceededAction?: BudgetExceededAction;
+      budgetUsd?: number;
+      model: string;
+      provider: SpeechProvider;
+    },
+    estimatedCostUSD: number | undefined,
+  ): void {
+    if (options.budgetUsd === undefined || estimatedCostUSD === undefined) {
+      return;
+    }
+
+    if (estimatedCostUSD <= options.budgetUsd) {
+      return;
+    }
+
+    const error = new BudgetExceededError(
+      `Estimated speech request cost ${formatCost(estimatedCostUSD)} exceeds the budget of ${formatCost(
+        options.budgetUsd,
+      )}.`,
+      {
+        details: {
+          budgetUsd: options.budgetUsd,
+          estimatedCostUSD,
+        },
+        model: options.model,
+        provider: options.provider,
+      },
+    );
+
+    const action = options.budgetExceededAction ?? this.budgetExceededAction;
+    if (action === 'warn') {
+      this.onWarning(error.message);
+      return;
+    }
+
+    throw error;
+  }
+
   private async logUsageEvent(event: UsageEvent): Promise<void> {
     if (!this.usageLogger) {
       return;
@@ -779,6 +1114,44 @@ export class LLMClient {
 
     try {
       await this.usageLogger.log(event);
+    } catch {
+      return;
+    }
+  }
+
+  private async logSpeechUsageEvent(input: {
+    durationMs: number;
+    kind: 'speech' | 'transcription';
+    model: string;
+    options: SpeechRequestOptions | TranscriptionRequestOptions;
+    provider: SpeechProvider;
+    usage: SpeechResponse['usage'] | TranscriptionResponse['usage'] | undefined;
+  }): Promise<void> {
+    if (!this.usageLogger || !('logSpeech' in this.usageLogger)) {
+      return;
+    }
+
+    const logSpeech = this.usageLogger.logSpeech;
+    if (typeof logSpeech !== 'function') {
+      return;
+    }
+
+    try {
+      await logSpeech.call(this.usageLogger, {
+        durationMs: input.durationMs,
+        kind: input.kind,
+        model: input.model,
+        provider: input.provider,
+        speechUsage: input.usage ?? { estimated: true },
+        timestamp: new Date().toISOString(),
+        ...(input.options.botId !== undefined ? { botId: input.options.botId } : {}),
+        ...(input.options.sessionId !== undefined
+          ? { sessionId: input.options.sessionId }
+          : {}),
+        ...(input.options.tenantId !== undefined
+          ? { tenantId: input.options.tenantId }
+          : {}),
+      });
     } catch {
       return;
     }
@@ -876,7 +1249,9 @@ class MockLLMClient extends LLMClient {
   private readonly mockDefaultEmbeddingProvider: EmbeddingProvider;
   private readonly mockDefaultProvider: CanonicalProvider;
   private readonly responseQueue: NonNullable<MockLLMClientOptions['responses']>;
+  private readonly speechQueue: NonNullable<MockLLMClientOptions['speeches']>;
   private readonly streamQueue: NonNullable<MockLLMClientOptions['streams']>;
+  private readonly transcriptionQueue: NonNullable<MockLLMClientOptions['transcriptions']>;
 
   constructor(options: MockLLMClientOptions = {}) {
     const defaultModel = options.defaultModel ?? 'mock-model';
@@ -896,7 +1271,9 @@ class MockLLMClient extends LLMClient {
     this.mockDefaultModel = defaultModel;
     this.mockDefaultProvider = defaultProvider;
     this.responseQueue = [...(options.responses ?? [])];
+    this.speechQueue = [...(options.speeches ?? [])];
     this.streamQueue = [...(options.streams ?? [])];
+    this.transcriptionQueue = [...(options.transcriptions ?? [])];
   }
 
   override async embed(options: EmbeddingRequestOptions): Promise<EmbeddingResponse> {
@@ -930,6 +1307,54 @@ class MockLLMClient extends LLMClient {
 
     const response = typeof next === 'function' ? await next(resolved) : next;
     return response;
+  }
+
+  override async speak(options: SpeechRequestOptions): Promise<SpeechResponse> {
+    const resolved = this.resolveMockSpeechRequest(options);
+    const next = this.speechQueue.shift();
+
+    if (!next) {
+      return {
+        audio: new Uint8Array([1, 2, 3]),
+        format: options.format ?? 'mp3',
+        mediaType: 'audio/mpeg',
+        model: resolved.model,
+        provider: resolved.provider,
+        raw: { mock: true },
+        usage: {
+          cost: '$0.00',
+          costUSD: 0,
+          estimated: true,
+          inputCharacters: options.input.length,
+          inputTokens: estimateTokens(options.input),
+        },
+      };
+    }
+
+    return typeof next === 'function' ? await next(resolved) : next;
+  }
+
+  override async transcribe(
+    options: TranscriptionRequestOptions,
+  ): Promise<TranscriptionResponse> {
+    const resolved = this.resolveMockTranscriptionRequest(options);
+    const next = this.transcriptionQueue.shift();
+
+    if (!next) {
+      return {
+        model: resolved.model,
+        provider: resolved.provider,
+        raw: { mock: true },
+        text: '',
+        usage: {
+          cost: '$0.00',
+          costUSD: 0,
+          estimated: true,
+        },
+      };
+    }
+
+    return typeof next === 'function' ? await next(resolved) : next;
   }
 
   override stream(options: LLMRequestOptions): CancelableStream<StreamChunk> {
@@ -997,6 +1422,32 @@ class MockLLMClient extends LLMClient {
         options.model ?? this.mockDefaultEmbeddingModel,
       ),
       provider: options.provider ?? this.mockDefaultEmbeddingProvider,
+    };
+  }
+
+  private resolveMockSpeechRequest(
+    options: SpeechRequestOptions,
+  ): SpeechRequestOptions & {
+    model: string;
+    provider: SpeechProvider;
+  } {
+    return {
+      ...options,
+      model: options.model ?? 'mock-speech-model',
+      provider: options.provider ?? 'mock',
+    };
+  }
+
+  private resolveMockTranscriptionRequest(
+    options: TranscriptionRequestOptions,
+  ): TranscriptionRequestOptions & {
+    model: string;
+    provider: SpeechProvider;
+  } {
+    return {
+      ...options,
+      model: options.model ?? 'mock-transcription-model',
+      provider: options.provider ?? 'mock',
     };
   }
 }

@@ -23,7 +23,7 @@ import { ModelRouter } from '../src/router.js';
 import { InMemorySessionStore } from '../src/session-store.js';
 
 import type { ConversationSnapshot } from '../src/conversation.js';
-import type { UsageSummary } from '../src/usage.js';
+import type { SpeechUsageSummary, UsageSummary } from '../src/usage.js';
 
 const createdPools = pgMockState.createdPools as MockPool[];
 
@@ -511,6 +511,53 @@ describe('LLMClient', () => {
 
     expect(response.embeddings[0]?.values).toEqual([0.5, 0.6]);
     expect(response.provider).toBe('mock');
+  });
+
+  it('provides deterministic queued speech responses through LLMClient.mock()', async () => {
+    const client = LLMClient.mock({
+      speeches: [
+        {
+          audio: new Uint8Array([7, 8, 9]),
+          format: 'mp3',
+          mediaType: 'audio/mpeg',
+          model: 'mock-speech-model',
+          provider: 'mock',
+          raw: { mock: true },
+          usage: {
+            cost: '$0.00',
+            costUSD: 0,
+            inputCharacters: 5,
+            inputTokens: 2,
+          },
+        },
+      ],
+      transcriptions: [
+        {
+          model: 'mock-transcription-model',
+          provider: 'mock',
+          raw: { mock: true },
+          text: 'mock transcript',
+          usage: {
+            cost: '$0.00',
+            costUSD: 0,
+            inputAudioSeconds: 1.5,
+          },
+        },
+      ],
+    });
+
+    const speech = await client.speak({ input: 'Hello' });
+    const transcription = await client.transcribe({
+      input: {
+        file: new Uint8Array([1, 2, 3]),
+        mediaType: 'audio/wav',
+      },
+    });
+
+    expect([...speech.audio]).toEqual([7, 8, 9]);
+    expect(speech.provider).toBe('mock');
+    expect(transcription.text).toBe('mock transcript');
+    expect(transcription.provider).toBe('mock');
   });
 
   it('routes complete() calls to Anthropic by model', async () => {
@@ -1794,6 +1841,82 @@ describe('LLMClient', () => {
 
     await expect(client.exportUsage('csv')).resolves.toContain(
       'provider,model,requestCount,totalInputTokens,totalOutputTokens,totalCachedTokens,totalCostUSD',
+    );
+  });
+
+  it('delegates getSpeechUsage() to the configured usage logger', async () => {
+    const summary: SpeechUsageSummary = {
+      breakdown: [
+        {
+          kind: 'speech',
+          model: 'gpt-4o-mini-tts',
+          provider: 'openai',
+          requestCount: 1,
+          totalAudioInputSeconds: 0,
+          totalAudioOutputSeconds: 3,
+          totalCostUSD: 0.001,
+          totalInputCharacters: 12,
+          totalInputTokens: 3,
+          totalOutputCharacters: 0,
+          totalOutputTokens: 0,
+        },
+      ],
+      requestCount: 1,
+      totalAudioInputSeconds: 0,
+      totalAudioOutputSeconds: 3,
+      totalCostUSD: 0.001,
+      totalInputCharacters: 12,
+      totalInputTokens: 3,
+      totalOutputCharacters: 0,
+      totalOutputTokens: 0,
+    };
+    const usageLogger = {
+      getSpeechUsage: vi.fn(async () => summary),
+      log: vi.fn(async () => undefined),
+    };
+    const client = new LLMClient({
+      usageLogger,
+    });
+
+    await expect(client.getSpeechUsage({ tenantId: 'tenant-1' })).resolves.toEqual(summary);
+    expect(usageLogger.getSpeechUsage).toHaveBeenCalledWith({ tenantId: 'tenant-1' });
+  });
+
+  it('exports aggregated speech usage as CSV through the client surface', async () => {
+    const usageLogger = {
+      getSpeechUsage: vi.fn(async () => ({
+        breakdown: [
+          {
+            kind: 'transcription' as const,
+            model: 'gpt-4o-mini-transcribe',
+            provider: 'openai' as const,
+            requestCount: 1,
+            totalAudioInputSeconds: 2,
+            totalAudioOutputSeconds: 0,
+            totalCostUSD: 0.0001,
+            totalInputCharacters: 0,
+            totalInputTokens: 0,
+            totalOutputCharacters: 11,
+            totalOutputTokens: 3,
+          },
+        ],
+        requestCount: 1,
+        totalAudioInputSeconds: 2,
+        totalAudioOutputSeconds: 0,
+        totalCostUSD: 0.0001,
+        totalInputCharacters: 0,
+        totalInputTokens: 0,
+        totalOutputCharacters: 11,
+        totalOutputTokens: 3,
+      })),
+      log: vi.fn(async () => undefined),
+    };
+    const client = new LLMClient({
+      usageLogger,
+    });
+
+    await expect(client.exportSpeechUsage('csv')).resolves.toContain(
+      'provider,model,kind,requestCount,totalInputTokens,totalOutputTokens,totalInputCharacters,totalOutputCharacters,totalAudioInputSeconds,totalAudioOutputSeconds,totalCostUSD',
     );
   });
 

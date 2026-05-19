@@ -166,7 +166,155 @@ export declare const defaultModelPrices: {
         maxInputTokens: number;
         outputPrice: number;
         provider: "google";
-        supportedInputModalities: ("audio" | "document" | "image" | "text")[];
+        supportedInputModalities: ("text" | "document" | "audio" | "image")[];
+        supportsStreaming: false;
+        supportsTools: false;
+        supportsVision: false;
+    };
+    'gpt-4o-mini-tts': {
+        contextWindow: number;
+        inputPrice: number;
+        kind: "speech";
+        lastUpdated: string;
+        maxInputTokens: number;
+        outputPrice: number;
+        provider: "openai";
+        speechPrices: {
+            outputAudioSecondPrice: number;
+            textInputTokenPrice: number;
+        };
+        supportedInputModalities: "text"[];
+        supportedOutputModalities: "audio"[];
+        supportsStreaming: false;
+        supportsTools: false;
+        supportsVision: false;
+    };
+    'gpt-4o-mini-tts-2025-12-15': {
+        contextWindow: number;
+        inputPrice: number;
+        kind: "speech";
+        lastUpdated: string;
+        maxInputTokens: number;
+        outputPrice: number;
+        provider: "openai";
+        speechPrices: {
+            outputAudioSecondPrice: number;
+            textInputTokenPrice: number;
+        };
+        supportedInputModalities: "text"[];
+        supportedOutputModalities: "audio"[];
+        supportsStreaming: false;
+        supportsTools: false;
+        supportsVision: false;
+    };
+    'tts-1': {
+        contextWindow: number;
+        inputPrice: number;
+        kind: "speech";
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "openai";
+        speechPrices: {
+            characterInputPrice: number;
+        };
+        supportedInputModalities: "text"[];
+        supportedOutputModalities: "audio"[];
+        supportsStreaming: false;
+        supportsTools: false;
+        supportsVision: false;
+    };
+    'tts-1-hd': {
+        contextWindow: number;
+        inputPrice: number;
+        kind: "speech";
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "openai";
+        speechPrices: {
+            characterInputPrice: number;
+        };
+        supportedInputModalities: "text"[];
+        supportedOutputModalities: "audio"[];
+        supportsStreaming: false;
+        supportsTools: false;
+        supportsVision: false;
+    };
+    'gpt-4o-mini-transcribe': {
+        contextWindow: number;
+        inputPrice: number;
+        kind: "transcription";
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "openai";
+        speechPrices: {
+            inputAudioSecondPrice: number;
+        };
+        supportedInputModalities: "audio"[];
+        supportedOutputModalities: "text"[];
+        supportsStreaming: false;
+        supportsTools: false;
+        supportsVision: false;
+    };
+    'gpt-4o-mini-transcribe-2025-12-15': {
+        contextWindow: number;
+        inputPrice: number;
+        kind: "transcription";
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "openai";
+        speechPrices: {
+            inputAudioSecondPrice: number;
+        };
+        supportedInputModalities: "audio"[];
+        supportedOutputModalities: "text"[];
+        supportsStreaming: false;
+        supportsTools: false;
+        supportsVision: false;
+    };
+    'gpt-4o-transcribe': {
+        contextWindow: number;
+        inputPrice: number;
+        kind: "transcription";
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "openai";
+        speechPrices: {
+            inputAudioSecondPrice: number;
+        };
+        supportedInputModalities: "audio"[];
+        supportedOutputModalities: "text"[];
+        supportsStreaming: false;
+        supportsTools: false;
+        supportsVision: false;
+    };
+    'gpt-4o-transcribe-diarize': {
+        contextWindow: number;
+        inputPrice: number;
+        kind: "transcription";
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "openai";
+        speechPrices: {
+            inputAudioSecondPrice: number;
+        };
+        supportedInputModalities: "audio"[];
+        supportedOutputModalities: "text"[];
+        supportsStreaming: false;
+        supportsTools: false;
+        supportsVision: false;
+    };
+    'whisper-1': {
+        contextWindow: number;
+        inputPrice: number;
+        kind: "transcription";
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "openai";
+        speechPrices: {
+            inputAudioSecondPrice: number;
+        };
+        supportedInputModalities: "audio"[];
+        supportedOutputModalities: "text"[];
         supportsStreaming: false;
         supportsTools: false;
         supportsVision: false;

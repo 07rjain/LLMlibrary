@@ -16,12 +16,14 @@ vi.mock('pg', () => {
 import {
   ConsoleLogger,
   PostgresUsageLogger,
+  exportSpeechUsageSummary,
   exportUsageSummary,
   type PostgresSessionStorePool,
   type PostgresSessionStoreQueryResult,
 } from '../src/usage.js';
 
 import type { UsageEvent } from '../src/types.js';
+import type { SpeechUsageEvent } from '../src/usage.js';
 
 const createdPools = pgMockState.createdPools as MockPool[];
 
@@ -133,6 +135,90 @@ describe('Usage logging', () => {
       totalCostUSD: 0.03,
       totalInputTokens: 30,
       totalOutputTokens: 12,
+    });
+  });
+
+  it('batches Postgres speech usage writes and aggregates speech summaries', async () => {
+    const pool = new MockPool();
+    const logger = new PostgresUsageLogger({
+      batchSize: 2,
+      flushIntervalMs: 0,
+      pool,
+      schemaName: 'llm',
+      tableName: 'usage_events',
+    });
+
+    await logger.logSpeech(buildSpeechUsageEvent({ sessionId: 'speech-1' }));
+    expect(pool.queries).toHaveLength(0);
+
+    await logger.logSpeech(
+      buildSpeechUsageEvent({
+        kind: 'transcription',
+        model: 'gpt-4o-mini-transcribe',
+        sessionId: 'speech-2',
+        speechUsage: {
+          cost: '$0.0001',
+          costUSD: 0.0001,
+          inputAudioSeconds: 2,
+          outputCharacters: 11,
+          outputTokens: 3,
+        },
+      }),
+    );
+
+    expect(
+      pool.queries.some((query) =>
+        query.text.includes('CREATE TABLE IF NOT EXISTS "llm"."usage_events_speech"'),
+      ),
+    ).toBe(true);
+    expect(pool.queries.at(-1)?.text).toContain(
+      'INSERT INTO "llm"."usage_events_speech"',
+    );
+
+    pool.queueRows([
+      {
+        kind: 'speech',
+        model: 'gpt-4o-mini-tts',
+        provider: 'openai',
+        request_count: '1',
+        total_audio_input_seconds: '0',
+        total_audio_output_seconds: '4',
+        total_cost_usd: '0.001',
+        total_input_characters: '12',
+        total_input_tokens: '3',
+        total_output_characters: '0',
+        total_output_tokens: '0',
+      },
+    ]);
+
+    const summary = await logger.getSpeechUsage({ kind: 'speech', tenantId: 'tenant-1' });
+
+    expect(pool.queries.at(-1)?.text).toContain('GROUP BY provider, model, kind');
+    expect(pool.queries.at(-1)?.values).toEqual(['tenant-1', 'speech']);
+    expect(summary).toEqual({
+      breakdown: [
+        {
+          kind: 'speech',
+          model: 'gpt-4o-mini-tts',
+          provider: 'openai',
+          requestCount: 1,
+          totalAudioInputSeconds: 0,
+          totalAudioOutputSeconds: 4,
+          totalCostUSD: 0.001,
+          totalInputCharacters: 12,
+          totalInputTokens: 3,
+          totalOutputCharacters: 0,
+          totalOutputTokens: 0,
+        },
+      ],
+      requestCount: 1,
+      totalAudioInputSeconds: 0,
+      totalAudioOutputSeconds: 4,
+      totalCostUSD: 0.001,
+      totalInputCharacters: 12,
+      totalInputTokens: 3,
+      totalOutputCharacters: 0,
+      totalOutputTokens: 0,
     });
   });
 
@@ -262,6 +348,42 @@ describe('Usage logging', () => {
     );
     expect(exportUsageSummary(summary, 'csv')).toContain('openai,gpt-4o,2,20,8,4,0.030000');
   });
+
+  it('exports aggregated speech usage as JSON and CSV', () => {
+    const summary = {
+      breakdown: [
+        {
+          kind: 'speech' as const,
+          model: 'gpt-4o-mini-tts',
+          provider: 'openai' as const,
+          requestCount: 1,
+          totalAudioInputSeconds: 0,
+          totalAudioOutputSeconds: 3,
+          totalCostUSD: 0.001,
+          totalInputCharacters: 12,
+          totalInputTokens: 3,
+          totalOutputCharacters: 0,
+          totalOutputTokens: 0,
+        },
+      ],
+      requestCount: 1,
+      totalAudioInputSeconds: 0,
+      totalAudioOutputSeconds: 3,
+      totalCostUSD: 0.001,
+      totalInputCharacters: 12,
+      totalInputTokens: 3,
+      totalOutputCharacters: 0,
+      totalOutputTokens: 0,
+    };
+
+    expect(exportSpeechUsageSummary(summary, 'json')).toContain('"requestCount": 1');
+    expect(exportSpeechUsageSummary(summary, 'csv')).toContain(
+      'provider,model,kind,requestCount,totalInputTokens,totalOutputTokens,totalInputCharacters,totalOutputCharacters,totalAudioInputSeconds,totalAudioOutputSeconds,totalCostUSD',
+    );
+    expect(exportSpeechUsageSummary(summary, 'csv')).toContain(
+      'openai,gpt-4o-mini-tts,speech,1,3,0,12,0,0,3,0.001000',
+    );
+  });
 });
 
 class MockPool implements PostgresSessionStorePool {
@@ -313,6 +435,27 @@ function buildUsageEvent(overrides: Partial<UsageEvent> = {}): UsageEvent {
     model: 'gpt-4o',
     outputTokens: 4,
     provider: 'openai',
+    tenantId: 'tenant-1',
+    timestamp: '2026-04-15T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function buildSpeechUsageEvent(
+  overrides: Partial<SpeechUsageEvent> = {},
+): SpeechUsageEvent {
+  return {
+    durationMs: 120,
+    kind: 'speech',
+    model: 'gpt-4o-mini-tts',
+    provider: 'openai',
+    speechUsage: {
+      cost: '$0.001',
+      costUSD: 0.001,
+      inputCharacters: 12,
+      inputTokens: 3,
+      outputAudioSeconds: 4,
+    },
     tenantId: 'tenant-1',
     timestamp: '2026-04-15T10:00:00.000Z',
     ...overrides,

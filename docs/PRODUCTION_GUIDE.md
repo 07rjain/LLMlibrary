@@ -88,6 +88,7 @@ Practical rule:
 
 - Use Edge for stateless request execution and streaming.
 - Use Node when you need Postgres-backed persistence or usage aggregation in-process.
+- Use Node for OpenAI speech-to-text uploads when your runtime does not provide stable `Blob` and `FormData` support.
 
 ## Logging And Data Hygiene
 
@@ -97,7 +98,21 @@ Recommended production posture:
 
 - Log request ids, session ids, tenant ids, model ids, finish reasons, duration, and cost.
 - Avoid logging raw prompts or tool payloads unless you have a clear compliance reason.
+- Avoid logging raw audio, base64 audio, or full transcripts unless your product has explicit retention and consent controls.
 - Keep tool results narrow and structured so downstream logging stays predictable.
+
+## Speech In Production
+
+Speech is available through `client.speak()` and `client.transcribe()` for OpenAI batch endpoints. Keep it separate from conversation persistence: the library returns audio bytes and transcript text, but it does not store audio files or transcript history automatically.
+
+Use `PostgresUsageLogger` when you need speech cost attribution. Text completions continue to use the normal usage table, while speech events are written to a sibling table named `${tableName}_speech`, such as `llm_usage_events_speech`. Query those totals with `client.getSpeechUsage()` or export them with `client.exportSpeechUsage()`.
+
+For budgets, pass explicit durations when they cannot be derived from the payload:
+
+- `estimatedOutputSeconds` or `maxOutputSeconds` for text-to-speech.
+- `inputAudioSeconds` for compressed speech-to-text inputs.
+
+As with text usage, `usage.costUSD` is the numeric field for billing logic. `usage.cost` is display-only.
 
 ## Testing Without Live Providers
 

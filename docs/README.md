@@ -8,9 +8,10 @@ If you are opening the repository for the first time, read the pages below in or
 2. [Completions And Streaming](./COMPLETIONS_AND_STREAMING.md)
 3. [Conversations And Tools](./CONVERSATIONS_AND_TOOLS.md)
 4. [Persistence And Session API](./PERSISTENCE_AND_SESSION_API.md)
-5. [Session API Reference](./SESSION_API_REFERENCE.md)
-6. [Production Setup](./PRODUCTION_SETUP.md)
-7. [Production Guide](./PRODUCTION_GUIDE.md)
+5. [Speech](./SPEECH.md)
+6. [Session API Reference](./SESSION_API_REFERENCE.md)
+7. [Production Setup](./PRODUCTION_SETUP.md)
+8. [Production Guide](./PRODUCTION_GUIDE.md)
 
 ## What This Library Gives You
 
@@ -25,6 +26,7 @@ If you are opening the repository for the first time, read the pages below in or
 - A framework-agnostic Session API built on `Request` and `Response`
 - Routing and fallback rules for production traffic
 - Google Embedding 2 support through `client.embed()`
+- OpenAI batch speech support through `client.speak()` and `client.transcribe()`
 - Optional retrieval helpers through `unified-llm-client/retrieval`
 - Reusable chunking helpers through `unified-llm-client/chunking`
 
@@ -42,6 +44,8 @@ If you are opening the repository for the first time, read the pages below in or
   Read [Production Guide](./PRODUCTION_GUIDE.md)
 - "I need production env setup, Postgres wiring, or embedding storage details"
   Read [Production Setup](./PRODUCTION_SETUP.md)
+- "I need text-to-speech, speech-to-text, or speech cost tracking"
+  Read [Speech](./SPEECH.md)
 
 ## Reference Docs
 
@@ -56,6 +60,8 @@ If you are opening the repository for the first time, read the pages below in or
 - Migration notes: [MIGRATION_GUIDE.md](./MIGRATION_GUIDE.md)
 - Cost policy and pricing notes: [COST_AND_PRICING.md](./COST_AND_PRICING.md)
 - Production setup guide: [PRODUCTION_SETUP.md](./PRODUCTION_SETUP.md)
+- Speech guide: [SPEECH.md](./SPEECH.md)
+- Speech API research report: [SPEECH_API_RESEARCH_REPORT.md](./SPEECH_API_RESEARCH_REPORT.md)
 
 ## Current Provider Notes
 
@@ -66,6 +72,7 @@ If you are opening the repository for the first time, read the pages below in or
 - Gemini uses `providerOptions.google.promptCaching.cachedContent`, and explicit cache resources can be managed with `client.googleCaches`.
 - `client.models.listRemote({ provider })` fetches the provider's live model list without changing the local routing registry.
 - `client.embed()` is now available for Google Embedding 2.
+- OpenAI batch speech is available through `client.speak()` and `client.transcribe()`. Speech usage is tracked separately through `client.getSpeechUsage()` and `client.exportSpeechUsage()`.
 - Retrieval remains explicit app orchestration; the helper module gives you `createDenseRetriever()`, `createHybridRetriever()`, and `formatRetrievedContext()` without changing `complete()` or `conversation()`.
 - The external follow-up review has been cross-checked in [EMBEDDINGS_REVIEW_CROSSCHECK.md](./EMBEDDINGS_REVIEW_CROSSCHECK.md); the highest-confidence follow-ups are lightweight stores, chunking helpers, and Gemini text batching.
 - The detailed follow-up implementation plan is in [EMBEDDINGS_FOLLOW_UP_FIX_PLAN.md](./EMBEDDINGS_FOLLOW_UP_FIX_PLAN.md), including exact fix order and file-level implementation guidance.
