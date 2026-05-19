@@ -560,6 +560,146 @@ describe('LLMClient', () => {
     expect(transcription.provider).toBe('mock');
   });
 
+  it('routes OpenAI speech calls, logs speech usage, and preserves metadata', async () => {
+    const usageLogger = {
+      log: vi.fn(async () => undefined),
+      logSpeech: vi.fn(async () => undefined),
+    };
+    const fetchImplementation = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3, 4]), {
+          headers: { 'content-type': 'audio/mpeg' },
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ text: 'speech transcript' }), {
+          headers: { 'content-type': 'application/json' },
+          status: 200,
+        }),
+      );
+    const client = new LLMClient({
+      fetchImplementation,
+      openaiApiKey: 'openai-key',
+      usageLogger,
+    });
+
+    const speech = await client.speak({
+      botId: 'bot-1',
+      estimatedOutputSeconds: 2,
+      input: 'Speak this',
+      model: 'gpt-4o-mini-tts',
+      sessionId: 'speech-session',
+      tenantId: 'tenant-1',
+    });
+    const transcript = await client.transcribe({
+      botId: 'bot-1',
+      input: {
+        file: new Uint8Array([1, 2, 3]),
+        mediaType: 'audio/mpeg',
+      },
+      inputAudioSeconds: 2,
+      model: 'gpt-4o-mini-transcribe',
+      sessionId: 'speech-session',
+      tenantId: 'tenant-1',
+    });
+
+    expect([...speech.audio]).toEqual([1, 2, 3, 4]);
+    expect(transcript.text).toBe('speech transcript');
+    expect(usageLogger.logSpeech).toHaveBeenCalledTimes(2);
+    expect(usageLogger.logSpeech).toHaveBeenCalledWith(
+      expect.objectContaining({
+        botId: 'bot-1',
+        kind: 'speech',
+        model: 'gpt-4o-mini-tts',
+        provider: 'openai',
+        sessionId: 'speech-session',
+        tenantId: 'tenant-1',
+      }),
+    );
+    expect(usageLogger.logSpeech).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'transcription',
+        model: 'gpt-4o-mini-transcribe',
+      }),
+    );
+  });
+
+  it('handles speech validation, unsupported providers, and budget preflight', async () => {
+    const fetchImplementation = vi.fn();
+    const onWarning = vi.fn();
+    const client = new LLMClient({
+      fetchImplementation,
+      onWarning,
+      openaiApiKey: 'openai-key',
+    });
+
+    await expect(client.speak({ input: '' })).rejects.toBeInstanceOf(
+      ProviderCapabilityError,
+    );
+    await expect(
+      client.speak({
+        input: 'Hello',
+        model: 'gpt-4o-mini-tts',
+        provider: 'google',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    await expect(
+      client.transcribe({
+        input: { file: new Uint8Array([1]), mediaType: 'audio/mpeg' },
+        model: 'gpt-4o-mini-transcribe',
+        provider: 'google',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    await expect(
+      client.speak({
+        budgetUsd: 1,
+        input: 'Hello',
+        model: 'gpt-4o-mini-tts',
+      }),
+    ).rejects.toThrow('estimatedOutputSeconds or maxOutputSeconds');
+    await expect(
+      client.transcribe({
+        budgetUsd: 1,
+        input: { file: new Uint8Array([1]), mediaType: 'audio/mpeg' },
+        model: 'gpt-4o-mini-transcribe',
+      }),
+    ).rejects.toThrow('inputAudioSeconds');
+    await expect(
+      client.speak({
+        budgetUsd: 0.000001,
+        estimatedOutputSeconds: 10,
+        input: 'Hello',
+        model: 'gpt-4o-mini-tts',
+      }),
+    ).rejects.toBeInstanceOf(BudgetExceededError);
+
+    const warnFetch = vi.fn(async () =>
+      new Response(new Uint8Array([1, 2]), {
+        status: 200,
+      }),
+    );
+    const warnClient = new LLMClient({
+      fetchImplementation: warnFetch,
+      onWarning,
+      openaiApiKey: 'openai-key',
+    });
+    await expect(
+      warnClient.speak({
+        budgetExceededAction: 'warn',
+        budgetUsd: 0.000001,
+        estimatedOutputSeconds: 10,
+        input: 'Hello',
+        model: 'gpt-4o-mini-tts',
+      }),
+    ).resolves.toMatchObject({ provider: 'openai' });
+    expect(onWarning).toHaveBeenCalledWith(
+      expect.stringContaining('Estimated speech request cost'),
+    );
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
   it('routes complete() calls to Anthropic by model', async () => {
     const fetchImplementation = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();

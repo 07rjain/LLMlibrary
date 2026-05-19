@@ -430,6 +430,87 @@ describe('OpenAI adapter', () => {
     expect(result.usage?.costUSD).toBeGreaterThan(0);
   });
 
+  it('derives speech audio duration for pcm and wav output formats', async () => {
+    const fetchImplementation = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValueOnce(
+        new Response(bytesToArrayBuffer(new Uint8Array(48_000)), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(bytesToArrayBuffer(makeWavBytes({ seconds: 2 })), {
+          headers: { 'content-type': 'audio/wav' },
+          status: 200,
+        }),
+      );
+    const adapter = new OpenAIAdapter({
+      apiKey: 'openai-key',
+      fetchImplementation,
+    });
+
+    const pcm = await adapter.speak({
+      format: 'pcm',
+      input: 'PCM please',
+      model: 'gpt-4o-mini-tts',
+      provider: 'openai',
+    });
+    const wav = await adapter.speak({
+      format: 'wav',
+      input: 'WAV please',
+      model: 'gpt-4o-mini-tts',
+      provider: 'openai',
+    });
+
+    expect(pcm.mediaType).toBe('audio/pcm');
+    expect(pcm.usage?.outputAudioSeconds).toBe(1);
+    expect(wav.mediaType).toBe('audio/wav');
+    expect(wav.usage?.outputAudioSeconds).toBe(2);
+  });
+
+  it('uses fallback speech media types and maps speech errors', async () => {
+    const fetchImplementation = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValueOnce(
+        new Response(bytesToArrayBuffer(new Uint8Array([1])), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: { message: 'speech failed', type: 'invalid_request_error' },
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 400,
+          },
+        ),
+      );
+    const adapter = new OpenAIAdapter({
+      apiKey: 'openai-key',
+      fetchImplementation,
+    });
+
+    const flac = await adapter.speak({
+      estimatedOutputSeconds: 1,
+      format: 'flac',
+      input: 'FLAC please',
+      model: 'gpt-4o-mini-tts',
+      provider: 'openai',
+    });
+
+    expect(flac.mediaType).toBe('audio/flac');
+    await expect(
+      adapter.speak({
+        estimatedOutputSeconds: 1,
+        input: 'fail',
+        model: 'gpt-4o-mini-tts',
+        provider: 'openai',
+      }),
+    ).rejects.toThrow(ProviderError);
+  });
+
   it('performs a speech-to-text request with multipart form data', async () => {
     const fetchImplementation = vi.fn(async () =>
       new Response(
@@ -478,6 +559,153 @@ describe('OpenAI adapter', () => {
     expect(result.durationSeconds).toBe(2.5);
     expect(result.usage?.inputAudioSeconds).toBe(2.5);
     expect(result.usage?.costUSD).toBeGreaterThan(0);
+  });
+
+  it('normalizes transcription text, verbose metadata, and provider options', async () => {
+    const wavBytes = makeWavBytes({ seconds: 3 });
+    const fetchImplementation = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValueOnce(
+        new Response('plain transcript', {
+          headers: { 'content-type': 'text/plain' },
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            duration: 3,
+            language: 'en',
+            segments: [{ end: 1, id: 0, start: 0, text: 'hello' }],
+            text: 'hello world',
+            words: [{ end: 0.5, start: 0, word: 'hello' }],
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+          },
+        ),
+      );
+    const adapter = new OpenAIAdapter({
+      apiKey: 'openai-key',
+      fetchImplementation,
+    });
+
+    const plain = await adapter.transcribe({
+      input: {
+        file: bytesToArrayBuffer(wavBytes),
+        filename: 'plain.wav',
+        mediaType: 'audio/wav',
+      },
+      model: 'gpt-4o-mini-transcribe',
+      provider: 'openai',
+    });
+    const verbose = await adapter.transcribe({
+      diarization: true,
+      input: {
+        file: wavBytes,
+        filename: 'verbose.wav',
+        mediaType: 'audio/wav',
+      },
+      model: 'gpt-4o-transcribe-diarize',
+      prompt: 'Names are Ada and Grace.',
+      provider: 'openai',
+      providerOptions: {
+        openai: {
+          chunkingStrategy: { type: 'server_vad' },
+          include: ['logprobs'],
+          knownSpeakerNames: ['Ada'],
+          knownSpeakerReferences: ['speaker-ref-1'],
+        },
+      },
+      responseFormat: 'verbose_json',
+      temperature: 0,
+      timestampGranularities: ['word', 'segment'],
+    });
+    const verboseForm = (
+      fetchImplementation.mock.calls[1] as unknown as [string, RequestInit]
+    )[1].body as FormData;
+
+    expect(plain.text).toBe('plain transcript');
+    expect(plain.usage?.inputAudioSeconds).toBe(3);
+    expect(verbose.text).toBe('hello world');
+    expect(verbose.segments).toHaveLength(1);
+    expect(verbose.words).toHaveLength(1);
+    expect(verboseForm.get('prompt')).toBe('Names are Ada and Grace.');
+    expect(verboseForm.get('temperature')).toBe('0');
+    expect(verboseForm.get('chunking_strategy')).toBe('{"type":"server_vad"}');
+    expect(verboseForm.getAll('include[]')).toEqual(['logprobs']);
+    expect(verboseForm.getAll('known_speaker_names[]')).toEqual(['Ada']);
+    expect(verboseForm.getAll('known_speaker_references[]')).toEqual([
+      'speaker-ref-1',
+    ]);
+    expect(verboseForm.getAll('timestamp_granularities[]')).toEqual([
+      'word',
+      'segment',
+    ]);
+  });
+
+  it('handles transcription URL, missing input, and failed URL fetch cases', async () => {
+    const originalFetch = globalThis.fetch;
+    const remoteAudio = new Blob([new Uint8Array([1, 2, 3])], {
+      type: 'audio/mpeg',
+    });
+    const urlFetch = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValueOnce(
+        new Response(remoteAudio, {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(new Response('', { status: 404 }));
+    globalThis.fetch = urlFetch as typeof fetch;
+    const fetchImplementation = vi.fn(async () =>
+      new Response(JSON.stringify({ text: 'from url' }), {
+        headers: { 'content-type': 'application/json' },
+        status: 200,
+      }),
+    );
+    const adapter = new OpenAIAdapter({
+      apiKey: 'openai-key',
+      fetchImplementation,
+    });
+
+    try {
+      const fromUrl = await adapter.transcribe({
+        input: {
+          mediaType: 'audio/mpeg',
+          url: 'https://example.test/audio.mp3',
+        },
+        inputAudioSeconds: 1,
+        model: 'gpt-4o-mini-transcribe',
+        provider: 'openai',
+      });
+
+      await expect(
+        adapter.transcribe({
+          input: {
+            mediaType: 'audio/mpeg',
+          },
+          model: 'gpt-4o-mini-transcribe',
+          provider: 'openai',
+        }),
+      ).rejects.toThrow(ProviderCapabilityError);
+      await expect(
+        adapter.transcribe({
+          input: {
+            mediaType: 'audio/mpeg',
+            url: 'https://example.test/missing.mp3',
+          },
+          model: 'gpt-4o-mini-transcribe',
+          provider: 'openai',
+        }),
+      ).rejects.toThrow(ProviderError);
+
+      expect(fromUrl.text).toBe('from url');
+      expect(urlFetch).toHaveBeenCalledWith('https://example.test/audio.mp3');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('streams text deltas and done events', async () => {
@@ -1459,4 +1687,39 @@ function makeSSEStream(events: unknown[]): ReadableStream<Uint8Array> {
       controller.close();
     },
   });
+}
+
+function makeWavBytes(options: { seconds: number }): Uint8Array {
+  const sampleRate = 24_000;
+  const bytesPerSample = 2;
+  const channels = 1;
+  const dataSize = options.seconds * sampleRate * bytesPerSample * channels;
+  const bytes = new Uint8Array(44 + dataSize);
+  const view = new DataView(bytes.buffer);
+  writeAscii(bytes, 0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeAscii(bytes, 8, 'WAVE');
+  writeAscii(bytes, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * channels * bytesPerSample, true);
+  view.setUint16(32, channels * bytesPerSample, true);
+  view.setUint16(34, 8 * bytesPerSample, true);
+  writeAscii(bytes, 36, 'data');
+  view.setUint32(40, dataSize, true);
+  return bytes;
+}
+
+function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+}
+
+function writeAscii(bytes: Uint8Array, offset: number, text: string): void {
+  for (let index = 0; index < text.length; index += 1) {
+    bytes[offset + index] = text.charCodeAt(index);
+  }
 }

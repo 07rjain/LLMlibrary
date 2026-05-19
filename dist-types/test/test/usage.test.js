@@ -116,7 +116,30 @@ describe('Usage logging', () => {
             schemaName: 'llm',
             tableName: 'usage_events',
         });
-        await logger.logSpeech(buildSpeechUsageEvent({ sessionId: 'speech-1' }));
+        await logger.logSpeech(buildSpeechUsageEvent({
+            sessionId: 'speech-1',
+            speechUsage: {
+                billingUnits: {
+                    inputCharacters: 12,
+                    outputAudioSeconds: 4,
+                },
+                cost: '$0.001',
+                costBreakdown: [
+                    {
+                        amountUSD: 0.001,
+                        estimated: true,
+                        label: 'Output audio duration',
+                        quantity: 4,
+                        rateUSD: 0.00025,
+                        unit: 'audio_second',
+                    },
+                ],
+                costUSD: 0.001,
+                inputCharacters: 12,
+                inputTokens: 3,
+                outputAudioSeconds: 4,
+            },
+        }));
         expect(pool.queries).toHaveLength(0);
         await logger.logSpeech(buildSpeechUsageEvent({
             kind: 'transcription',
@@ -256,7 +279,7 @@ describe('Usage logging', () => {
         const summary = {
             breakdown: [
                 {
-                    model: 'gpt-4o',
+                    model: 'gpt,4o',
                     provider: 'openai',
                     requestCount: 2,
                     totalCachedTokens: 4,
@@ -273,14 +296,14 @@ describe('Usage logging', () => {
         };
         expect(exportUsageSummary(summary, 'json')).toContain('"requestCount": 2');
         expect(exportUsageSummary(summary, 'csv')).toContain('provider,model,requestCount,totalInputTokens,totalOutputTokens,totalCachedTokens,totalCostUSD');
-        expect(exportUsageSummary(summary, 'csv')).toContain('openai,gpt-4o,2,20,8,4,0.030000');
+        expect(exportUsageSummary(summary, 'csv')).toContain('openai,"gpt,4o",2,20,8,4,0.030000');
     });
     it('exports aggregated speech usage as JSON and CSV', () => {
         const summary = {
             breakdown: [
                 {
                     kind: 'speech',
-                    model: 'gpt-4o-mini-tts',
+                    model: 'gpt-4o-mini,tts',
                     provider: 'openai',
                     requestCount: 1,
                     totalAudioInputSeconds: 0,
@@ -303,7 +326,7 @@ describe('Usage logging', () => {
         };
         expect(exportSpeechUsageSummary(summary, 'json')).toContain('"requestCount": 1');
         expect(exportSpeechUsageSummary(summary, 'csv')).toContain('provider,model,kind,requestCount,totalInputTokens,totalOutputTokens,totalInputCharacters,totalOutputCharacters,totalAudioInputSeconds,totalAudioOutputSeconds,totalCostUSD');
-        expect(exportSpeechUsageSummary(summary, 'csv')).toContain('openai,gpt-4o-mini-tts,speech,1,3,0,12,0,0,3,0.001000');
+        expect(exportSpeechUsageSummary(summary, 'csv')).toContain('openai,"gpt-4o-mini,tts",speech,1,3,0,12,0,0,3,0.001000');
     });
 });
 class MockPool {

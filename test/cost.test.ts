@@ -287,4 +287,156 @@ describe('cost utilities', () => {
     expect(usage.billingUnits?.inputAudioSeconds).toBe(30);
     expect(usage.estimated).toBe(true);
   });
+
+  it('preserves audio-token speech usage even when no speech cost is available', () => {
+    const model = {
+      contextWindow: 1000,
+      id: 'unpriced-audio-token-model',
+      inputPrice: 0,
+      kind: 'speech' as const,
+      lastUpdated: '2026-05-19',
+      outputPrice: 0,
+      provider: 'openai' as const,
+      supportsStreaming: false,
+      supportsTools: false,
+      supportsVision: false,
+    };
+
+    const usage = speechUsageWithCost(model, {
+      audioInputTokens: 7,
+      audioOutputTokens: 11,
+      estimated: false,
+    });
+
+    expect(usage.audioInputTokens).toBe(7);
+    expect(usage.audioOutputTokens).toBe(11);
+    expect(usage.billingUnits?.audioInputTokens).toBe(7);
+    expect(usage.billingUnits?.audioOutputTokens).toBe(11);
+    expect(usage.cost).toBeUndefined();
+    expect(usage.costUSD).toBeUndefined();
+    expect(usage.estimated).toBe(false);
+
+    const defaultEstimatedUsage = speechUsageWithCost(model, {
+      audioInputTokens: 1,
+    });
+    expect(defaultEstimatedUsage.estimated).toBe(true);
+  });
+
+  it('returns speech billing units without cost for unknown or unpriced models', () => {
+    const unpriced = new ModelRegistry({
+      'custom-speech': {
+        contextWindow: 1000,
+        inputPrice: 0,
+        kind: 'speech',
+        lastUpdated: '2026-05-19',
+        outputPrice: 0,
+        provider: 'openai',
+        supportsStreaming: false,
+        supportsTools: false,
+        supportsVision: false,
+      },
+    });
+
+    expect(
+      calcSpeechCostUSD({
+        inputCharacters: 10,
+        model: 'missing-speech-model',
+      }).costUSD,
+    ).toBeUndefined();
+    expect(
+      calcSpeechCostUSD(
+        {
+          inputCharacters: 10,
+          model: 'custom-speech',
+        },
+        unpriced,
+      ),
+    ).toMatchObject({
+      billingUnits: { inputCharacters: 10 },
+      costBreakdown: [],
+      estimated: true,
+    });
+
+    const noApplicableUnits = new ModelRegistry({
+      'priced-speech': {
+        contextWindow: 1000,
+        inputPrice: 0,
+        kind: 'speech',
+        lastUpdated: '2026-05-19',
+        outputPrice: 0,
+        provider: 'openai',
+        speechPrices: { textInputTokenPrice: 1 },
+        supportsStreaming: false,
+        supportsTools: false,
+        supportsVision: false,
+      },
+    });
+
+    expect(
+      calcSpeechCostUSD(
+        {
+          inputTokens: 0,
+          model: 'priced-speech',
+        },
+        noApplicableUnits,
+      ).costUSD,
+    ).toBeUndefined();
+  });
+
+  it('calculates every supported speech price unit and ignores invalid line items', () => {
+    const custom = new ModelRegistry({
+      'all-units-speech': {
+        contextWindow: 1000,
+        inputPrice: 0,
+        kind: 'speech',
+        lastUpdated: '2026-05-19',
+        outputPrice: 0,
+        provider: 'openai',
+        speechPrices: {
+          audioInputTokenPrice: 1,
+          audioOutputTokenPrice: 2,
+          characterInputPrice: 3,
+          characterOutputPrice: 4,
+          inputAudioSecondPrice: 0.5,
+          outputAudioSecondPrice: 0.25,
+          requestPrice: 0.01,
+          textInputTokenPrice: 5,
+          textOutputTokenPrice: 6,
+        },
+        supportsStreaming: false,
+        supportsTools: false,
+        supportsVision: false,
+      },
+    });
+
+    const result = calcSpeechCostUSD(
+      {
+        audioInputTokens: 1_000_000,
+        audioOutputTokens: 1_000_000,
+        estimated: false,
+        inputAudioSeconds: 2,
+        inputCharacters: 1_000_000,
+        inputTokens: 1_000_000,
+        model: 'all-units-speech',
+        outputAudioSeconds: 4,
+        outputCharacters: 1_000_000,
+        outputTokens: 1_000_000,
+      },
+      custom,
+    );
+
+    expect(result.estimated).toBe(false);
+    expect(result.costBreakdown.map((line) => line.unit)).toEqual([
+      'text_input_token',
+      'text_output_token',
+      'audio_input_token',
+      'audio_output_token',
+      'audio_second',
+      'audio_second',
+      'character',
+      'character',
+      'request',
+    ]);
+    expect(result.costUSD).toBeCloseTo(23.01, 9);
+  });
 });
