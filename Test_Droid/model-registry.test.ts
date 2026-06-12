@@ -8,6 +8,7 @@ describe('ModelRegistry', () => {
     it('should include major OpenAI models', () => {
       const registry = new ModelRegistry();
 
+      expect(registry.get('gpt-5.5').provider).toBe('openai');
       expect(registry.get('gpt-4o').provider).toBe('openai');
       expect(registry.get('gpt-4o-mini').provider).toBe('openai');
     });
@@ -15,12 +16,14 @@ describe('ModelRegistry', () => {
     it('should include major Anthropic models', () => {
       const registry = new ModelRegistry();
 
+      expect(registry.get('claude-fable-5').provider).toBe('anthropic');
       expect(registry.get('claude-sonnet-4-6').provider).toBe('anthropic');
     });
 
     it('should include major Google models', () => {
       const registry = new ModelRegistry();
 
+      expect(registry.get('gemini-3.5-flash').provider).toBe('google');
       expect(registry.get('gemini-2.5-flash').provider).toBe('google');
     });
   });

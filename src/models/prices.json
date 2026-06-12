@@ -35,6 +35,27 @@
     "cacheWritePrice": 6.25,
     "lastUpdated": "2026-05-18"
   },
+  "claude-fable-5": {
+    "provider": "anthropic",
+    "contextWindow": 1000000,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 10,
+    "outputPrice": 50,
+    "lastUpdated": "2026-06-12"
+  },
+  "gpt-5.5": {
+    "provider": "openai",
+    "contextWindow": 128000,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 5,
+    "outputPrice": 30,
+    "cacheReadPrice": 0.5,
+    "lastUpdated": "2026-06-12"
+  },
   "gpt-5.4": {
     "provider": "openai",
     "contextWindow": 128000,
@@ -130,6 +151,17 @@
     "inputPrice": 0.1,
     "outputPrice": 0.4,
     "lastUpdated": "2026-05-18"
+  },
+  "gemini-3.5-flash": {
+    "provider": "google",
+    "contextWindow": 1048576,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 1.5,
+    "outputPrice": 9,
+    "cacheReadPrice": 0.15,
+    "lastUpdated": "2026-06-12"
   },
   "gemini-3.1-pro-preview": {
     "provider": "google",
