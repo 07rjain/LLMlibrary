@@ -171,9 +171,10 @@
     "supportsStreaming": true,
     "inputPrice": 2,
     "outputPrice": 12,
-    "lastUpdated": "2026-04-25"
+    "cacheReadPrice": 0.2,
+    "lastUpdated": "2026-06-15"
   },
-  "gemini-3.1-flash-lite-preview": {
+  "gemini-3.1-flash-lite": {
     "provider": "google",
     "contextWindow": 1048576,
     "supportsVision": true,
@@ -181,7 +182,8 @@
     "supportsStreaming": true,
     "inputPrice": 0.25,
     "outputPrice": 1.5,
-    "lastUpdated": "2026-04-25"
+    "cacheReadPrice": 0.025,
+    "lastUpdated": "2026-06-15"
   },
   "gemini-embedding-2": {
     "provider": "google",
@@ -191,7 +193,7 @@
     "supportsVision": false,
     "supportsTools": false,
     "supportsStreaming": false,
-    "inputPrice": 0,
+    "inputPrice": 0.2,
     "outputPrice": 0,
     "embeddingDimensions": {
       "default": 3072,
@@ -199,7 +201,7 @@
       "recommended": [768, 1536, 3072]
     },
     "supportedInputModalities": ["audio", "document", "image", "text"],
-    "lastUpdated": "2026-04-24"
+    "lastUpdated": "2026-06-15"
   },
   "gpt-4o-mini-tts": {
     "provider": "openai",

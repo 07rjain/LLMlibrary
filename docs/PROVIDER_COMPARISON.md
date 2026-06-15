@@ -8,7 +8,7 @@ This library currently ships first-party adapters for Anthropic, OpenAI, and Goo
 | --- | --- | --- | --- | --- | --- | --- |
 | Anthropic | `claude-sonnet-4-6`, `claude-haiku-4-5`, `claude-opus-4-6` | Yes | Yes | Yes | Via `Conversation` + session stores | Anthropic cache read/write pricing is modeled separately, including block-level and request-level `cache_control`. |
 | OpenAI | `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-4o`, `gpt-4o-mini`, `o3` | Yes | Yes | Yes | Via `Conversation` + session stores | Uses the stateless Responses API with `store: false` and library-owned history replay. |
-| Google Gemini | `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite-preview` | Yes | Yes | Yes | Via `Conversation` + session stores | Streaming uses the dedicated `streamGenerateContent` endpoint, and explicit caches are managed with `client.googleCaches`. |
+| Google Gemini | `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite` | Yes | Yes | Yes | Via `Conversation` + session stores | Streaming uses the dedicated `streamGenerateContent` endpoint, and explicit caches are managed with `client.googleCaches`. |
 
 These are the checked-in seeded completion models, not the provider's full live catalog. Use `client.models.listRemote({ provider })` when you want discovery against the provider's current model list.
 

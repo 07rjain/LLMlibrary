@@ -37,6 +37,27 @@ export declare const defaultModelPrices: {
         supportsTools: true;
         supportsVision: true;
     };
+    'claude-fable-5': {
+        contextWindow: number;
+        inputPrice: number;
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "anthropic";
+        supportsStreaming: true;
+        supportsTools: true;
+        supportsVision: true;
+    };
+    'gpt-5.5': {
+        cacheReadPrice: number;
+        contextWindow: number;
+        inputPrice: number;
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "openai";
+        supportsStreaming: true;
+        supportsTools: true;
+        supportsVision: true;
+    };
     'gpt-5.4': {
         cacheReadPrice: number;
         contextWindow: number;
@@ -133,7 +154,8 @@ export declare const defaultModelPrices: {
         supportsTools: true;
         supportsVision: true;
     };
-    'gemini-3.1-pro-preview': {
+    'gemini-3.5-flash': {
+        cacheReadPrice: number;
         contextWindow: number;
         inputPrice: number;
         lastUpdated: string;
@@ -143,7 +165,19 @@ export declare const defaultModelPrices: {
         supportsTools: true;
         supportsVision: true;
     };
-    'gemini-3.1-flash-lite-preview': {
+    'gemini-3.1-pro-preview': {
+        cacheReadPrice: number;
+        contextWindow: number;
+        inputPrice: number;
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "google";
+        supportsStreaming: true;
+        supportsTools: true;
+        supportsVision: true;
+    };
+    'gemini-3.1-flash-lite': {
+        cacheReadPrice: number;
         contextWindow: number;
         inputPrice: number;
         lastUpdated: string;
@@ -166,7 +200,7 @@ export declare const defaultModelPrices: {
         maxInputTokens: number;
         outputPrice: number;
         provider: "google";
-        supportedInputModalities: ("text" | "document" | "audio" | "image")[];
+        supportedInputModalities: ("audio" | "document" | "image" | "text")[];
         supportsStreaming: false;
         supportsTools: false;
         supportsVision: false;

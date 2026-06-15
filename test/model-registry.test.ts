@@ -14,7 +14,7 @@ describe('ModelRegistry', () => {
         'claude-sonnet-4-6',
         'gemini-3.5-flash',
         'gemini-3.1-pro-preview',
-        'gemini-3.1-flash-lite-preview',
+        'gemini-3.1-flash-lite',
         'gpt-5.5',
       ]),
     );
@@ -22,7 +22,7 @@ describe('ModelRegistry', () => {
     expect(registry.isSupported('claude-sonnet-4-6')).toBe(true);
     expect(registry.isSupported('gemini-3.5-flash')).toBe(true);
     expect(registry.isSupported('gemini-3.1-pro-preview')).toBe(true);
-    expect(registry.isSupported('gemini-3.1-flash-lite-preview')).toBe(true);
+    expect(registry.isSupported('gemini-3.1-flash-lite')).toBe(true);
     expect(registry.isSupported('gpt-5.5')).toBe(true);
   });
 
