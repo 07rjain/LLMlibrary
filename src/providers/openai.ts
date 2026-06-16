@@ -34,6 +34,7 @@ import type {
   TranscriptionRequestOptions,
   TranscriptionResponse,
   TranscriptionSegment,
+  TranscriptionUrlPolicy,
   TranscriptionWord,
 } from '../types.js';
 import type { OpenAIUsagePayload } from '../utils/cost.js';
@@ -443,7 +444,7 @@ export class OpenAIAdapter {
   async transcribe(
     options: OpenAIAdapterTranscriptionOptions,
   ): Promise<TranscriptionResponse> {
-    const body = await buildOpenAITranscriptionFormData(options);
+    const body = await buildOpenAITranscriptionFormData(options, this.fetchImplementation);
     const response = await withRetry(
       async () =>
         this.fetchImplementation(
@@ -561,9 +562,19 @@ function translateOpenAISpeechRequest(
 
 async function buildOpenAITranscriptionFormData(
   options: OpenAIAdapterTranscriptionOptions,
+  fetchImplementation: typeof fetch,
 ): Promise<FormData> {
   const formData = new FormData();
-  formData.set('file', await audioInputToBlob(options.input), options.input.filename ?? 'audio');
+  formData.set(
+    'file',
+    await audioInputToBlob(
+      options.input,
+      options.transcriptionUrlPolicy,
+      fetchImplementation,
+      options.signal,
+    ),
+    options.input.filename ?? 'audio',
+  );
   formData.set('model', options.model);
 
   if (options.language !== undefined) {
@@ -618,7 +629,12 @@ async function buildOpenAITranscriptionFormData(
   return formData;
 }
 
-async function audioInputToBlob(input: AudioInput): Promise<Blob> {
+async function audioInputToBlob(
+  input: AudioInput,
+  urlPolicy: TranscriptionUrlPolicy | undefined,
+  fetchImplementation: typeof fetch,
+  signal: AbortSignal | undefined,
+): Promise<Blob> {
   if (input.file instanceof Blob) {
     return input.file;
   }
@@ -638,7 +654,77 @@ async function audioInputToBlob(input: AudioInput): Promise<Blob> {
   }
 
   if (input.url !== undefined) {
-    const response = await fetch(input.url);
+    return fetchTranscriptionAudioUrl(input.url, input.mediaType, urlPolicy, fetchImplementation, signal);
+  }
+
+  throw new ProviderCapabilityError(
+    'Transcription audio input requires file, data, or url.',
+    {
+      provider: 'openai',
+    },
+  );
+}
+
+const DEFAULT_TRANSCRIPTION_URL_MAX_BYTES = 25 * 1024 * 1024;
+const DEFAULT_TRANSCRIPTION_URL_MAX_REDIRECTS = 3;
+const PRIVATE_IPV4_RANGES: Array<[number, number]> = [
+  [ipv4ToNumber('0.0.0.0'), ipv4ToNumber('0.255.255.255')],
+  [ipv4ToNumber('10.0.0.0'), ipv4ToNumber('10.255.255.255')],
+  [ipv4ToNumber('100.64.0.0'), ipv4ToNumber('100.127.255.255')],
+  [ipv4ToNumber('127.0.0.0'), ipv4ToNumber('127.255.255.255')],
+  [ipv4ToNumber('169.254.0.0'), ipv4ToNumber('169.254.255.255')],
+  [ipv4ToNumber('172.16.0.0'), ipv4ToNumber('172.31.255.255')],
+  [ipv4ToNumber('192.0.0.0'), ipv4ToNumber('192.0.0.255')],
+  [ipv4ToNumber('192.168.0.0'), ipv4ToNumber('192.168.255.255')],
+  [ipv4ToNumber('198.18.0.0'), ipv4ToNumber('198.19.255.255')],
+  [ipv4ToNumber('224.0.0.0'), ipv4ToNumber('255.255.255.255')],
+];
+
+async function fetchTranscriptionAudioUrl(
+  url: string,
+  fallbackMediaType: string,
+  policy: TranscriptionUrlPolicy | undefined,
+  fetchImplementation: typeof fetch,
+  signal: AbortSignal | undefined,
+): Promise<Blob> {
+  if (!policy?.enabled) {
+    throw new ProviderCapabilityError(
+      'Transcription audio URL input is disabled by default. Pass file/data input or enable transcriptionUrlPolicy.',
+      {
+        provider: 'openai',
+      },
+    );
+  }
+
+  let currentUrl = parseTranscriptionUrl(url);
+  const maxRedirects = policy.maxRedirects ?? DEFAULT_TRANSCRIPTION_URL_MAX_REDIRECTS;
+
+  for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
+    await assertAllowedTranscriptionUrl(currentUrl, policy);
+    const response = await fetchImplementation(currentUrl.toString(), {
+      redirect: 'manual',
+      ...(signal !== undefined ? { signal } : {}),
+    });
+
+    if (isRedirectResponse(response)) {
+      if (redirectCount === maxRedirects) {
+        throw new ProviderError('Transcription audio URL exceeded redirect limit.', {
+          provider: 'openai',
+          statusCode: response.status,
+        });
+      }
+
+      const location = response.headers.get('location');
+      if (!location) {
+        throw new ProviderError('Transcription audio URL redirect did not include a location.', {
+          provider: 'openai',
+          statusCode: response.status,
+        });
+      }
+      currentUrl = parseTranscriptionUrl(location, currentUrl);
+      continue;
+    }
+
     if (!response.ok) {
       throw new ProviderError(
         `Failed to fetch transcription audio URL with status ${response.status}.`,
@@ -648,15 +734,217 @@ async function audioInputToBlob(input: AudioInput): Promise<Blob> {
         },
       );
     }
-    return await response.blob();
+
+    const mediaType = response.headers.get('content-type') ?? fallbackMediaType;
+    assertAllowedTranscriptionContentType(mediaType, policy);
+    const bytes = await readResponseBodyWithLimit(
+      response,
+      policy.maxBytes ?? DEFAULT_TRANSCRIPTION_URL_MAX_BYTES,
+    );
+    return new Blob([bytesToArrayBuffer(bytes)], { type: mediaType });
   }
 
-  throw new ProviderCapabilityError(
-    'Transcription audio input requires file, data, or url.',
-    {
+  throw new ProviderError('Transcription audio URL exceeded redirect limit.', {
+    provider: 'openai',
+  });
+}
+
+function parseTranscriptionUrl(url: string, base?: URL): URL {
+  try {
+    return new URL(url, base);
+  } catch {
+    throw new ProviderCapabilityError('Transcription audio URL must be a valid URL.', {
       provider: 'openai',
-    },
+    });
+  }
+}
+
+async function assertAllowedTranscriptionUrl(
+  url: URL,
+  policy: TranscriptionUrlPolicy,
+): Promise<void> {
+  const allowedProtocols = policy.allowedProtocols ?? ['https:'];
+  if (!allowedProtocols.includes(url.protocol as 'http:' | 'https:')) {
+    throw new ProviderCapabilityError(
+      `Transcription audio URL protocol "${url.protocol}" is not allowed.`,
+      {
+        provider: 'openai',
+      },
+    );
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  if (
+    policy.allowedHosts &&
+    !policy.allowedHosts.map((host) => host.toLowerCase()).includes(hostname)
+  ) {
+    throw new ProviderCapabilityError(
+      `Transcription audio URL host "${hostname}" is not allowed.`,
+      {
+        provider: 'openai',
+      },
+    );
+  }
+
+  if (policy.blockPrivateNetworks ?? true) {
+    const addresses = await resolveTranscriptionUrlAddresses(hostname, policy);
+    if (addresses.some(isPrivateOrLocalAddress)) {
+      throw new ProviderCapabilityError(
+        'Transcription audio URL resolves to a private or local network address.',
+        {
+          provider: 'openai',
+        },
+      );
+    }
+  }
+}
+
+async function resolveTranscriptionUrlAddresses(
+  hostname: string,
+  policy: TranscriptionUrlPolicy,
+): Promise<string[]> {
+  if (isIpAddress(hostname)) {
+    return [hostname];
+  }
+
+  if (isLocalHostname(hostname)) {
+    return ['127.0.0.1'];
+  }
+
+  if (!policy.resolveHostname) {
+    throw new ProviderCapabilityError(
+      'Transcription URL policy requires resolveHostname when private network blocking is enabled for hostnames.',
+      {
+        provider: 'openai',
+      },
+    );
+  }
+
+  return policy.resolveHostname(hostname);
+}
+
+function assertAllowedTranscriptionContentType(
+  contentType: string,
+  policy: TranscriptionUrlPolicy,
+): void {
+  const mediaType = contentType.split(';')[0]?.trim().toLowerCase() ?? '';
+  const allowed = policy.allowedContentTypes ?? ['audio/'];
+  const isAllowed = allowed.some((item) => {
+    const normalized = item.toLowerCase();
+    return normalized.endsWith('/') ? mediaType.startsWith(normalized) : mediaType === normalized;
+  });
+
+  if (!isAllowed) {
+    throw new ProviderCapabilityError(
+      `Transcription audio URL returned disallowed content type "${mediaType}".`,
+      {
+        provider: 'openai',
+      },
+    );
+  }
+}
+
+async function readResponseBodyWithLimit(
+  response: Response,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  if (!Number.isInteger(maxBytes) || maxBytes <= 0) {
+    throw new ProviderCapabilityError('transcriptionUrlPolicy.maxBytes must be a positive integer.', {
+      provider: 'openai',
+    });
+  }
+
+  if (!response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > maxBytes) {
+      throw new ProviderCapabilityError('Transcription audio URL response exceeded maxBytes.', {
+        provider: 'openai',
+      });
+    }
+    return bytes;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    totalBytes += value.byteLength;
+    if (totalBytes > maxBytes) {
+      await reader.cancel();
+      throw new ProviderCapabilityError('Transcription audio URL response exceeded maxBytes.', {
+        provider: 'openai',
+      });
+    }
+    chunks.push(value);
+  }
+
+  const combined = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return combined;
+}
+
+function isRedirectResponse(response: Response): boolean {
+  return response.status >= 300 && response.status < 400;
+}
+
+function isIpAddress(value: string): boolean {
+  return isIpv4Address(value) || isIpv6Address(value);
+}
+
+function isIpv4Address(value: string): boolean {
+  return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(value) && value.split('.').every((part) => {
+    const octet = Number(part);
+    return Number.isInteger(octet) && octet >= 0 && octet <= 255;
+  });
+}
+
+function isIpv6Address(value: string): boolean {
+  return value.includes(':');
+}
+
+function isLocalHostname(hostname: string): boolean {
+  return hostname === 'localhost' || hostname.endsWith('.localhost');
+}
+
+function isPrivateOrLocalAddress(address: string): boolean {
+  const normalized = address.toLowerCase();
+  if (isIpv4Address(normalized)) {
+    const numeric = ipv4ToNumber(normalized);
+    return PRIVATE_IPV4_RANGES.some(([start, end]) => numeric >= start && numeric <= end);
+  }
+
+  if (!isIpv6Address(normalized)) {
+    return true;
+  }
+
+  return (
+    normalized === '::' ||
+    normalized === '::1' ||
+    normalized.startsWith('fe80:') ||
+    normalized.startsWith('fc') ||
+    normalized.startsWith('fd') ||
+    normalized.startsWith('ff') ||
+    normalized.startsWith('::ffff:10.') ||
+    normalized.startsWith('::ffff:127.') ||
+    normalized.startsWith('::ffff:169.254.') ||
+    normalized.startsWith('::ffff:192.168.')
   );
+}
+
+function ipv4ToNumber(address: string): number {
+  return address
+    .split('.')
+    .reduce((total, octet) => total * 256 + Number(octet), 0);
 }
 
 function normalizeOpenAITranscription(

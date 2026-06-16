@@ -587,6 +587,391 @@ describe('Conversation', () => {
             { content: 'Sunny in Berlin.', role: 'assistant' },
         ]);
     });
+    it('validates model-provided tool arguments before execution by default', async () => {
+        const execute = vi.fn(async () => ({ ok: true }));
+        const complete = vi
+            .fn()
+            .mockResolvedValueOnce({
+            content: [
+                {
+                    args: { allowed: 'ok', count: 'not-number', extra: 'unexpected' },
+                    id: 'tool_1',
+                    name: 'validated_tool',
+                    type: 'tool_call',
+                },
+            ],
+            finishReason: 'tool_call',
+            model: 'gpt-4o',
+            provider: 'openai',
+            raw: {},
+            text: '',
+            toolCalls: [
+                {
+                    args: { allowed: 'ok', count: 'not-number', extra: 'unexpected' },
+                    id: 'tool_1',
+                    name: 'validated_tool',
+                },
+            ],
+            usage: usage(4, 1, 0.01),
+        })
+            .mockResolvedValueOnce({
+            content: [{ text: 'Handled validation error.', type: 'text' }],
+            finishReason: 'stop',
+            model: 'gpt-4o',
+            provider: 'openai',
+            raw: {},
+            text: 'Handled validation error.',
+            toolCalls: [],
+            usage: usage(2, 1, 0.01),
+        });
+        const conversation = new Conversation({
+            complete,
+            stream: vi.fn(),
+        }, {
+            tools: [
+                {
+                    description: 'Validated tool',
+                    execute,
+                    name: 'validated_tool',
+                    parameters: {
+                        properties: {
+                            allowed: { type: 'string' },
+                            count: { type: 'number' },
+                        },
+                        required: ['allowed'],
+                        type: 'object',
+                    },
+                },
+            ],
+        });
+        await conversation.send('Run tool');
+        expect(execute).not.toHaveBeenCalled();
+        expect(complete).toHaveBeenNthCalledWith(2, expect.objectContaining({
+            messages: expect.arrayContaining([
+                expect.objectContaining({
+                    content: [
+                        expect.objectContaining({
+                            isError: true,
+                            name: 'validated_tool',
+                            result: {
+                                error: expect.objectContaining({
+                                    message: expect.stringContaining('arguments.count must be a number'),
+                                }),
+                            },
+                            toolCallId: 'tool_1',
+                            type: 'tool_result',
+                        }),
+                    ],
+                    role: 'user',
+                }),
+            ]),
+        }));
+    });
+    it('allows invalid tool arguments only in explicit permissive mode', async () => {
+        const execute = vi.fn(async (args) => ({ observed: String(args.count) }));
+        const complete = vi
+            .fn()
+            .mockResolvedValueOnce({
+            content: [
+                {
+                    args: { allowed: 'ok', count: 'not-number', extra: 'unexpected' },
+                    id: 'tool_1',
+                    name: 'validated_tool',
+                    type: 'tool_call',
+                },
+            ],
+            finishReason: 'tool_call',
+            model: 'gpt-4o',
+            provider: 'openai',
+            raw: {},
+            text: '',
+            toolCalls: [
+                {
+                    args: { allowed: 'ok', count: 'not-number', extra: 'unexpected' },
+                    id: 'tool_1',
+                    name: 'validated_tool',
+                },
+            ],
+            usage: usage(4, 1, 0.01),
+        })
+            .mockResolvedValueOnce({
+            content: [{ text: 'Permissive done.', type: 'text' }],
+            finishReason: 'stop',
+            model: 'gpt-4o',
+            provider: 'openai',
+            raw: {},
+            text: 'Permissive done.',
+            toolCalls: [],
+            usage: usage(2, 1, 0.01),
+        });
+        const conversation = new Conversation({
+            complete,
+            stream: vi.fn(),
+        }, {
+            toolValidation: 'permissive',
+            tools: [
+                {
+                    description: 'Validated tool',
+                    execute,
+                    name: 'validated_tool',
+                    parameters: {
+                        properties: {
+                            allowed: { type: 'string' },
+                            count: { type: 'number' },
+                        },
+                        required: ['allowed'],
+                        type: 'object',
+                    },
+                },
+            ],
+        });
+        await conversation.send('Run tool');
+        expect(execute).toHaveBeenCalledWith({ allowed: 'ok', count: 'not-number', extra: 'unexpected' }, expect.objectContaining({
+            signal: expect.any(AbortSignal),
+        }));
+    });
+    it('supports strict validation for arrays, booleans, integers, enums, and explicit additional properties', async () => {
+        const execute = vi.fn(async (args) => ({ ok: args }));
+        const complete = vi
+            .fn()
+            .mockResolvedValueOnce({
+            content: [],
+            finishReason: 'tool_call',
+            model: 'gpt-4o',
+            provider: 'openai',
+            raw: {},
+            text: '',
+            toolCalls: [
+                { args: { flag: true }, id: 'tool_bool', name: 'bool_tool' },
+                { args: { count: 2 }, id: 'tool_int', name: 'int_tool' },
+                { args: { items: ['a', 'b'] }, id: 'tool_array', name: 'array_tool' },
+                { args: { mode: 'fast' }, id: 'tool_enum', name: 'enum_tool' },
+                {
+                    args: { extra: true, known: 'ok' },
+                    id: 'tool_additional',
+                    name: 'additional_tool',
+                },
+                { args: {}, id: 'tool_missing', name: 'missing_tool' },
+            ],
+            usage: usage(4, 1, 0.01),
+        })
+            .mockResolvedValueOnce({
+            content: [{ text: 'Validated.', type: 'text' }],
+            finishReason: 'stop',
+            model: 'gpt-4o',
+            provider: 'openai',
+            raw: {},
+            text: 'Validated.',
+            toolCalls: [],
+            usage: usage(2, 1, 0.01),
+        });
+        const conversation = new Conversation({
+            complete,
+            stream: vi.fn(),
+        }, {
+            tools: [
+                {
+                    description: 'Boolean tool',
+                    execute,
+                    name: 'bool_tool',
+                    parameters: {
+                        properties: { flag: { type: 'boolean' } },
+                        required: ['flag'],
+                        type: 'object',
+                    },
+                },
+                {
+                    description: 'Integer tool',
+                    execute,
+                    name: 'int_tool',
+                    parameters: {
+                        properties: { count: { type: 'integer' } },
+                        required: ['count'],
+                        type: 'object',
+                    },
+                },
+                {
+                    description: 'Array tool',
+                    execute,
+                    name: 'array_tool',
+                    parameters: {
+                        properties: {
+                            items: { items: { type: 'string' }, type: 'array' },
+                        },
+                        required: ['items'],
+                        type: 'object',
+                    },
+                },
+                {
+                    description: 'Enum tool',
+                    execute,
+                    name: 'enum_tool',
+                    parameters: {
+                        properties: {
+                            mode: { enum: ['fast'], type: 'string' },
+                        },
+                        required: ['mode'],
+                        type: 'object',
+                    },
+                },
+                {
+                    description: 'Additional properties tool',
+                    execute,
+                    name: 'additional_tool',
+                    parameters: {
+                        additionalProperties: true,
+                        properties: {
+                            known: { type: 'string' },
+                        },
+                        required: ['known'],
+                        type: 'object',
+                    },
+                },
+                {
+                    description: 'Missing required tool',
+                    execute,
+                    name: 'missing_tool',
+                    parameters: {
+                        properties: {
+                            value: { type: 'string' },
+                        },
+                        required: ['value'],
+                        type: 'object',
+                    },
+                },
+            ],
+        });
+        await conversation.send('Validate tools');
+        expect(execute).toHaveBeenCalledTimes(5);
+        expect(complete).toHaveBeenNthCalledWith(2, expect.objectContaining({
+            messages: expect.arrayContaining([
+                expect.objectContaining({
+                    content: expect.arrayContaining([
+                        expect.objectContaining({
+                            isError: true,
+                            name: 'missing_tool',
+                            result: {
+                                error: expect.objectContaining({
+                                    message: 'arguments.value is required.',
+                                }),
+                            },
+                            toolCallId: 'tool_missing',
+                        }),
+                    ]),
+                }),
+            ]),
+        }));
+    });
+    it('rejects unknown and malformed nested tool arguments in strict mode', async () => {
+        const execute = vi.fn(async () => ({ ok: true }));
+        const complete = vi
+            .fn()
+            .mockResolvedValueOnce({
+            content: [],
+            finishReason: 'tool_call',
+            model: 'gpt-4o',
+            provider: 'openai',
+            raw: {},
+            text: '',
+            toolCalls: [
+                { args: { extra: 'blocked' }, id: 'tool_extra', name: 'extra_tool' },
+                { args: { nested: 'not-object' }, id: 'tool_nested', name: 'nested_tool' },
+                { args: { mode: 'slow' }, id: 'tool_enum', name: 'enum_tool' },
+                { args: { items: [1] }, id: 'tool_array', name: 'array_tool' },
+            ],
+            usage: usage(4, 1, 0.01),
+        })
+            .mockResolvedValueOnce({
+            content: [{ text: 'Rejected.', type: 'text' }],
+            finishReason: 'stop',
+            model: 'gpt-4o',
+            provider: 'openai',
+            raw: {},
+            text: 'Rejected.',
+            toolCalls: [],
+            usage: usage(2, 1, 0.01),
+        });
+        const conversation = new Conversation({
+            complete,
+            stream: vi.fn(),
+        }, {
+            tools: [
+                {
+                    description: 'Extra tool',
+                    execute,
+                    name: 'extra_tool',
+                    parameters: {
+                        properties: {},
+                        type: 'object',
+                    },
+                },
+                {
+                    description: 'Nested tool',
+                    execute,
+                    name: 'nested_tool',
+                    parameters: {
+                        properties: {
+                            nested: {
+                                properties: {
+                                    value: { type: 'string' },
+                                },
+                                type: 'object',
+                            },
+                        },
+                        type: 'object',
+                    },
+                },
+                {
+                    description: 'Enum tool',
+                    execute,
+                    name: 'enum_tool',
+                    parameters: {
+                        properties: {
+                            mode: { enum: ['fast'], type: 'string' },
+                        },
+                        type: 'object',
+                    },
+                },
+                {
+                    description: 'Array tool',
+                    execute,
+                    name: 'array_tool',
+                    parameters: {
+                        properties: {
+                            items: { items: { type: 'string' }, type: 'array' },
+                        },
+                        type: 'object',
+                    },
+                },
+            ],
+        });
+        await conversation.send('Reject bad tools');
+        expect(execute).not.toHaveBeenCalled();
+        expect(complete).toHaveBeenNthCalledWith(2, expect.objectContaining({
+            messages: expect.arrayContaining([
+                expect.objectContaining({
+                    content: expect.arrayContaining([
+                        expect.objectContaining({
+                            result: {
+                                error: expect.objectContaining({
+                                    message: 'arguments.extra is not allowed.',
+                                }),
+                            },
+                            toolCallId: 'tool_extra',
+                        }),
+                        expect.objectContaining({
+                            result: {
+                                error: expect.objectContaining({
+                                    message: 'arguments.nested must be an object.',
+                                }),
+                            },
+                            toolCallId: 'tool_nested',
+                        }),
+                    ]),
+                }),
+            ]),
+        }));
+    });
     it('passes the remaining session budget into each provider round', async () => {
         const execute = vi.fn(async () => ({ forecast: 'Berlin: sunny' }));
         const complete = vi
@@ -1163,7 +1548,20 @@ describe('Conversation', () => {
             stream,
         }, {
             model: 'gpt-4o',
-            tools: [buildTool('lookup_weather', execute)],
+            tools: [
+                {
+                    description: 'Tool lookup_weather',
+                    execute,
+                    name: 'lookup_weather',
+                    parameters: {
+                        properties: {
+                            result: { type: 'string' },
+                        },
+                        required: ['result'],
+                        type: 'object',
+                    },
+                },
+            ],
         });
         const chunks = [];
         for await (const chunk of conversation.sendStream('Run the tool.')) {
@@ -1268,6 +1666,7 @@ describe('Conversation', () => {
         }));
     });
     it('returns timeout errors when tool execution exceeds the configured limit', async () => {
+        let observedSignal;
         const complete = vi
             .fn()
             .mockResolvedValueOnce({
@@ -1304,13 +1703,15 @@ describe('Conversation', () => {
             model: 'gpt-4o',
             toolExecutionTimeoutMs: 1,
             tools: [
-                buildTool('slow_tool', vi.fn(async () => {
+                buildTool('slow_tool', vi.fn(async (_args, context) => {
+                    observedSignal = context?.signal;
                     await new Promise((resolve) => setTimeout(resolve, 20));
                     return { ok: true };
                 })),
             ],
         });
         await conversation.send('Run the slow tool.');
+        expect(observedSignal?.aborted).toBe(true);
         expect(complete).toHaveBeenNthCalledWith(2, expect.objectContaining({
             messages: expect.arrayContaining([
                 {

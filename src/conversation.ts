@@ -17,7 +17,9 @@ import type {
   CanonicalResponse,
   CanonicalTool,
   CanonicalToolChoice,
+  CanonicalToolSchema,
   JsonObject,
+  JsonPrimitive,
   JsonValue,
   ProviderOptions,
   StreamChunk,
@@ -26,6 +28,9 @@ import type {
 
 const DEFAULT_MAX_TOOL_ROUNDS = 5;
 const DEFAULT_TOOL_EXECUTION_TIMEOUT_MS = 30_000;
+const DEFAULT_TOOL_VALIDATION: ToolValidationMode = 'strict';
+
+export type ToolValidationMode = 'permissive' | 'strict';
 
 /** Minimal client contract consumed by `Conversation`. */
 export interface ConversationClient {
@@ -76,6 +81,7 @@ export interface ConversationSnapshot {
   system?: string;
   tenantId?: string;
   toolExecutionTimeoutMs?: number;
+  toolValidation?: ToolValidationMode;
   toolChoice?: CanonicalToolChoice;
   tools?: CanonicalTool[];
   totalCachedTokens: number;
@@ -102,6 +108,7 @@ export interface ConversationOptions {
   system?: string;
   tenantId?: string;
   toolExecutionTimeoutMs?: number;
+  toolValidation?: ToolValidationMode;
   toolChoice?: CanonicalToolChoice;
   tools?: CanonicalTool[];
   onWarning?: (message: string) => void;
@@ -139,6 +146,7 @@ export class Conversation {
   private system: string | undefined;
   private readonly tenantId: string | undefined;
   private readonly toolExecutionTimeoutMs: number;
+  private readonly toolValidation: ToolValidationMode;
   private readonly toolChoice: CanonicalToolChoice | undefined;
   private readonly tools: CanonicalTool[] | undefined;
   private readonly onWarning: (message: string) => void;
@@ -167,6 +175,7 @@ export class Conversation {
     this.tenantId = options.tenantId;
     this.toolExecutionTimeoutMs =
       options.toolExecutionTimeoutMs ?? DEFAULT_TOOL_EXECUTION_TIMEOUT_MS;
+    this.toolValidation = options.toolValidation ?? DEFAULT_TOOL_VALIDATION;
     this.toolChoice = options.toolChoice;
     this.tools = options.tools ? cloneTools(options.tools) : undefined;
     this.onWarning = options.onWarning ?? ((message) => console.warn(message));
@@ -259,6 +268,9 @@ export class Conversation {
       ...(this.toolExecutionTimeoutMs !== DEFAULT_TOOL_EXECUTION_TIMEOUT_MS
         ? { toolExecutionTimeoutMs: this.toolExecutionTimeoutMs }
         : {}),
+      ...(this.toolValidation !== DEFAULT_TOOL_VALIDATION
+        ? { toolValidation: this.toolValidation }
+        : {}),
       ...(this.toolChoice !== undefined ? { toolChoice: cloneValue(this.toolChoice) } : {}),
       ...(this.tools !== undefined ? { tools: cloneValue(this.tools) } : {}),
       totalCachedTokens: this.totalCachedTokens,
@@ -343,6 +355,11 @@ export class Conversation {
         ? { toolExecutionTimeoutMs: options.toolExecutionTimeoutMs }
         : snapshot.toolExecutionTimeoutMs !== undefined
           ? { toolExecutionTimeoutMs: snapshot.toolExecutionTimeoutMs }
+          : {}),
+      ...(options.toolValidation !== undefined
+        ? { toolValidation: options.toolValidation }
+        : snapshot.toolValidation !== undefined
+          ? { toolValidation: snapshot.toolValidation }
           : {}),
       ...(snapshot.toolChoice !== undefined ? { toolChoice: snapshot.toolChoice } : {}),
       ...(options.tools !== undefined
@@ -637,12 +654,16 @@ export class Conversation {
 
     try {
       throwIfAborted(signal);
+      if (this.toolValidation === 'strict') {
+        validateToolArguments(toolCall.args, tool.parameters);
+      }
       const result = await executeToolWithGuards(
-        () =>
+        (toolSignal) =>
           Promise.resolve(
             execute(toolCall.args, {
               ...(model !== undefined ? { model } : {}),
               ...(provider !== undefined ? { provider } : {}),
+              signal: toolSignal,
               sessionId: this.sessionId,
               ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
             }),
@@ -1080,18 +1101,22 @@ function normalizeToolResult(result: JsonValue | undefined): JsonValue {
 }
 
 async function executeToolWithGuards(
-  execute: () => Promise<JsonValue>,
+  execute: (signal: AbortSignal) => Promise<JsonValue>,
   timeoutMs: number,
   signal: AbortSignal | undefined,
 ): Promise<JsonValue> {
+  const controller = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let removeAbortListener: (() => void) | undefined;
 
-  const guardedPromises: Promise<JsonValue>[] = [Promise.resolve().then(execute)];
+  const guardedPromises: Promise<JsonValue>[] = [
+    Promise.resolve().then(() => execute(controller.signal)),
+  ];
 
   guardedPromises.push(
     new Promise<JsonValue>((_, reject) => {
       timeoutId = setTimeout(() => {
+        controller.abort(new Error(`Tool execution timed out after ${timeoutMs}ms.`));
         reject(new Error(`Tool execution timed out after ${timeoutMs}ms.`));
       }, timeoutMs);
     }),
@@ -1101,11 +1126,13 @@ async function executeToolWithGuards(
     guardedPromises.push(
       new Promise<JsonValue>((_, reject) => {
         if (signal.aborted) {
+          controller.abort(signal.reason);
           reject(buildAbortError(signal.reason));
           return;
         }
 
         const onAbort = () => {
+          controller.abort(signal.reason);
           reject(buildAbortError(signal.reason));
         };
 
@@ -1125,4 +1152,92 @@ async function executeToolWithGuards(
     }
     removeAbortListener?.();
   }
+}
+
+function validateToolArguments(args: JsonObject, schema: CanonicalToolSchema): void {
+  validateToolSchemaValue(args, schema, 'arguments');
+}
+
+function validateToolSchemaValue(
+  value: JsonValue,
+  schema: CanonicalToolSchema,
+  path: string,
+): void {
+  if (schema.enum && !schema.enum.some((item) => jsonPrimitiveEquals(item, value))) {
+    throw new Error(`${path} must be one of the allowed enum values.`);
+  }
+
+  switch (schema.type) {
+    case 'array':
+      if (!Array.isArray(value)) {
+        throw new Error(`${path} must be an array.`);
+      }
+      if (schema.items) {
+        value.forEach((item, index) => {
+          validateToolSchemaValue(item, schema.items as CanonicalToolSchema, `${path}[${index}]`);
+        });
+      }
+      return;
+    case 'boolean':
+      if (typeof value !== 'boolean') {
+        throw new Error(`${path} must be a boolean.`);
+      }
+      return;
+    case 'integer':
+      if (typeof value !== 'number' || !Number.isInteger(value)) {
+        throw new Error(`${path} must be an integer.`);
+      }
+      return;
+    case 'number':
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw new Error(`${path} must be a number.`);
+      }
+      return;
+    case 'object':
+      validateToolObjectValue(value, schema, path);
+      return;
+    case 'string':
+      if (typeof value !== 'string') {
+        throw new Error(`${path} must be a string.`);
+      }
+      return;
+  }
+}
+
+function validateToolObjectValue(
+  value: JsonValue,
+  schema: CanonicalToolSchema,
+  path: string,
+): void {
+  if (!isPlainJsonObject(value)) {
+    throw new Error(`${path} must be an object.`);
+  }
+
+  for (const key of schema.required ?? []) {
+    if (!(key in value)) {
+      throw new Error(`${path}.${key} is required.`);
+    }
+  }
+
+  const properties = schema.properties ?? {};
+  for (const [key, item] of Object.entries(value)) {
+    const propertySchema = properties[key];
+    if (!propertySchema) {
+      if (schema.additionalProperties === true) {
+        continue;
+      }
+      throw new Error(`${path}.${key} is not allowed.`);
+    }
+
+    validateToolSchemaValue(item, propertySchema, `${path}.${key}`);
+  }
+}
+
+function jsonPrimitiveEquals(expected: JsonPrimitive, actual: JsonValue): boolean {
+  return (
+    actual === null ||
+    typeof actual === 'boolean' ||
+    typeof actual === 'number' ||
+    typeof actual === 'string'
+  ) && Object.is(expected, actual);
 }

@@ -1,5 +1,6 @@
 import { SlidingWindowStrategy } from './context-manager.js';
 import { LLMError, ProviderCapabilityError } from './errors.js';
+import { sanitizeForLogging } from './redaction.js';
 /**
  * Framework-agnostic HTTP handler for session lifecycle operations.
  *
@@ -20,6 +21,7 @@ export class SessionApi {
     conversationDefaults;
     middleware;
     sessionStore;
+    tenantResolution;
     tools;
     withRequestContext;
     constructor(options) {
@@ -33,6 +35,7 @@ export class SessionApi {
         this.conversationDefaults = { ...(options.conversationDefaults ?? {}) };
         this.middleware = [...(options.middleware ?? [])];
         this.sessionStore = sessionStore;
+        this.tenantResolution = options.tenantResolution ?? 'trusted-context';
         this.tools = options.tools;
         this.withRequestContext = options.withRequestContext;
     }
@@ -74,7 +77,7 @@ export class SessionApi {
                 return this.handleGetSession(sessionId, url, requestContext);
             }
             if (request.method === 'DELETE') {
-                return this.handleDeleteSession(sessionId, requestContext);
+                return this.handleDeleteSession(sessionId, url, requestContext);
             }
             throw new HttpError(405, `Method ${request.method} is not allowed on ${route.path}.`);
         }
@@ -111,7 +114,7 @@ export class SessionApi {
     async handleCreateSession(request, requestContext) {
         const body = await parseJsonBody(request);
         const history = normalizeHistoryInput(body.messages ?? [], body.system);
-        const tenantId = resolveTenantId(requestContext, body.tenantId);
+        const tenantId = this.resolveTenantId(requestContext, body.tenantId);
         const conversation = await this.client.conversation({
             ...this.buildConversationOptions(body, tenantId),
             messages: history.messages,
@@ -132,7 +135,7 @@ export class SessionApi {
     }
     async handleSendMessage(sessionId, request, url, requestContext) {
         const body = await parseJsonBody(request);
-        const tenantId = resolveTenantId(requestContext, body.tenantId);
+        const tenantId = this.resolveTenantId(requestContext, body.tenantId);
         const conversation = await this.client.conversation({
             ...this.buildConversationOptions(body, tenantId),
             sessionId,
@@ -150,7 +153,7 @@ export class SessionApi {
         });
     }
     async handleGetSession(sessionId, url, requestContext) {
-        const tenantId = resolveTenantId(requestContext, url.searchParams.get('tenantId') ?? undefined);
+        const tenantId = this.resolveTenantId(requestContext, url.searchParams.get('tenantId') ?? undefined);
         const record = await this.requireSession(sessionId, tenantId);
         const include = parseInclude(url.searchParams, ['cost', 'messages']);
         return jsonResponse({
@@ -158,7 +161,7 @@ export class SessionApi {
         });
     }
     async handleGetSessionMessages(sessionId, url, requestContext) {
-        const tenantId = resolveTenantId(requestContext, url.searchParams.get('tenantId') ?? undefined);
+        const tenantId = this.resolveTenantId(requestContext, url.searchParams.get('tenantId') ?? undefined);
         const record = await this.requireSession(sessionId, tenantId);
         const history = snapshotToMessages(record.snapshot);
         const page = paginateItems(history, parseCursor(url.searchParams.get('cursor')), parseLimit(url.searchParams.get('limit'), 50));
@@ -168,8 +171,8 @@ export class SessionApi {
             tenantId,
         });
     }
-    async handleDeleteSession(sessionId, requestContext) {
-        const tenantId = requestContext.tenantId;
+    async handleDeleteSession(sessionId, url, requestContext) {
+        const tenantId = this.resolveTenantId(requestContext, url.searchParams.get('tenantId') ?? undefined);
         await this.requireSession(sessionId, tenantId);
         await this.sessionStore.delete(sessionId, tenantId);
         return jsonResponse({
@@ -180,7 +183,7 @@ export class SessionApi {
     }
     async handleCompactSession(sessionId, request, requestContext) {
         const body = await parseJsonBody(request);
-        const tenantId = resolveTenantId(requestContext, body.tenantId);
+        const tenantId = this.resolveTenantId(requestContext, body.tenantId);
         const record = await this.requireSession(sessionId, tenantId);
         const contextManager = body.maxMessages !== undefined || body.maxTokens !== undefined
             ? new SlidingWindowStrategy({
@@ -220,7 +223,7 @@ export class SessionApi {
     }
     async handleForkSession(sessionId, request, requestContext) {
         const body = await parseJsonBody(request);
-        const tenantId = resolveTenantId(requestContext, body.tenantId);
+        const tenantId = this.resolveTenantId(requestContext, body.tenantId);
         const record = await this.requireSession(sessionId, tenantId);
         const fullHistory = snapshotToMessages(record.snapshot);
         if (!Number.isInteger(body.fromMessageIndex)) {
@@ -272,7 +275,7 @@ export class SessionApi {
         }, 201);
     }
     async handleListSessions(url, requestContext) {
-        const tenantId = resolveTenantId(requestContext, url.searchParams.get('tenantId') ?? undefined);
+        const tenantId = this.resolveTenantId(requestContext, url.searchParams.get('tenantId') ?? undefined);
         const allSessions = await this.sessionStore.list({
             ...(tenantId !== undefined ? { tenantId } : {}),
         });
@@ -349,6 +352,9 @@ export class SessionApi {
             ...(this.conversationDefaults.toolExecutionTimeoutMs !== undefined
                 ? { toolExecutionTimeoutMs: this.conversationDefaults.toolExecutionTimeoutMs }
                 : {}),
+            ...(this.conversationDefaults.toolValidation !== undefined
+                ? { toolValidation: this.conversationDefaults.toolValidation }
+                : {}),
             ...(this.contextManager !== undefined ? { contextManager: this.contextManager } : {}),
             ...(tenantId !== undefined ? { tenantId } : {}),
             ...(this.tools !== undefined ? { tools: this.tools } : {}),
@@ -363,6 +369,7 @@ export class SessionApi {
             ...(config.toolExecutionTimeoutMs !== undefined
                 ? { toolExecutionTimeoutMs: config.toolExecutionTimeoutMs }
                 : {}),
+            ...(config.toolValidation !== undefined ? { toolValidation: config.toolValidation } : {}),
         };
     }
     async streamSessionMessage(conversation, sessionId, tenantId, content) {
@@ -466,6 +473,15 @@ export class SessionApi {
             return execute();
         }
         return this.withRequestContext(context, execute);
+    }
+    resolveTenantId(requestContext, requestedTenantId) {
+        if (requestedTenantId !== undefined) {
+            if (this.tenantResolution === 'legacy-request-tenant') {
+                return requestContext.tenantId ?? requestedTenantId;
+            }
+            throw new HttpError(400, 'Request-supplied tenantId is not allowed. Resolve tenantId in trusted middleware context.');
+        }
+        return requestContext.tenantId;
     }
 }
 /** Creates a framework-agnostic session API instance. */
@@ -595,9 +611,6 @@ function paginateItems(items, cursor, limit) {
         ...(nextCursor !== undefined ? { nextCursor } : {}),
     };
 }
-function resolveTenantId(requestContext, requestedTenantId) {
-    return requestContext.tenantId ?? requestedTenantId;
-}
 function normalizeHistoryInput(messages, system) {
     if (messages.length === 0) {
         return {
@@ -660,9 +673,27 @@ function stripSystemFromSnapshot(snapshot) {
     return next;
 }
 function serializeStreamError(error) {
-    if (error instanceof Error) {
+    return serializePublicError(error);
+}
+function serializePublicError(error) {
+    if (error instanceof HttpError) {
         return {
             message: error.message,
+            name: error.name,
+        };
+    }
+    if (error instanceof LLMError) {
+        return {
+            message: safeLlmErrorMessage(error),
+            name: error.name,
+            ...(error.provider !== undefined ? { provider: error.provider } : {}),
+            ...(error.requestId !== undefined ? { requestId: error.requestId } : {}),
+            ...(error.statusCode !== undefined ? { statusCode: error.statusCode } : {}),
+        };
+    }
+    if (error instanceof Error) {
+        return {
+            message: 'Internal session API error.',
             name: error.name,
         };
     }
@@ -670,6 +701,12 @@ function serializeStreamError(error) {
         message: 'Unknown streaming error.',
         name: 'Error',
     };
+}
+function safeLlmErrorMessage(error) {
+    const sanitized = sanitizeForLogging(error.message);
+    return typeof sanitized === 'string' && sanitized === error.message
+        ? sanitized
+        : 'LLM provider request failed.';
 }
 function formatSseEvent(event, data) {
     return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -684,31 +721,13 @@ function jsonResponse(body, status = 200) {
 }
 function errorToResponse(error) {
     if (error instanceof HttpError) {
-        return jsonResponse({
-            error: {
-                message: error.message,
-                name: error.name,
-            },
-        }, error.status);
+        return jsonResponse({ error: serializePublicError(error) }, error.status);
     }
     if (error instanceof LLMError) {
-        return jsonResponse({
-            error: {
-                details: error.details,
-                message: error.message,
-                name: error.name,
-                provider: error.provider,
-                statusCode: error.statusCode,
-            },
-        }, error.statusCode ?? (error.retryable ? 503 : 500));
+        return jsonResponse({ error: serializePublicError(error) }, error.statusCode ?? (error.retryable ? 503 : 500));
     }
     if (error instanceof Error) {
-        return jsonResponse({
-            error: {
-                message: error.message,
-                name: error.name,
-            },
-        }, 500);
+        return jsonResponse({ error: serializePublicError(error) }, 500);
     }
     return jsonResponse({
         error: {

@@ -421,7 +421,7 @@ For local demos, tests, or single-process apps that do not need Postgres yet, yo
 const knowledgeStore = createInMemoryKnowledgeStore();
 ```
 
-`InMemoryKnowledgeStore` keeps chunks and vectors in process memory, supports the same retriever-facing search interface, and mirrors the main upsert helpers. It is useful for local development and examples, but it is not durable and should not replace `PostgresKnowledgeStore` for production retrieval.
+`InMemoryKnowledgeStore` keeps chunks and vectors in process memory, supports the same retriever-facing search interface, and mirrors the main upsert helpers. It requires an explicit retrieval filter by default. For single-tenant demos only, use `createInMemoryKnowledgeStore({ allowUnfilteredSearch: true })` to preserve match-all searches. It is useful for local development and examples, but it is not durable and should not replace `PostgresKnowledgeStore` for production retrieval.
 
 `formatRetrievedContext()` also supports explicit score display modes so users do not misread raw retrieval scores as probabilities:
 

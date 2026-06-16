@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LLMError } from '../src/errors.js';
-import { createDenseRetriever, createHybridRetriever, createInMemoryKnowledgeStore, formatRetrievedContext, mergeRetrievalCandidates, } from '../src/retrieval.js';
+import { createDenseRetriever, createHybridRetriever, createInMemoryKnowledgeStore, createPgvectorHnswIndexSql, formatRetrievedContext, mergeRetrievalCandidates, } from '../src/retrieval.js';
 describe('retrieval helpers', () => {
     it('creates a dense retriever around embed() and the knowledge store', async () => {
         const embed = vi.fn(async () => ({
@@ -675,6 +675,68 @@ describe('retrieval helpers', () => {
             queryEmbedding: [1, 0],
         })).resolves.toEqual([]);
     });
+    it('rejects unfiltered in-memory searches unless explicitly allowed', async () => {
+        const guardedStore = createInMemoryKnowledgeStore();
+        await expect(guardedStore.searchByEmbedding({
+            limit: 5,
+            queryEmbedding: [1, 0],
+        })).rejects.toThrow(/requires a retrieval filter/);
+        await expect(guardedStore.searchByText({
+            limit: 5,
+            query: 'refund',
+        })).rejects.toThrow(/requires a retrieval filter/);
+        const demoStore = createInMemoryKnowledgeStore({ allowUnfilteredSearch: true });
+        await demoStore.upsertKnowledgeSource({
+            botId: 'bot-1',
+            embeddingProfileId: 'profile-1',
+            id: 'source-a',
+            knowledgeSpaceId: 'space-1',
+            name: 'Tenant A',
+            sourceType: 'faq',
+            status: 'ready',
+            tenantId: 'tenant-a',
+        });
+        await demoStore.upsertKnowledgeSource({
+            botId: 'bot-1',
+            embeddingProfileId: 'profile-1',
+            id: 'source-b',
+            knowledgeSpaceId: 'space-1',
+            name: 'Tenant B',
+            sourceType: 'faq',
+            status: 'ready',
+            tenantId: 'tenant-b',
+        });
+        await demoStore.upsertKnowledgeChunk({
+            botId: 'bot-1',
+            chunkIndex: 0,
+            embedding: [1, 0],
+            embeddingProfileId: 'profile-1',
+            id: 'chunk-a',
+            knowledgeSpaceId: 'space-1',
+            sourceId: 'source-a',
+            tenantId: 'tenant-a',
+            text: 'Tenant A refund policy.',
+        });
+        await demoStore.upsertKnowledgeChunk({
+            botId: 'bot-1',
+            chunkIndex: 0,
+            embedding: [1, 0],
+            embeddingProfileId: 'profile-1',
+            id: 'chunk-b',
+            knowledgeSpaceId: 'space-1',
+            sourceId: 'source-b',
+            tenantId: 'tenant-b',
+            text: 'Tenant B refund policy.',
+        });
+        await expect(demoStore.searchByEmbedding({
+            limit: 5,
+            queryEmbedding: [1, 0],
+        })).resolves.toHaveLength(2);
+        await expect(demoStore.searchByText({
+            limit: 5,
+            query: 'refund',
+        })).resolves.toHaveLength(2);
+    });
     it('supports lexical filtering and reindex state changes in the in-memory store', async () => {
         const store = createInMemoryKnowledgeStore();
         await store.upsertKnowledgeSource({
@@ -1041,5 +1103,23 @@ describe('retrieval helpers', () => {
             minScore: 0.8,
             queryEmbedding: [1, 0],
         })).resolves.toEqual([]);
+    });
+    it('validates pgvector index dimensions before generating SQL', () => {
+        const sql = createPgvectorHnswIndexSql({
+            dimensions: 1536,
+            embeddingProfileId: 'profile-1',
+        });
+        const payload = '1536)) WHERE true; DROP TABLE sensitive; --';
+        expect(sql).toContain('vector(1536)');
+        expect(() => createPgvectorHnswIndexSql({
+            dimensions: payload,
+            embeddingProfileId: 'profile-1',
+        })).toThrow(/pgvector dimensions/);
+        for (const dimensions of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 16_001]) {
+            expect(() => createPgvectorHnswIndexSql({
+                dimensions,
+                embeddingProfileId: 'profile-1',
+            })).toThrow(/pgvector dimensions/);
+        }
     });
 });

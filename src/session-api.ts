@@ -1,8 +1,13 @@
 import { SlidingWindowStrategy, type ContextManager } from './context-manager.js';
 import { LLMError, ProviderCapabilityError } from './errors.js';
+import { sanitizeForLogging } from './redaction.js';
 
 import type { LLMClient } from './client.js';
-import type { ConversationOptions, ConversationSnapshot } from './conversation.js';
+import type {
+  ConversationOptions,
+  ConversationSnapshot,
+  ToolValidationMode,
+} from './conversation.js';
 import type {
   SessionMeta,
   SessionRecord,
@@ -17,6 +22,10 @@ import type {
 import type { UsageSummary } from './usage.js';
 
 type MaybePromise<TValue> = Promise<TValue> | TValue;
+type TenantResolutionMode =
+  | 'legacy-request-tenant'
+  | 'single-tenant'
+  | 'trusted-context';
 
 /** Request-scoped metadata passed through session API middleware and handlers. */
 export interface SessionApiRequestContext {
@@ -38,6 +47,7 @@ export interface SessionApiOptions {
   contextManager?: ContextManager;
   middleware?: SessionApiMiddleware[];
   sessionStore?: SessionStore<ConversationSnapshot>;
+  tenantResolution?: TenantResolutionMode;
   tools?: CanonicalTool[];
   withRequestContext?: <TValue>(
     context: SessionApiRequestContext,
@@ -56,6 +66,7 @@ export interface SessionConversationConfig {
   system?: string;
   toolChoice?: CanonicalToolChoice;
   toolExecutionTimeoutMs?: number;
+  toolValidation?: ToolValidationMode;
 }
 
 /** Request body accepted by `POST /sessions`. */
@@ -133,6 +144,7 @@ export class SessionApi {
   private readonly conversationDefaults: SessionConversationConfig;
   private readonly middleware: SessionApiMiddleware[];
   private readonly sessionStore: SessionStore<ConversationSnapshot>;
+  private readonly tenantResolution: TenantResolutionMode;
   private readonly tools: CanonicalTool[] | undefined;
   private readonly withRequestContext:
     | SessionApiOptions['withRequestContext']
@@ -152,6 +164,7 @@ export class SessionApi {
     this.conversationDefaults = { ...(options.conversationDefaults ?? {}) };
     this.middleware = [...(options.middleware ?? [])];
     this.sessionStore = sessionStore;
+    this.tenantResolution = options.tenantResolution ?? 'trusted-context';
     this.tools = options.tools;
     this.withRequestContext = options.withRequestContext;
   }
@@ -210,7 +223,7 @@ export class SessionApi {
       }
 
       if (request.method === 'DELETE') {
-        return this.handleDeleteSession(sessionId, requestContext);
+        return this.handleDeleteSession(sessionId, url, requestContext);
       }
 
       throw new HttpError(405, `Method ${request.method} is not allowed on ${route.path}.`);
@@ -261,7 +274,7 @@ export class SessionApi {
   ): Promise<Response> {
     const body = await parseJsonBody<SessionCreateRequest>(request);
     const history = normalizeHistoryInput(body.messages ?? [], body.system);
-    const tenantId = resolveTenantId(requestContext, body.tenantId);
+    const tenantId = this.resolveTenantId(requestContext, body.tenantId);
     const conversation = await this.client.conversation({
       ...this.buildConversationOptions(body, tenantId),
       messages: history.messages,
@@ -292,7 +305,7 @@ export class SessionApi {
     requestContext: SessionApiRequestContext,
   ): Promise<Response> {
     const body = await parseJsonBody<SessionMessageRequest>(request);
-    const tenantId = resolveTenantId(requestContext, body.tenantId);
+    const tenantId = this.resolveTenantId(requestContext, body.tenantId);
     const conversation = await this.client.conversation({
       ...this.buildConversationOptions(body, tenantId),
       sessionId,
@@ -318,7 +331,10 @@ export class SessionApi {
     url: URL,
     requestContext: SessionApiRequestContext,
   ): Promise<Response> {
-    const tenantId = resolveTenantId(requestContext, url.searchParams.get('tenantId') ?? undefined);
+    const tenantId = this.resolveTenantId(
+      requestContext,
+      url.searchParams.get('tenantId') ?? undefined,
+    );
     const record = await this.requireSession(sessionId, tenantId);
     const include = parseInclude(url.searchParams, ['cost', 'messages']);
 
@@ -332,7 +348,10 @@ export class SessionApi {
     url: URL,
     requestContext: SessionApiRequestContext,
   ): Promise<Response> {
-    const tenantId = resolveTenantId(requestContext, url.searchParams.get('tenantId') ?? undefined);
+    const tenantId = this.resolveTenantId(
+      requestContext,
+      url.searchParams.get('tenantId') ?? undefined,
+    );
     const record = await this.requireSession(sessionId, tenantId);
     const history = snapshotToMessages(record.snapshot);
     const page = paginateItems(
@@ -350,9 +369,13 @@ export class SessionApi {
 
   private async handleDeleteSession(
     sessionId: string,
+    url: URL,
     requestContext: SessionApiRequestContext,
   ): Promise<Response> {
-    const tenantId = requestContext.tenantId;
+    const tenantId = this.resolveTenantId(
+      requestContext,
+      url.searchParams.get('tenantId') ?? undefined,
+    );
     await this.requireSession(sessionId, tenantId);
     await this.sessionStore.delete(sessionId, tenantId);
 
@@ -369,7 +392,7 @@ export class SessionApi {
     requestContext: SessionApiRequestContext,
   ): Promise<Response> {
     const body = await parseJsonBody<SessionCompactRequest>(request);
-    const tenantId = resolveTenantId(requestContext, body.tenantId);
+    const tenantId = this.resolveTenantId(requestContext, body.tenantId);
     const record = await this.requireSession(sessionId, tenantId);
     const contextManager =
       body.maxMessages !== undefined || body.maxTokens !== undefined
@@ -424,7 +447,7 @@ export class SessionApi {
     requestContext: SessionApiRequestContext,
   ): Promise<Response> {
     const body = await parseJsonBody<SessionForkRequest>(request);
-    const tenantId = resolveTenantId(requestContext, body.tenantId);
+    const tenantId = this.resolveTenantId(requestContext, body.tenantId);
     const record = await this.requireSession(sessionId, tenantId);
     const fullHistory = snapshotToMessages(record.snapshot);
 
@@ -492,7 +515,10 @@ export class SessionApi {
     url: URL,
     requestContext: SessionApiRequestContext,
   ): Promise<Response> {
-    const tenantId = resolveTenantId(requestContext, url.searchParams.get('tenantId') ?? undefined);
+    const tenantId = this.resolveTenantId(
+      requestContext,
+      url.searchParams.get('tenantId') ?? undefined,
+    );
     const allSessions = await this.sessionStore.list({
       ...(tenantId !== undefined ? { tenantId } : {}),
     });
@@ -588,6 +614,9 @@ export class SessionApi {
       ...(this.conversationDefaults.toolExecutionTimeoutMs !== undefined
         ? { toolExecutionTimeoutMs: this.conversationDefaults.toolExecutionTimeoutMs }
         : {}),
+      ...(this.conversationDefaults.toolValidation !== undefined
+        ? { toolValidation: this.conversationDefaults.toolValidation }
+        : {}),
       ...(this.contextManager !== undefined ? { contextManager: this.contextManager } : {}),
       ...(tenantId !== undefined ? { tenantId } : {}),
       ...(this.tools !== undefined ? { tools: this.tools } : {}),
@@ -602,6 +631,7 @@ export class SessionApi {
       ...(config.toolExecutionTimeoutMs !== undefined
         ? { toolExecutionTimeoutMs: config.toolExecutionTimeoutMs }
         : {}),
+      ...(config.toolValidation !== undefined ? { toolValidation: config.toolValidation } : {}),
     };
   }
 
@@ -761,6 +791,24 @@ export class SessionApi {
     }
 
     return this.withRequestContext(context, execute);
+  }
+
+  private resolveTenantId(
+    requestContext: SessionApiRequestContext,
+    requestedTenantId: string | undefined,
+  ): string | undefined {
+    if (requestedTenantId !== undefined) {
+      if (this.tenantResolution === 'legacy-request-tenant') {
+        return requestContext.tenantId ?? requestedTenantId;
+      }
+
+      throw new HttpError(
+        400,
+        'Request-supplied tenantId is not allowed. Resolve tenantId in trusted middleware context.',
+      );
+    }
+
+    return requestContext.tenantId;
   }
 }
 
@@ -931,13 +979,6 @@ function paginateItems<TItem>(
   };
 }
 
-function resolveTenantId(
-  requestContext: SessionApiRequestContext,
-  requestedTenantId: string | undefined,
-): string | undefined {
-  return requestContext.tenantId ?? requestedTenantId;
-}
-
 function normalizeHistoryInput(
   messages: CanonicalMessage[],
   system: string | undefined,
@@ -1023,15 +1064,39 @@ function stripSystemFromSnapshot(snapshot: ConversationSnapshot): ConversationSn
   return next;
 }
 
-function serializeStreamError(
-  error: Error | unknown,
-): {
+function serializeStreamError(error: Error | unknown): PublicSessionApiError {
+  return serializePublicError(error);
+}
+
+interface PublicSessionApiError {
   message: string;
   name: string;
-} {
-  if (error instanceof Error) {
+  provider?: CanonicalProvider;
+  requestId?: string;
+  statusCode?: number;
+}
+
+function serializePublicError(error: unknown): PublicSessionApiError {
+  if (error instanceof HttpError) {
     return {
       message: error.message,
+      name: error.name,
+    };
+  }
+
+  if (error instanceof LLMError) {
+    return {
+      message: safeLlmErrorMessage(error),
+      name: error.name,
+      ...(error.provider !== undefined ? { provider: error.provider } : {}),
+      ...(error.requestId !== undefined ? { requestId: error.requestId } : {}),
+      ...(error.statusCode !== undefined ? { statusCode: error.statusCode } : {}),
+    };
+  }
+
+  if (error instanceof Error) {
+    return {
+      message: 'Internal session API error.',
       name: error.name,
     };
   }
@@ -1040,6 +1105,13 @@ function serializeStreamError(
     message: 'Unknown streaming error.',
     name: 'Error',
   };
+}
+
+function safeLlmErrorMessage(error: LLMError): string {
+  const sanitized = sanitizeForLogging(error.message);
+  return typeof sanitized === 'string' && sanitized === error.message
+    ? sanitized
+    : 'LLM provider request failed.';
 }
 
 function formatSseEvent(event: string, data: unknown): string {
@@ -1057,42 +1129,15 @@ function jsonResponse(body: unknown, status: number = 200): Response {
 
 function errorToResponse(error: unknown): Response {
   if (error instanceof HttpError) {
-    return jsonResponse(
-      {
-        error: {
-          message: error.message,
-          name: error.name,
-        },
-      },
-      error.status,
-    );
+    return jsonResponse({ error: serializePublicError(error) }, error.status);
   }
 
   if (error instanceof LLMError) {
-    return jsonResponse(
-      {
-        error: {
-          details: error.details,
-          message: error.message,
-          name: error.name,
-          provider: error.provider,
-          statusCode: error.statusCode,
-        },
-      },
-      error.statusCode ?? (error.retryable ? 503 : 500),
-    );
+    return jsonResponse({ error: serializePublicError(error) }, error.statusCode ?? (error.retryable ? 503 : 500));
   }
 
   if (error instanceof Error) {
-    return jsonResponse(
-      {
-        error: {
-          message: error.message,
-          name: error.name,
-        },
-      },
-      500,
-    );
+    return jsonResponse({ error: serializePublicError(error) }, 500);
   }
 
   return jsonResponse(

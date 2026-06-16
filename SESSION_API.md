@@ -184,7 +184,9 @@ const sessionApi = createSessionApi({
 
 Operational rule:
 
-- If middleware resolves a tenant id, it overrides any tenant id the caller attempted to send in query/body parameters
+- By default, `SessionApi` uses `tenantResolution: 'trusted-context'`.
+- Request-supplied `tenantId` values in query/body parameters are rejected by default.
+- Resolve tenant ids in trusted middleware. Use `tenantResolution: 'legacy-request-tenant'` only as an explicit compatibility mode for non-public or already-authenticated integrations.
 
 ## OpenAI Responses API Mapping
 

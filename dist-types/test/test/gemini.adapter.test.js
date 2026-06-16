@@ -247,6 +247,8 @@ describe('Gemini adapter', () => {
                 },
             },
             usage: {
+                cost: '$0.0000',
+                costUSD: 0.0000024,
                 inputTokens: 12,
             },
         });

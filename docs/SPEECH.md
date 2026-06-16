@@ -64,7 +64,9 @@ console.log(transcript.durationSeconds);
 console.log(transcript.usage?.costUSD);
 ```
 
-`input` accepts `data` as base64, `file` as `Blob`, `ArrayBuffer`, or `Uint8Array`, or `url` when the runtime can fetch the file.
+`input` accepts `data` as base64 or `file` as `Blob`, `ArrayBuffer`, or `Uint8Array`.
+
+`input.url` is disabled by default because the library runtime would fetch that URL server-side. To enable URL input, pass an explicit `transcriptionUrlPolicy` with allowed protocols/hosts, byte limits, redirect limits, and a `resolveHostname` function when private-network blocking is enabled. The adapter validates every redirect hop and streams the response with `maxBytes` enforcement.
 
 ## Cost And Budgets
 
