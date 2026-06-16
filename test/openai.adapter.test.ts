@@ -761,6 +761,27 @@ describe('OpenAI adapter', () => {
       }),
     ).rejects.toThrow(/private or local/);
 
+    for (const url of [
+      'https://[::1]/audio.mp3',
+      'https://[fd00::1]/audio.mp3',
+      'https://[fe80::1]/audio.mp3',
+      'https://[::ffff:127.0.0.1]/audio.mp3',
+    ]) {
+      await expect(
+        adapter.transcribe({
+          input: {
+            mediaType: 'audio/mpeg',
+            url,
+          },
+          model: 'gpt-4o-mini-transcribe',
+          provider: 'openai',
+          transcriptionUrlPolicy: {
+            enabled: true,
+          },
+        }),
+      ).rejects.toThrow(/private or local/);
+    }
+
     expect(fetchImplementation).not.toHaveBeenCalled();
   });
 

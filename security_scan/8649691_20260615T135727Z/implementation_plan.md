@@ -348,7 +348,7 @@ pnpm build
 Final gate:
 
 ```bash
-pnpm ci
+pnpm run ci
 ```
 
 ## Compatibility Notes

@@ -773,10 +773,10 @@ async function assertAllowedTranscriptionUrl(
     );
   }
 
-  const hostname = url.hostname.toLowerCase();
+  const hostname = normalizeNetworkAddress(url.hostname);
   if (
     policy.allowedHosts &&
-    !policy.allowedHosts.map((host) => host.toLowerCase()).includes(hostname)
+    !policy.allowedHosts.map(normalizeNetworkAddress).includes(hostname)
   ) {
     throw new ProviderCapabilityError(
       `Transcription audio URL host "${hostname}" is not allowed.`,
@@ -898,7 +898,8 @@ function isRedirectResponse(response: Response): boolean {
 }
 
 function isIpAddress(value: string): boolean {
-  return isIpv4Address(value) || isIpv6Address(value);
+  const normalized = normalizeNetworkAddress(value);
+  return isIpv4Address(normalized) || isIpv6Address(normalized);
 }
 
 function isIpv4Address(value: string): boolean {
@@ -913,14 +914,20 @@ function isIpv6Address(value: string): boolean {
 }
 
 function isLocalHostname(hostname: string): boolean {
-  return hostname === 'localhost' || hostname.endsWith('.localhost');
+  const normalized = normalizeNetworkAddress(hostname);
+  return normalized === 'localhost' || normalized.endsWith('.localhost');
 }
 
 function isPrivateOrLocalAddress(address: string): boolean {
-  const normalized = address.toLowerCase();
+  const normalized = normalizeNetworkAddress(address);
   if (isIpv4Address(normalized)) {
     const numeric = ipv4ToNumber(normalized);
     return PRIVATE_IPV4_RANGES.some(([start, end]) => numeric >= start && numeric <= end);
+  }
+
+  const mappedIpv4 = ipv4MappedIpv6ToNumber(normalized);
+  if (mappedIpv4 !== undefined) {
+    return PRIVATE_IPV4_RANGES.some(([start, end]) => mappedIpv4 >= start && mappedIpv4 <= end);
   }
 
   if (!isIpv6Address(normalized)) {
@@ -933,12 +940,40 @@ function isPrivateOrLocalAddress(address: string): boolean {
     normalized.startsWith('fe80:') ||
     normalized.startsWith('fc') ||
     normalized.startsWith('fd') ||
-    normalized.startsWith('ff') ||
-    normalized.startsWith('::ffff:10.') ||
-    normalized.startsWith('::ffff:127.') ||
-    normalized.startsWith('::ffff:169.254.') ||
-    normalized.startsWith('::ffff:192.168.')
+    normalized.startsWith('ff')
   );
+}
+
+function normalizeNetworkAddress(value: string): string {
+  const lower = value.toLowerCase();
+  return lower.startsWith('[') && lower.endsWith(']') ? lower.slice(1, -1) : lower;
+}
+
+function ipv4MappedIpv6ToNumber(address: string): number | undefined {
+  if (!address.startsWith('::ffff:')) {
+    return undefined;
+  }
+
+  const suffix = address.slice('::ffff:'.length);
+  if (isIpv4Address(suffix)) {
+    return ipv4ToNumber(suffix);
+  }
+
+  const groups = suffix.split(':');
+  if (groups.length === 0 || groups.length > 2) {
+    return undefined;
+  }
+
+  const [high = '0', low = '0'] = groups;
+  if (!isIpv6Hextet(high) || !isIpv6Hextet(low)) {
+    return undefined;
+  }
+
+  return Number.parseInt(high, 16) * 65_536 + Number.parseInt(low, 16);
+}
+
+function isIpv6Hextet(value: string): boolean {
+  return /^[0-9a-f]{1,4}$/i.test(value);
 }
 
 function ipv4ToNumber(address: string): number {
