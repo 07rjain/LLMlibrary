@@ -1,10 +1,11 @@
 import { type ContextManager } from './context-manager.js';
 import type { LLMClient } from './client.js';
-import type { ConversationSnapshot } from './conversation.js';
+import type { ConversationSnapshot, ToolValidationMode } from './conversation.js';
 import type { SessionMeta, SessionRecord, SessionStore } from './session-store.js';
 import type { CanonicalMessage, CanonicalProvider, CanonicalTool, CanonicalToolChoice } from './types.js';
 import type { UsageSummary } from './usage.js';
 type MaybePromise<TValue> = Promise<TValue> | TValue;
+type TenantResolutionMode = 'legacy-request-tenant' | 'single-tenant' | 'trusted-context';
 /** Request-scoped metadata passed through session API middleware and handlers. */
 export interface SessionApiRequestContext {
     tenantId?: string;
@@ -20,6 +21,7 @@ export interface SessionApiOptions {
     contextManager?: ContextManager;
     middleware?: SessionApiMiddleware[];
     sessionStore?: SessionStore<ConversationSnapshot>;
+    tenantResolution?: TenantResolutionMode;
     tools?: CanonicalTool[];
     withRequestContext?: <TValue>(context: SessionApiRequestContext, execute: () => Promise<TValue>) => Promise<TValue>;
 }
@@ -34,6 +36,7 @@ export interface SessionConversationConfig {
     system?: string;
     toolChoice?: CanonicalToolChoice;
     toolExecutionTimeoutMs?: number;
+    toolValidation?: ToolValidationMode;
 }
 /** Request body accepted by `POST /sessions`. */
 export interface SessionCreateRequest extends SessionConversationConfig {
@@ -104,6 +107,7 @@ export declare class SessionApi {
     private readonly conversationDefaults;
     private readonly middleware;
     private readonly sessionStore;
+    private readonly tenantResolution;
     private readonly tools;
     private readonly withRequestContext;
     constructor(options: SessionApiOptions);
@@ -124,6 +128,7 @@ export declare class SessionApi {
     private safeGetUsage;
     private applyMiddleware;
     private runWithRequestContext;
+    private resolveTenantId;
 }
 /** Creates a framework-agnostic session API instance. */
 export declare function createSessionApi(options: SessionApiOptions): SessionApi;

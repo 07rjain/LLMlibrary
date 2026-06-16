@@ -138,6 +138,7 @@ export interface CanonicalToolSchema {
 export interface ToolExecutionContext {
   model?: string;
   provider?: CanonicalProvider;
+  signal?: AbortSignal;
   sessionId?: string;
   tenantId?: string;
 }
@@ -244,6 +245,21 @@ export interface AudioInput {
   url?: string;
 }
 
+export type TranscriptionHostnameResolver = (
+  hostname: string,
+) => Promise<string[]> | string[];
+
+export interface TranscriptionUrlPolicy {
+  allowedContentTypes?: string[];
+  allowedHosts?: string[];
+  allowedProtocols?: Array<'http:' | 'https:'>;
+  blockPrivateNetworks?: boolean;
+  enabled: boolean;
+  maxBytes?: number;
+  maxRedirects?: number;
+  resolveHostname?: TranscriptionHostnameResolver;
+}
+
 export type SpeechOutputFormat = 'aac' | 'flac' | 'mp3' | 'opus' | 'pcm' | 'wav';
 
 export interface OpenAISpeechOptions {
@@ -302,6 +318,7 @@ export interface TranscriptionRequestOptions {
   temperature?: number;
   tenantId?: string;
   timestampGranularities?: Array<'segment' | 'word'>;
+  transcriptionUrlPolicy?: TranscriptionUrlPolicy;
 }
 
 export interface SpeechBillingUnits {
