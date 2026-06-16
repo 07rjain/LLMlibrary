@@ -27,6 +27,8 @@ type TenantResolutionMode =
   | 'single-tenant'
   | 'trusted-context';
 
+const REDACTION_MARKER = '[REDACTED]';
+
 /** Request-scoped metadata passed through session API middleware and handlers. */
 export interface SessionApiRequestContext {
   tenantId?: string;
@@ -1109,9 +1111,11 @@ function serializePublicError(error: unknown): PublicSessionApiError {
 
 function safeLlmErrorMessage(error: LLMError): string {
   const sanitized = sanitizeForLogging(error.message);
-  return typeof sanitized === 'string' && sanitized === error.message
-    ? sanitized
-    : 'LLM provider request failed.';
+  if (typeof sanitized !== 'string' || sanitized.includes(REDACTION_MARKER)) {
+    return 'LLM provider request failed.';
+  }
+
+  return sanitized;
 }
 
 function formatSseEvent(event: string, data: unknown): string {

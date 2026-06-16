@@ -1,6 +1,7 @@
 import { SlidingWindowStrategy } from './context-manager.js';
 import { LLMError, ProviderCapabilityError } from './errors.js';
 import { sanitizeForLogging } from './redaction.js';
+const REDACTION_MARKER = '[REDACTED]';
 /**
  * Framework-agnostic HTTP handler for session lifecycle operations.
  *
@@ -704,9 +705,10 @@ function serializePublicError(error) {
 }
 function safeLlmErrorMessage(error) {
     const sanitized = sanitizeForLogging(error.message);
-    return typeof sanitized === 'string' && sanitized === error.message
-        ? sanitized
-        : 'LLM provider request failed.';
+    if (typeof sanitized !== 'string' || sanitized.includes(REDACTION_MARKER)) {
+        return 'LLM provider request failed.';
+    }
+    return sanitized;
 }
 function formatSseEvent(event, data) {
     return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
