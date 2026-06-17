@@ -292,6 +292,8 @@ That is stricter than only `tenant_id + bot_id`, and it should be.
 
 Never trust `tenantId` from the browser request body for retrieval filters.
 
+`InMemoryKnowledgeStore` also requires an explicit retrieval filter by default. Only enable `allowUnfilteredSearch: true` for single-tenant demos or tests where match-all retrieval is intentional.
+
 Use:
 
 - auth token

@@ -530,56 +530,261 @@ describe('OpenAI adapter', () => {
         ]);
     });
     it('handles transcription URL, missing input, and failed URL fetch cases', async () => {
-        const originalFetch = globalThis.fetch;
         const remoteAudio = new Blob([new Uint8Array([1, 2, 3])], {
             type: 'audio/mpeg',
         });
-        const urlFetch = vi
+        const fetchImplementation = vi
             .fn()
             .mockResolvedValueOnce(new Response(remoteAudio, {
+            headers: { 'content-type': 'audio/mpeg' },
+            status: 200,
+        }))
+            .mockResolvedValueOnce(new Response(JSON.stringify({ text: 'from url' }), {
+            headers: { 'content-type': 'application/json' },
             status: 200,
         }))
             .mockResolvedValueOnce(new Response('', { status: 404 }));
-        globalThis.fetch = urlFetch;
-        const fetchImplementation = vi.fn(async () => new Response(JSON.stringify({ text: 'from url' }), {
-            headers: { 'content-type': 'application/json' },
-            status: 200,
-        }));
         const adapter = new OpenAIAdapter({
             apiKey: 'openai-key',
             fetchImplementation,
         });
-        try {
-            const fromUrl = await adapter.transcribe({
-                input: {
-                    mediaType: 'audio/mpeg',
-                    url: 'https://example.test/audio.mp3',
-                },
-                inputAudioSeconds: 1,
-                model: 'gpt-4o-mini-transcribe',
-                provider: 'openai',
-            });
+        const urlPolicy = {
+            enabled: true,
+            resolveHostname: () => ['203.0.113.10'],
+        };
+        const fromUrl = await adapter.transcribe({
+            input: {
+                mediaType: 'audio/mpeg',
+                url: 'https://example.test/audio.mp3',
+            },
+            inputAudioSeconds: 1,
+            model: 'gpt-4o-mini-transcribe',
+            provider: 'openai',
+            transcriptionUrlPolicy: urlPolicy,
+        });
+        await expect(adapter.transcribe({
+            input: {
+                mediaType: 'audio/mpeg',
+            },
+            model: 'gpt-4o-mini-transcribe',
+            provider: 'openai',
+        })).rejects.toThrow(ProviderCapabilityError);
+        await expect(adapter.transcribe({
+            input: {
+                mediaType: 'audio/mpeg',
+                url: 'https://example.test/missing.mp3',
+            },
+            model: 'gpt-4o-mini-transcribe',
+            provider: 'openai',
+            transcriptionUrlPolicy: urlPolicy,
+        })).rejects.toThrow(ProviderError);
+        expect(fromUrl.text).toBe('from url');
+        expect(fetchImplementation).toHaveBeenNthCalledWith(1, 'https://example.test/audio.mp3', expect.objectContaining({ redirect: 'manual' }));
+    });
+    it('blocks unsafe transcription URLs before fetching remote audio', async () => {
+        const fetchImplementation = vi.fn();
+        const adapter = new OpenAIAdapter({
+            apiKey: 'openai-key',
+            fetchImplementation,
+        });
+        await expect(adapter.transcribe({
+            input: {
+                mediaType: 'audio/mpeg',
+                url: 'https://example.test/audio.mp3',
+            },
+            model: 'gpt-4o-mini-transcribe',
+            provider: 'openai',
+        })).rejects.toThrow(/disabled by default/);
+        await expect(adapter.transcribe({
+            input: {
+                mediaType: 'audio/mpeg',
+                url: 'http://169.254.169.254/latest/meta-data',
+            },
+            model: 'gpt-4o-mini-transcribe',
+            provider: 'openai',
+            transcriptionUrlPolicy: {
+                allowedProtocols: ['http:'],
+                enabled: true,
+            },
+        })).rejects.toThrow(/private or local/);
+        await expect(adapter.transcribe({
+            input: {
+                mediaType: 'audio/mpeg',
+                url: 'https://metadata.example/audio.mp3',
+            },
+            model: 'gpt-4o-mini-transcribe',
+            provider: 'openai',
+            transcriptionUrlPolicy: {
+                enabled: true,
+                resolveHostname: () => ['10.0.0.10'],
+            },
+        })).rejects.toThrow(/private or local/);
+        for (const url of [
+            'https://[::1]/audio.mp3',
+            'https://[fd00::1]/audio.mp3',
+            'https://[fe80::1]/audio.mp3',
+            'https://[::ffff:127.0.0.1]/audio.mp3',
+        ]) {
             await expect(adapter.transcribe({
                 input: {
                     mediaType: 'audio/mpeg',
+                    url,
                 },
                 model: 'gpt-4o-mini-transcribe',
                 provider: 'openai',
-            })).rejects.toThrow(ProviderCapabilityError);
-            await expect(adapter.transcribe({
-                input: {
-                    mediaType: 'audio/mpeg',
-                    url: 'https://example.test/missing.mp3',
+                transcriptionUrlPolicy: {
+                    enabled: true,
                 },
-                model: 'gpt-4o-mini-transcribe',
-                provider: 'openai',
-            })).rejects.toThrow(ProviderError);
-            expect(fromUrl.text).toBe('from url');
-            expect(urlFetch).toHaveBeenCalledWith('https://example.test/audio.mp3');
+            })).rejects.toThrow(/private or local/);
         }
-        finally {
-            globalThis.fetch = originalFetch;
-        }
+        expect(fetchImplementation).not.toHaveBeenCalled();
+    });
+    it('revalidates transcription URL redirects and enforces byte limits while streaming', async () => {
+        const redirectFetch = vi
+            .fn()
+            .mockResolvedValueOnce(new Response(null, {
+            headers: {
+                location: 'http://169.254.169.254/audio.mp3',
+            },
+            status: 302,
+        }));
+        const redirectAdapter = new OpenAIAdapter({
+            apiKey: 'openai-key',
+            fetchImplementation: redirectFetch,
+        });
+        await expect(redirectAdapter.transcribe({
+            input: {
+                mediaType: 'audio/mpeg',
+                url: 'https://example.test/audio.mp3',
+            },
+            model: 'gpt-4o-mini-transcribe',
+            provider: 'openai',
+            transcriptionUrlPolicy: {
+                allowedProtocols: ['http:', 'https:'],
+                enabled: true,
+                resolveHostname: () => ['203.0.113.10'],
+            },
+        })).rejects.toThrow(/private or local/);
+        expect(redirectFetch).toHaveBeenCalledTimes(1);
+        const oversizedFetch = vi
+            .fn()
+            .mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3, 4]), {
+            headers: { 'content-type': 'audio/mpeg' },
+            status: 200,
+        }));
+        const oversizedAdapter = new OpenAIAdapter({
+            apiKey: 'openai-key',
+            fetchImplementation: oversizedFetch,
+        });
+        await expect(oversizedAdapter.transcribe({
+            input: {
+                mediaType: 'audio/mpeg',
+                url: 'https://example.test/audio.mp3',
+            },
+            model: 'gpt-4o-mini-transcribe',
+            provider: 'openai',
+            transcriptionUrlPolicy: {
+                enabled: true,
+                maxBytes: 3,
+                resolveHostname: () => ['203.0.113.10'],
+            },
+        })).rejects.toThrow(/maxBytes/);
+        expect(oversizedFetch).toHaveBeenCalledTimes(1);
+    });
+    it('rejects unsafe transcription URL policy variants', async () => {
+        const adapter = new OpenAIAdapter({
+            apiKey: 'openai-key',
+            fetchImplementation: vi.fn(),
+        });
+        await expect(adapter.transcribe({
+            input: {
+                mediaType: 'audio/mpeg',
+                url: 'ftp://example.test/audio.mp3',
+            },
+            model: 'gpt-4o-mini-transcribe',
+            provider: 'openai',
+            transcriptionUrlPolicy: {
+                enabled: true,
+            },
+        })).rejects.toThrow(/protocol/);
+        await expect(adapter.transcribe({
+            input: {
+                mediaType: 'audio/mpeg',
+                url: 'https://blocked.example/audio.mp3',
+            },
+            model: 'gpt-4o-mini-transcribe',
+            provider: 'openai',
+            transcriptionUrlPolicy: {
+                allowedHosts: ['allowed.example'],
+                enabled: true,
+            },
+        })).rejects.toThrow(/host/);
+        await expect(adapter.transcribe({
+            input: {
+                mediaType: 'audio/mpeg',
+                url: 'https://example.test/audio.mp3',
+            },
+            model: 'gpt-4o-mini-transcribe',
+            provider: 'openai',
+            transcriptionUrlPolicy: {
+                enabled: true,
+            },
+        })).rejects.toThrow(/requires resolveHostname/);
+        await expect(adapter.transcribe({
+            input: {
+                mediaType: 'audio/mpeg',
+                url: 'not a url',
+            },
+            model: 'gpt-4o-mini-transcribe',
+            provider: 'openai',
+            transcriptionUrlPolicy: {
+                blockPrivateNetworks: false,
+                enabled: true,
+            },
+        })).rejects.toThrow(/valid URL/);
+    });
+    it('rejects bad transcription URL redirects and content types', async () => {
+        const noLocationFetch = vi
+            .fn()
+            .mockResolvedValueOnce(new Response(null, { status: 302 }));
+        const noLocationAdapter = new OpenAIAdapter({
+            apiKey: 'openai-key',
+            fetchImplementation: noLocationFetch,
+        });
+        await expect(noLocationAdapter.transcribe({
+            input: {
+                mediaType: 'audio/mpeg',
+                url: 'https://example.test/audio.mp3',
+            },
+            model: 'gpt-4o-mini-transcribe',
+            provider: 'openai',
+            transcriptionUrlPolicy: {
+                enabled: true,
+                resolveHostname: () => ['203.0.113.10'],
+            },
+        })).rejects.toThrow(/location/);
+        const contentTypeFetch = vi
+            .fn()
+            .mockResolvedValueOnce(new Response('not audio', {
+            headers: { 'content-type': 'text/html' },
+            status: 200,
+        }));
+        const contentTypeAdapter = new OpenAIAdapter({
+            apiKey: 'openai-key',
+            fetchImplementation: contentTypeFetch,
+        });
+        await expect(contentTypeAdapter.transcribe({
+            input: {
+                mediaType: 'audio/mpeg',
+                url: 'https://example.test/audio.mp3',
+            },
+            model: 'gpt-4o-mini-transcribe',
+            provider: 'openai',
+            transcriptionUrlPolicy: {
+                enabled: true,
+                resolveHostname: () => ['203.0.113.10'],
+            },
+        })).rejects.toThrow(/content type/);
     });
     it('streams text deltas and done events', async () => {
         const adapter = new OpenAIAdapter({

@@ -1295,6 +1295,7 @@ export type MarkKnowledgeSourcesNeedingReindexOptions =
 export type KnowledgeChunkRecord = PostgresKnowledgeChunkRecord;
 
 export interface InMemoryKnowledgeStoreOptions {
+  allowUnfilteredSearch?: boolean;
   now?: () => Date;
 }
 
@@ -1350,6 +1351,7 @@ interface PostgresKnowledgeSourceRow {
 
 const DEFAULT_POSTGRES_SEARCH_CONFIG = 'english';
 const DEFAULT_POSTGRES_SCHEMA = 'public';
+const MAX_PGVECTOR_DIMENSIONS = 16_000;
 const DEFAULT_POSTGRES_TABLE_NAMES = {
   chunks: 'knowledge_chunks',
   profiles: 'embedding_profiles',
@@ -1366,6 +1368,7 @@ export function createPostgresKnowledgeStore(
 export function createPgvectorHnswIndexSql(
   options: PgvectorHnswIndexOptions,
 ): string {
+  const dimensions = assertPgvectorDimensions(options.dimensions);
   const schemaName = options.schemaName ?? DEFAULT_POSTGRES_SCHEMA;
   const chunksTableName = options.chunksTableName ?? DEFAULT_POSTGRES_TABLE_NAMES.chunks;
   const distanceMetric = options.distanceMetric ?? 'cosine';
@@ -1378,7 +1381,7 @@ export function createPgvectorHnswIndexSql(
 
   return `CREATE INDEX IF NOT EXISTS ${quoteIdentifier(indexName)}
 ON ${quoteIdentifier(schemaName)}.${quoteIdentifier(chunksTableName)}
-USING hnsw ((embedding::vector(${options.dimensions})) ${opClass})
+USING hnsw ((embedding::vector(${dimensions})) ${opClass})
 WHERE embedding_profile_id = ${quoteLiteral(options.embeddingProfileId)} AND embedding IS NOT NULL;`;
 }
 
@@ -1389,6 +1392,7 @@ export function createInMemoryKnowledgeStore(
 }
 
 export class InMemoryKnowledgeStore implements KnowledgeStore {
+  private readonly allowUnfilteredSearch: boolean;
   private readonly chunks = new Map<string, KnowledgeChunkRecord>();
   private readonly now: () => Date;
   private readonly profiles = new Map<string, EmbeddingProfileRecord>();
@@ -1396,11 +1400,13 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
   private readonly spaces = new Map<string, KnowledgeSpaceRecord>();
 
   constructor(options: InMemoryKnowledgeStoreOptions = {}) {
+    this.allowUnfilteredSearch = options.allowUnfilteredSearch ?? false;
     this.now = options.now ?? (() => new Date());
   }
 
   async searchByEmbedding(options: DenseKnowledgeSearchOptions): Promise<RetrievalResult[]> {
     assertQueryEmbedding(options.queryEmbedding);
+    this.assertAllowedFilter(options.filter, 'searchByEmbedding');
 
     const matches = Array.from(this.chunks.values())
       .flatMap((chunk) => {
@@ -1436,6 +1442,7 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
     if (query.length === 0) {
       return [];
     }
+    this.assertAllowedFilter(options.filter, 'searchByText');
 
     const matches = Array.from(this.chunks.values())
       .flatMap((chunk) => {
@@ -1464,6 +1471,17 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
       .slice(0, Math.max(options.limit, 1));
 
     return matches;
+  }
+
+  private assertAllowedFilter(
+    filter: RetrievalFilter | undefined,
+    operation: 'searchByEmbedding' | 'searchByText',
+  ): void {
+    if (!filter && !this.allowUnfilteredSearch) {
+      throw new LLMError(
+        `InMemoryKnowledgeStore.${operation} requires a retrieval filter unless allowUnfilteredSearch is enabled.`,
+      );
+    }
   }
 
   async activateEmbeddingProfile(
@@ -2632,6 +2650,22 @@ function assertQueryEmbedding(queryEmbedding: number[]): void {
       throw new LLMError('Embedding vectors must contain only finite numeric values.');
     }
   }
+}
+
+function assertPgvectorDimensions(value: unknown): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > MAX_PGVECTOR_DIMENSIONS
+  ) {
+    throw new LLMError(
+      `pgvector dimensions must be an integer between 1 and ${MAX_PGVECTOR_DIMENSIONS}.`,
+    );
+  }
+
+  return value;
 }
 
 function assertRequiredRetrievalFilter(

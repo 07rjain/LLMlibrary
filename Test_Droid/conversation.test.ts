@@ -129,7 +129,13 @@ describe('Conversation - Core Functionality', () => {
           description: 'A test tool',
           execute: toolExecutor,
           name: 'test_tool',
-          parameters: { type: 'object', properties: {} },
+          parameters: {
+            properties: {
+              input: { type: 'string' },
+            },
+            required: ['input'],
+            type: 'object',
+          },
         },
       ];
 

@@ -264,12 +264,14 @@ export type KnowledgeSourceListOptions = PostgresKnowledgeSourceListOptions;
 export type MarkKnowledgeSourcesNeedingReindexOptions = PostgresMarkKnowledgeSourcesNeedingReindexOptions;
 export type KnowledgeChunkRecord = PostgresKnowledgeChunkRecord;
 export interface InMemoryKnowledgeStoreOptions {
+    allowUnfilteredSearch?: boolean;
     now?: () => Date;
 }
 export declare function createPostgresKnowledgeStore(options?: PostgresKnowledgeStoreOptions): PostgresKnowledgeStore;
 export declare function createPgvectorHnswIndexSql(options: PgvectorHnswIndexOptions): string;
 export declare function createInMemoryKnowledgeStore(options?: InMemoryKnowledgeStoreOptions): InMemoryKnowledgeStore;
 export declare class InMemoryKnowledgeStore implements KnowledgeStore {
+    private readonly allowUnfilteredSearch;
     private readonly chunks;
     private readonly now;
     private readonly profiles;
@@ -278,6 +280,7 @@ export declare class InMemoryKnowledgeStore implements KnowledgeStore {
     constructor(options?: InMemoryKnowledgeStoreOptions);
     searchByEmbedding(options: DenseKnowledgeSearchOptions): Promise<RetrievalResult[]>;
     searchByText(options: LexicalKnowledgeSearchOptions): Promise<RetrievalResult[]>;
+    private assertAllowedFilter;
     activateEmbeddingProfile(options: ActivateEmbeddingProfileOptions): Promise<void>;
     clear(): Promise<void>;
     deleteKnowledgeSource(sourceId: string): Promise<void>;

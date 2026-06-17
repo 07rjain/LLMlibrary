@@ -149,7 +149,9 @@ Useful conversation options:
 - `maxToolRounds`
   Guard against runaway tool loops
 - `toolExecutionTimeoutMs`
-  Per-tool timeout for `execute()`
+  Per-tool timeout for `execute()`. The callback receives `context.signal`; long-running tools should pass it to fetch, database, or queue clients and stop when it aborts.
+- `toolValidation`
+  Defaults to `strict`, which validates model-provided tool arguments against `parameters` before `execute()` runs. Use `permissive` only for legacy callbacks that validate arguments themselves.
 
 Force a specific tool:
 

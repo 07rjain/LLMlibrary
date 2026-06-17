@@ -3,6 +3,7 @@ import { buildAbortError, createCancelableStream, throwIfAborted, } from './stre
 import { formatCost } from './utils/cost.js';
 const DEFAULT_MAX_TOOL_ROUNDS = 5;
 const DEFAULT_TOOL_EXECUTION_TIMEOUT_MS = 30_000;
+const DEFAULT_TOOL_VALIDATION = 'strict';
 /**
  * Stateful conversation wrapper that handles history, tool execution,
  * persistence, and running token/cost totals.
@@ -35,6 +36,7 @@ export class Conversation {
     system;
     tenantId;
     toolExecutionTimeoutMs;
+    toolValidation;
     toolChoice;
     tools;
     onWarning;
@@ -62,6 +64,7 @@ export class Conversation {
         this.tenantId = options.tenantId;
         this.toolExecutionTimeoutMs =
             options.toolExecutionTimeoutMs ?? DEFAULT_TOOL_EXECUTION_TIMEOUT_MS;
+        this.toolValidation = options.toolValidation ?? DEFAULT_TOOL_VALIDATION;
         this.toolChoice = options.toolChoice;
         this.tools = options.tools ? cloneTools(options.tools) : undefined;
         this.onWarning = options.onWarning ?? ((message) => console.warn(message));
@@ -126,6 +129,9 @@ export class Conversation {
             ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
             ...(this.toolExecutionTimeoutMs !== DEFAULT_TOOL_EXECUTION_TIMEOUT_MS
                 ? { toolExecutionTimeoutMs: this.toolExecutionTimeoutMs }
+                : {}),
+            ...(this.toolValidation !== DEFAULT_TOOL_VALIDATION
+                ? { toolValidation: this.toolValidation }
                 : {}),
             ...(this.toolChoice !== undefined ? { toolChoice: cloneValue(this.toolChoice) } : {}),
             ...(this.tools !== undefined ? { tools: cloneValue(this.tools) } : {}),
@@ -199,6 +205,11 @@ export class Conversation {
                 ? { toolExecutionTimeoutMs: options.toolExecutionTimeoutMs }
                 : snapshot.toolExecutionTimeoutMs !== undefined
                     ? { toolExecutionTimeoutMs: snapshot.toolExecutionTimeoutMs }
+                    : {}),
+            ...(options.toolValidation !== undefined
+                ? { toolValidation: options.toolValidation }
+                : snapshot.toolValidation !== undefined
+                    ? { toolValidation: snapshot.toolValidation }
                     : {}),
             ...(snapshot.toolChoice !== undefined ? { toolChoice: snapshot.toolChoice } : {}),
             ...(options.tools !== undefined
@@ -403,9 +414,13 @@ export class Conversation {
         const execute = tool.execute;
         try {
             throwIfAborted(signal);
-            const result = await executeToolWithGuards(() => Promise.resolve(execute(toolCall.args, {
+            if (this.toolValidation === 'strict') {
+                validateToolArguments(toolCall.args, tool.parameters);
+            }
+            const result = await executeToolWithGuards((toolSignal) => Promise.resolve(execute(toolCall.args, {
                 ...(model !== undefined ? { model } : {}),
                 ...(provider !== undefined ? { provider } : {}),
+                signal: toolSignal,
                 sessionId: this.sessionId,
                 ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
             })), this.toolExecutionTimeoutMs, signal);
@@ -728,21 +743,27 @@ function normalizeToolResult(result) {
     return cloneValue(result ?? null);
 }
 async function executeToolWithGuards(execute, timeoutMs, signal) {
+    const controller = new AbortController();
     let timeoutId;
     let removeAbortListener;
-    const guardedPromises = [Promise.resolve().then(execute)];
+    const guardedPromises = [
+        Promise.resolve().then(() => execute(controller.signal)),
+    ];
     guardedPromises.push(new Promise((_, reject) => {
         timeoutId = setTimeout(() => {
+            controller.abort(new Error(`Tool execution timed out after ${timeoutMs}ms.`));
             reject(new Error(`Tool execution timed out after ${timeoutMs}ms.`));
         }, timeoutMs);
     }));
     if (signal) {
         guardedPromises.push(new Promise((_, reject) => {
             if (signal.aborted) {
+                controller.abort(signal.reason);
                 reject(buildAbortError(signal.reason));
                 return;
             }
             const onAbort = () => {
+                controller.abort(signal.reason);
                 reject(buildAbortError(signal.reason));
             };
             signal.addEventListener('abort', onAbort, { once: true });
@@ -760,4 +781,74 @@ async function executeToolWithGuards(execute, timeoutMs, signal) {
         }
         removeAbortListener?.();
     }
+}
+function validateToolArguments(args, schema) {
+    validateToolSchemaValue(args, schema, 'arguments');
+}
+function validateToolSchemaValue(value, schema, path) {
+    if (schema.enum && !schema.enum.some((item) => jsonPrimitiveEquals(item, value))) {
+        throw new Error(`${path} must be one of the allowed enum values.`);
+    }
+    switch (schema.type) {
+        case 'array':
+            if (!Array.isArray(value)) {
+                throw new Error(`${path} must be an array.`);
+            }
+            if (schema.items) {
+                value.forEach((item, index) => {
+                    validateToolSchemaValue(item, schema.items, `${path}[${index}]`);
+                });
+            }
+            return;
+        case 'boolean':
+            if (typeof value !== 'boolean') {
+                throw new Error(`${path} must be a boolean.`);
+            }
+            return;
+        case 'integer':
+            if (typeof value !== 'number' || !Number.isInteger(value)) {
+                throw new Error(`${path} must be an integer.`);
+            }
+            return;
+        case 'number':
+            if (typeof value !== 'number' || !Number.isFinite(value)) {
+                throw new Error(`${path} must be a number.`);
+            }
+            return;
+        case 'object':
+            validateToolObjectValue(value, schema, path);
+            return;
+        case 'string':
+            if (typeof value !== 'string') {
+                throw new Error(`${path} must be a string.`);
+            }
+            return;
+    }
+}
+function validateToolObjectValue(value, schema, path) {
+    if (!isPlainJsonObject(value)) {
+        throw new Error(`${path} must be an object.`);
+    }
+    for (const key of schema.required ?? []) {
+        if (!(key in value)) {
+            throw new Error(`${path}.${key} is required.`);
+        }
+    }
+    const properties = schema.properties ?? {};
+    for (const [key, item] of Object.entries(value)) {
+        const propertySchema = properties[key];
+        if (!propertySchema) {
+            if (schema.additionalProperties === true) {
+                continue;
+            }
+            throw new Error(`${path}.${key} is not allowed.`);
+        }
+        validateToolSchemaValue(item, propertySchema, `${path}.${key}`);
+    }
+}
+function jsonPrimitiveEquals(expected, actual) {
+    return (actual === null ||
+        typeof actual === 'boolean' ||
+        typeof actual === 'number' ||
+        typeof actual === 'string') && Object.is(expected, actual);
 }

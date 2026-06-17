@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SlidingWindowStrategy } from '../src/context-manager.js';
-import { ProviderCapabilityError } from '../src/errors.js';
+import { LLMError, ProviderCapabilityError } from '../src/errors.js';
 import { createSessionApi } from '../src/session-api.js';
 import { InMemorySessionStore } from '../src/session-store.js';
 import { LLMClient } from '../src/client.js';
@@ -209,16 +209,161 @@ describe('SessionApi', () => {
             sessionStore: store,
             withRequestContext,
         });
-        const response = await api.handle(jsonRequest('https://example.test/sessions', 'POST', {
+        const spoofedResponse = await api.handle(jsonRequest('https://example.test/sessions', 'POST', {
             sessionId: 'tenant-session',
             tenantId: 'spoofed',
         }, {
             'x-tenant-id': 'tenant-a',
         }));
+        const response = await api.handle(jsonRequest('https://example.test/sessions', 'POST', {
+            sessionId: 'tenant-session',
+        }, {
+            'x-tenant-id': 'tenant-a',
+        }));
+        expect(spoofedResponse.status).toBe(400);
         expect(response.status).toBe(201);
         expect(withRequestContextSpy).toHaveBeenCalled();
         await expect(store.get('tenant-session', 'tenant-a')).resolves.not.toBeNull();
         await expect(store.get('tenant-session', 'spoofed')).resolves.toBeNull();
+    });
+    it('rejects request-supplied tenant ids on every tenant-aware route by default', async () => {
+        const store = new InMemorySessionStore();
+        const client = LLMClient.mock({
+            defaultModel: 'mock-model',
+            defaultProvider: 'mock',
+            responses: [mockResponse('reply', 0.01)],
+            sessionStore: store,
+        });
+        const api = createSessionApi({
+            client,
+            middleware: [
+                async () => ({
+                    tenantId: 'tenant-a',
+                }),
+            ],
+            sessionStore: store,
+        });
+        const createResponse = await api.handle(jsonRequest('https://example.test/sessions', 'POST', {
+            sessionId: 'tenant-routes',
+        }));
+        expect(createResponse.status).toBe(201);
+        const responses = await Promise.all([
+            api.handle(jsonRequest('https://example.test/sessions', 'POST', {
+                sessionId: 'spoofed-create',
+                tenantId: 'tenant-b',
+            })),
+            api.handle(jsonRequest('https://example.test/sessions/tenant-routes/message', 'POST', {
+                content: 'hello',
+                tenantId: 'tenant-b',
+            })),
+            api.handle(new Request('https://example.test/sessions/tenant-routes?tenantId=tenant-b')),
+            api.handle(new Request('https://example.test/sessions/tenant-routes/messages?tenantId=tenant-b')),
+            api.handle(new Request('https://example.test/sessions/tenant-routes?tenantId=tenant-b', {
+                method: 'DELETE',
+            })),
+            api.handle(jsonRequest('https://example.test/sessions/tenant-routes/compact', 'POST', {
+                maxMessages: 1,
+                tenantId: 'tenant-b',
+            })),
+            api.handle(jsonRequest('https://example.test/sessions/tenant-routes/fork', 'POST', {
+                fromMessageIndex: 0,
+                tenantId: 'tenant-b',
+            })),
+            api.handle(new Request('https://example.test/sessions?tenantId=tenant-b')),
+        ]);
+        expect(responses.map((response) => response.status)).toEqual([
+            400, 400, 400, 400, 400, 400, 400, 400,
+        ]);
+    });
+    it('allows request-supplied tenant ids only in explicit legacy mode', async () => {
+        const store = new InMemorySessionStore();
+        const client = LLMClient.mock({
+            defaultModel: 'mock-model',
+            defaultProvider: 'mock',
+            sessionStore: store,
+        });
+        const api = createSessionApi({
+            client,
+            sessionStore: store,
+            tenantResolution: 'legacy-request-tenant',
+        });
+        const createResponse = await api.handle(jsonRequest('https://example.test/sessions', 'POST', {
+            messages: [{ content: 'legacy secret', role: 'user' }],
+            sessionId: 'legacy-session',
+            tenantId: 'tenant-a',
+        }));
+        const getResponse = await api.handle(new Request('https://example.test/sessions/legacy-session?tenantId=tenant-a'));
+        expect(createResponse.status).toBe(201);
+        expect(getResponse.status).toBe(200);
+    });
+    it('propagates toolValidation from session message config into conversations', async () => {
+        const store = new InMemorySessionStore();
+        const execute = vi.fn(async (args) => ({ observed: String(args.count) }));
+        const client = LLMClient.mock({
+            defaultModel: 'mock-model',
+            defaultProvider: 'mock',
+            responses: [
+                {
+                    content: [
+                        {
+                            args: { count: 'not-number', extra: 'allowed only in permissive mode' },
+                            id: 'tool_1',
+                            name: 'validated_tool',
+                            type: 'tool_call',
+                        },
+                    ],
+                    finishReason: 'tool_call',
+                    model: 'mock-model',
+                    provider: 'mock',
+                    raw: {},
+                    text: '',
+                    toolCalls: [
+                        {
+                            args: { count: 'not-number', extra: 'allowed only in permissive mode' },
+                            id: 'tool_1',
+                            name: 'validated_tool',
+                        },
+                    ],
+                    usage: {
+                        cachedTokens: 0,
+                        cost: '$0.00',
+                        costUSD: 0,
+                        inputTokens: 1,
+                        outputTokens: 1,
+                    },
+                },
+                mockResponse('done', 0.01),
+            ],
+            sessionStore: store,
+        });
+        const api = createSessionApi({
+            client,
+            sessionStore: store,
+            tools: [
+                {
+                    description: 'Validated tool',
+                    execute,
+                    name: 'validated_tool',
+                    parameters: {
+                        properties: {
+                            count: { type: 'number' },
+                        },
+                        type: 'object',
+                    },
+                },
+            ],
+        });
+        await api.handle(jsonRequest('https://example.test/sessions', 'POST', {
+            sessionId: 'tool-validation-session',
+        }));
+        const response = await api.handle(jsonRequest('https://example.test/sessions/tool-validation-session/message', 'POST', {
+            content: 'run',
+            toolValidation: 'permissive',
+        }));
+        expect(response.status).toBe(200);
+        expect(execute).toHaveBeenCalledWith({ count: 'not-number', extra: 'allowed only in permissive mode' }, expect.objectContaining({
+            signal: expect.any(AbortSignal),
+        }));
     });
     it('enforces cross-tenant isolation across get, message, and delete operations', async () => {
         const store = new InMemorySessionStore();
@@ -456,6 +601,46 @@ describe('SessionApi', () => {
         expect(unknownPayload.error.message).toBe('Unknown session API error.');
         expect(genericErrorResponse.status).toBe(500);
         expect(genericPayload.error.name).toBe('Error');
+        expect(genericPayload.error.message).toBe('Internal session API error.');
+    });
+    it('redacts LLM error messages and details from external responses', async () => {
+        const store = new InMemorySessionStore();
+        const client = LLMClient.mock({
+            defaultModel: 'mock-model',
+            defaultProvider: 'mock',
+            responses: [
+                async () => {
+                    throw new LLMError('Bearer sk-secret123456789 leaked', {
+                        details: {
+                            apiKey: 'sk-secret123456789',
+                            databaseUrl: 'postgres://user:pass@example.test/db',
+                            nested: {
+                                authorization: 'Bearer sk-secret123456789',
+                            },
+                        },
+                        provider: 'openai',
+                        statusCode: 500,
+                    });
+                },
+            ],
+            sessionStore: store,
+        });
+        const api = createSessionApi({
+            client,
+            sessionStore: store,
+        });
+        await api.handle(jsonRequest('https://example.test/sessions', 'POST', {
+            sessionId: 'error-session',
+        }));
+        const response = await api.handle(jsonRequest('https://example.test/sessions/error-session/message', 'POST', {
+            content: 'trigger',
+        }));
+        const body = await response.text();
+        expect(response.status).toBe(500);
+        expect(body).not.toContain('sk-secret123456789');
+        expect(body).not.toContain('postgres://user:pass');
+        expect(body).not.toContain('authorization');
+        expect(body).toContain('LLM provider request failed.');
     });
 });
 function jsonRequest(url, method, body, headers = {}) {

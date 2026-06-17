@@ -1,6 +1,7 @@
 import type { ContextManager } from './context-manager.js';
 import type { SessionStore } from './session-store.js';
 import type { BudgetExceededAction, CancelableStream, CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, ProviderOptions, StreamChunk } from './types.js';
+export type ToolValidationMode = 'permissive' | 'strict';
 /** Minimal client contract consumed by `Conversation`. */
 export interface ConversationClient {
     complete(options: {
@@ -49,6 +50,7 @@ export interface ConversationSnapshot {
     system?: string;
     tenantId?: string;
     toolExecutionTimeoutMs?: number;
+    toolValidation?: ToolValidationMode;
     toolChoice?: CanonicalToolChoice;
     tools?: CanonicalTool[];
     totalCachedTokens: number;
@@ -74,6 +76,7 @@ export interface ConversationOptions {
     system?: string;
     tenantId?: string;
     toolExecutionTimeoutMs?: number;
+    toolValidation?: ToolValidationMode;
     toolChoice?: CanonicalToolChoice;
     tools?: CanonicalTool[];
     onWarning?: (message: string) => void;
@@ -110,6 +113,7 @@ export declare class Conversation {
     private system;
     private readonly tenantId;
     private readonly toolExecutionTimeoutMs;
+    private readonly toolValidation;
     private readonly toolChoice;
     private readonly tools;
     private readonly onWarning;
