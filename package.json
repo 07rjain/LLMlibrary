@@ -20,6 +20,11 @@
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
+    "./agent-files": {
+      "types": "./dist/agent-files.d.ts",
+      "import": "./dist/agent-files.js",
+      "require": "./dist/agent-files.cjs"
+    },
     "./client": {
       "types": "./dist/client.d.ts",
       "import": "./dist/client.js",
