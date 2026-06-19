@@ -536,6 +536,35 @@ const geminiResponse = await client.complete({
 
 Gemini cache names are returned in the provider format `cachedContents/{id}` and can be passed back directly as `cachedContent`. Cache creation accepts the normal library model id such as `gemini-2.5-flash`; the Gemini adapter normalizes it to `models/{model}` for the cache API. Per-request generation cost includes cached-read discounts when `cachedContentTokenCount` is returned, but it does not include cache creation or persistence cost.
 
+## Agent Instructions And Skills
+
+Agent builders can load their own repo-local `AGENTS.md` files and selected skills through the Node-only `unified-llm-client/agent-files` entry point. This keeps filesystem access out of the edge-safe core export and leaves skill choice under application control.
+
+```ts
+import { LLMClient } from 'unified-llm-client';
+import {
+  composeAgentSystemPrompt,
+  discoverSkills,
+  loadAgentInstructions,
+  loadSkill,
+} from 'unified-llm-client/agent-files';
+
+const client = LLMClient.fromEnv({ defaultModel: 'gpt-4o' });
+const instructions = await loadAgentInstructions({ cwd: process.cwd() });
+const skills = await discoverSkills({ cwd: process.cwd() });
+const selected = skills.find((skill) => skill.name === 'release-npm');
+
+const conversation = await client.conversation({
+  system: composeAgentSystemPrompt({
+    baseSystem: 'You are a helpful coding agent.',
+    instructions,
+    skills: selected ? [await loadSkill(selected)] : [],
+  }),
+});
+```
+
+`loadAgentInstructions()` walks from the repository root to `cwd`, loading `AGENTS.override.md`, `AGENTS.md`, `agent.md`, or `Agent.md` in that order. Pass `filenames` when an application wants to restrict the accepted instruction filenames. `discoverSkills()` reads frontmatter from `.agents/skills/*/SKILL.md`; manifests preserve the raw `metadata` map and expose `disableModelInvocation` when `disable-model-invocation: true|false` is present. Full skill bodies are loaded only with `loadSkill()`. The library does not run skill scripts, load skill references, or implicitly select skills.
+
 ## Docs
 
 - Documentation website: `https://07rjain.github.io/LLMlibrary/`
