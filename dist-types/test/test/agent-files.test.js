@@ -145,6 +145,39 @@ describe('agent file helpers', () => {
             },
         });
     });
+    it('parses false and preserves invalid disable-model-invocation metadata values', async () => {
+        const falseSkillDir = join(workspace, '.agents', 'skills', 'model-enabled');
+        const invalidSkillDir = join(workspace, '.agents', 'skills', 'invalid-toggle');
+        await mkdir(falseSkillDir, { recursive: true });
+        await mkdir(invalidSkillDir, { recursive: true });
+        await writeFile(join(falseSkillDir, 'SKILL.md'), [
+            '---',
+            'name: model-enabled',
+            'description: Allows model invocation.',
+            'disable-model-invocation: false',
+            '---',
+            '',
+            'Use the model normally.',
+        ].join('\n'));
+        await writeFile(join(invalidSkillDir, 'SKILL.md'), [
+            '---',
+            'name: invalid-toggle',
+            'description: Has a malformed toggle.',
+            'disable-model-invocation: sometimes',
+            '---',
+            '',
+            'Preserve the raw metadata.',
+        ].join('\n'));
+        const skills = await discoverSkills({ cwd: workspace });
+        const invalid = skills.find((skill) => skill.name === 'invalid-toggle');
+        const modelEnabled = skills.find((skill) => skill.name === 'model-enabled');
+        expect(modelEnabled).toMatchObject({
+            disableModelInvocation: false,
+            metadata: { 'disable-model-invocation': 'false' },
+        });
+        expect(invalid?.metadata['disable-model-invocation']).toBe('sometimes');
+        expect(invalid).not.toHaveProperty('disableModelInvocation');
+    });
     it('rejects skills missing required frontmatter fields', async () => {
         const skillDir = join(workspace, '.agents', 'skills', 'broken');
         await mkdir(skillDir, { recursive: true });
