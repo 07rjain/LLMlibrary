@@ -9,6 +9,7 @@ export interface AgentInstructions {
 }
 export interface LoadAgentInstructionsOptions {
     cwd: string;
+    filenames?: readonly string[];
     maxBytes?: number;
     root?: string;
 }

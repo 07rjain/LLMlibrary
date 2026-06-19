@@ -2,7 +2,11 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { LLMClient } from '../src/client.js';
+import { InMemorySessionStore } from '../src/session-store.js';
 import { AgentFilesError, composeAgentSystemPrompt, discoverSkills, loadAgentInstructions, loadSkill, } from '../src/agent-files.js';
+import { loadEnv } from './prompt_caching_test_droid/helpers.js';
+loadEnv();
 describe('agent file helpers', () => {
     let workspace;
     beforeEach(async () => {
@@ -27,6 +31,26 @@ describe('agent file helpers', () => {
             join(serviceDir, 'AGENTS.md'),
         ]);
         expect(instructions.content).toBe('Use pnpm.\n\nOverride service instructions.\n\nAPI instructions.');
+    });
+    it('loads lowercase agent.md aliases for agent builders', async () => {
+        const agentDir = join(workspace, 'agents', 'support');
+        await mkdir(agentDir, { recursive: true });
+        await writeFile(join(workspace, 'AGENTS.md'), 'Root instructions.');
+        await writeFile(join(agentDir, 'agent.md'), 'Support agent instructions.');
+        const instructions = await loadAgentInstructions({ cwd: agentDir });
+        expect(instructions.files.map((file) => file.path)).toEqual([
+            join(workspace, 'AGENTS.md'),
+            join(agentDir, 'agent.md'),
+        ]);
+        expect(instructions.content).toBe('Root instructions.\n\nSupport agent instructions.');
+    });
+    it('lets callers restrict instruction filenames when they only want AGENTS.md', async () => {
+        await writeFile(join(workspace, 'agent.md'), 'Ignored alias.');
+        const instructions = await loadAgentInstructions({
+            cwd: workspace,
+            filenames: ['AGENTS.override.md', 'AGENTS.md'],
+        });
+        expect(instructions.files).toEqual([]);
     });
     it('returns empty instructions when no AGENTS files exist', async () => {
         const instructions = await loadAgentInstructions({ cwd: workspace });
@@ -128,6 +152,106 @@ describe('agent file helpers', () => {
             skills: [skill],
         })).toContain('# Selected Skills');
     });
+    it('builds a scratch agent from system prompt, agent.md, and selected skills', async () => {
+        const agentDir = join(workspace, 'agents', 'triage');
+        const rootSkillDir = join(workspace, '.agents', 'skills', 'shared-rules');
+        const agentSkillDir = join(agentDir, '.agents', 'skills', 'triage-ticket');
+        await mkdir(rootSkillDir, { recursive: true });
+        await mkdir(agentSkillDir, { recursive: true });
+        await mkdir(agentDir, { recursive: true });
+        await writeFile(join(agentDir, 'agent.md'), 'Always include the marker AGENT_RULE_APPLIED in replies.');
+        await writeSkill(rootSkillDir, 'shared-rules', 'Shared response rules.', 'Mention SHARED_SKILL_APPLIED when this skill is selected.');
+        await writeSkill(agentSkillDir, 'triage-ticket', 'Triage support tickets.', 'Mention TRIAGE_SKILL_APPLIED and classify the ticket.');
+        const instructions = await loadAgentInstructions({ cwd: agentDir });
+        const skills = await discoverSkills({ cwd: agentDir });
+        const selectedSkills = await Promise.all(skills.map((skill) => loadSkill(skill)));
+        const system = composeAgentSystemPrompt({
+            baseSystem: 'You are a scratch-built support agent.',
+            instructions,
+            skills: selectedSkills,
+        });
+        const client = LLMClient.mock({
+            defaultModel: 'mock-model',
+            defaultProvider: 'mock',
+            responses: [
+                (request) => ({
+                    content: [{ text: request.system ?? '', type: 'text' }],
+                    finishReason: 'stop',
+                    model: request.model ?? 'mock-model',
+                    provider: 'mock',
+                    raw: {},
+                    text: request.system ?? '',
+                    toolCalls: [],
+                    usage: {
+                        cachedTokens: 0,
+                        cost: '$0.00',
+                        costUSD: 0,
+                        inputTokens: 1,
+                        outputTokens: 1,
+                    },
+                }),
+            ],
+            sessionStore: new InMemorySessionStore(),
+        });
+        const conversation = await client.conversation({
+            sessionId: 'scratch-agent',
+            system,
+        });
+        const response = await conversation.send('Triage this billing ticket.');
+        expect(skills.map((skill) => skill.name)).toEqual([
+            'shared-rules',
+            'triage-ticket',
+        ]);
+        expect(response.text).toContain('You are a scratch-built support agent.');
+        expect(response.text).toContain('AGENT_RULE_APPLIED');
+        expect(response.text).toContain('SHARED_SKILL_APPLIED');
+        expect(response.text).toContain('TRIAGE_SKILL_APPLIED');
+        expect(conversation.toMessages()[0]).toMatchObject({
+            content: system,
+            pinned: true,
+            role: 'system',
+        });
+    });
+});
+const runLiveAgentSmoke = process.env.LIVE_TESTS === '1' && process.env.OPENAI_API_KEY ? it : it.skip;
+describe('agent file helpers live smoke', () => {
+    let workspace;
+    beforeEach(async () => {
+        workspace = await mkdtemp(join(tmpdir(), 'agent-files-live-'));
+        await mkdir(join(workspace, '.git'));
+    });
+    afterEach(async () => {
+        await rm(workspace, { force: true, recursive: true });
+    });
+    runLiveAgentSmoke('runs a real scratch agent prompt through OpenAI', async () => {
+        const agentDir = join(workspace, 'agents', 'live');
+        const skillDir = join(agentDir, '.agents', 'skills', 'live-marker');
+        await mkdir(skillDir, { recursive: true });
+        await writeFile(join(agentDir, 'agent.md'), 'Reply with the exact marker AGENT_FILE_LIVE_OK when asked for the marker.');
+        await writeSkill(skillDir, 'live-marker', 'Live marker response skill.', 'When selected, include SKILL_FILE_LIVE_OK.');
+        const instructions = await loadAgentInstructions({ cwd: agentDir });
+        const [manifest] = await discoverSkills({ cwd: agentDir });
+        const skill = await loadSkill(manifest);
+        const client = LLMClient.fromEnv({
+            defaultModel: 'gpt-4o-mini',
+            sessionStore: new InMemorySessionStore(),
+        });
+        const conversation = await client.conversation({
+            model: 'gpt-4o-mini',
+            provider: 'openai',
+            system: composeAgentSystemPrompt({
+                baseSystem: 'You are a deterministic test agent. Return only requested markers.',
+                instructions,
+                skills: [skill],
+            }),
+        });
+        const response = await conversation.send('Return AGENT_FILE_LIVE_OK and SKILL_FILE_LIVE_OK, separated by one space.');
+        expect(response.provider).toBe('openai');
+        expect(response.text).toContain('AGENT_FILE_LIVE_OK');
+        expect(response.text).toContain('SKILL_FILE_LIVE_OK');
+        expect(response.usage.inputTokens).toBeGreaterThan(0);
+        expect(response.usage.outputTokens).toBeGreaterThan(0);
+    }, 30_000);
 });
 async function writeSkill(directory, name, description, body = 'Follow the workflow.') {
     await writeFile(join(directory, 'SKILL.md'), ['---', `name: ${name}`, `description: ${description}`, '---', '', body].join('\n'));

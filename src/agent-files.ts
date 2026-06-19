@@ -3,7 +3,12 @@ import { dirname, relative, resolve } from 'node:path';
 
 const DEFAULT_INSTRUCTION_MAX_BYTES = 32_768;
 const DEFAULT_SKILL_MAX_BYTES = 65_536;
-const INSTRUCTION_FILENAMES = ['AGENTS.override.md', 'AGENTS.md'] as const;
+const DEFAULT_INSTRUCTION_FILENAMES = [
+  'AGENTS.override.md',
+  'AGENTS.md',
+  'agent.md',
+  'Agent.md',
+] as const;
 
 export interface AgentInstructionFile {
   content: string;
@@ -18,6 +23,7 @@ export interface AgentInstructions {
 
 export interface LoadAgentInstructionsOptions {
   cwd: string;
+  filenames?: readonly string[];
   maxBytes?: number;
   root?: string;
 }
@@ -64,11 +70,12 @@ export async function loadAgentInstructions(
   assertWithinRoot(cwd, root);
 
   const maxBytes = options.maxBytes ?? DEFAULT_INSTRUCTION_MAX_BYTES;
+  const filenames = options.filenames ?? DEFAULT_INSTRUCTION_FILENAMES;
   const files: AgentInstructionFile[] = [];
   let totalBytes = 0;
 
   for (const directory of directoriesFromRoot(root, cwd)) {
-    const file = await findInstructionFile(directory);
+    const file = await findInstructionFile(directory, filenames);
     if (!file) {
       continue;
     }
@@ -220,8 +227,11 @@ function directoriesFromRoot(root: string, cwd: string): string[] {
   return directories;
 }
 
-async function findInstructionFile(directory: string): Promise<string | undefined> {
-  for (const filename of INSTRUCTION_FILENAMES) {
+async function findInstructionFile(
+  directory: string,
+  filenames: readonly string[],
+): Promise<string | undefined> {
+  for (const filename of filenames) {
     const path = resolve(directory, filename);
     if (await isRegularFile(path)) {
       return path;

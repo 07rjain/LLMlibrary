@@ -2,7 +2,12 @@ import { lstat, readdir, readFile } from 'node:fs/promises';
 import { dirname, relative, resolve } from 'node:path';
 const DEFAULT_INSTRUCTION_MAX_BYTES = 32_768;
 const DEFAULT_SKILL_MAX_BYTES = 65_536;
-const INSTRUCTION_FILENAMES = ['AGENTS.override.md', 'AGENTS.md'];
+const DEFAULT_INSTRUCTION_FILENAMES = [
+    'AGENTS.override.md',
+    'AGENTS.md',
+    'agent.md',
+    'Agent.md',
+];
 export class AgentFilesError extends Error {
     constructor(message) {
         super(message);
@@ -14,10 +19,11 @@ export async function loadAgentInstructions(options) {
     const cwd = resolve(options.cwd);
     assertWithinRoot(cwd, root);
     const maxBytes = options.maxBytes ?? DEFAULT_INSTRUCTION_MAX_BYTES;
+    const filenames = options.filenames ?? DEFAULT_INSTRUCTION_FILENAMES;
     const files = [];
     let totalBytes = 0;
     for (const directory of directoriesFromRoot(root, cwd)) {
-        const file = await findInstructionFile(directory);
+        const file = await findInstructionFile(directory, filenames);
         if (!file) {
             continue;
         }
@@ -130,8 +136,8 @@ function directoriesFromRoot(root, cwd) {
     }
     return directories;
 }
-async function findInstructionFile(directory) {
-    for (const filename of INSTRUCTION_FILENAMES) {
+async function findInstructionFile(directory, filenames) {
+    for (const filename of filenames) {
         const path = resolve(directory, filename);
         if (await isRegularFile(path)) {
             return path;

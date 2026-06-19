@@ -563,7 +563,7 @@ const conversation = await client.conversation({
 });
 ```
 
-`loadAgentInstructions()` walks from the repository root to `cwd`, loading `AGENTS.override.md` when present or `AGENTS.md` otherwise. `discoverSkills()` reads only metadata from `.agents/skills/*/SKILL.md`; full skill bodies are loaded only with `loadSkill()`. The library does not run skill scripts, load skill references, or implicitly select skills.
+`loadAgentInstructions()` walks from the repository root to `cwd`, loading `AGENTS.override.md`, `AGENTS.md`, `agent.md`, or `Agent.md` in that order. Pass `filenames` when an application wants to restrict the accepted instruction filenames. `discoverSkills()` reads only metadata from `.agents/skills/*/SKILL.md`; full skill bodies are loaded only with `loadSkill()`. The library does not run skill scripts, load skill references, or implicitly select skills.
 
 ## Docs
 
