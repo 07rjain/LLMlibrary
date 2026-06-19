@@ -7,11 +7,12 @@ If you are opening the repository for the first time, read the pages below in or
 1. [Getting Started](./GETTING_STARTED.md)
 2. [Completions And Streaming](./COMPLETIONS_AND_STREAMING.md)
 3. [Conversations And Tools](./CONVERSATIONS_AND_TOOLS.md)
-4. [Persistence And Session API](./PERSISTENCE_AND_SESSION_API.md)
-5. [Speech](./SPEECH.md)
-6. [Session API Reference](./SESSION_API_REFERENCE.md)
-7. [Production Setup](./PRODUCTION_SETUP.md)
-8. [Production Guide](./PRODUCTION_GUIDE.md)
+4. [Agent Instructions And Skills](./AGENT_INSTRUCTIONS_AND_SKILLS.md)
+5. [Persistence And Session API](./PERSISTENCE_AND_SESSION_API.md)
+6. [Speech](./SPEECH.md)
+7. [Session API Reference](./SESSION_API_REFERENCE.md)
+8. [Production Setup](./PRODUCTION_SETUP.md)
+9. [Production Guide](./PRODUCTION_GUIDE.md)
 
 ## What This Library Gives You
 
@@ -29,6 +30,7 @@ If you are opening the repository for the first time, read the pages below in or
 - OpenAI batch speech support through `client.speak()` and `client.transcribe()`
 - Optional retrieval helpers through `unified-llm-client/retrieval`
 - Reusable chunking helpers through `unified-llm-client/chunking`
+- Node-only agent instruction and skill loading through `unified-llm-client/agent-files`
 
 ## Which Page To Read For Which Task
 
@@ -38,6 +40,8 @@ If you are opening the repository for the first time, read the pages below in or
   Read [Completions And Streaming](./COMPLETIONS_AND_STREAMING.md)
 - "I need tool calls or persistent conversation state"
   Read [Conversations And Tools](./CONVERSATIONS_AND_TOOLS.md)
+- "I need users to add `agent.md` files or skills to their agents"
+  Read [Agent Instructions And Skills](./AGENT_INSTRUCTIONS_AND_SKILLS.md)
 - "I need saved history or HTTP endpoints"
   Read [Persistence And Session API](./PERSISTENCE_AND_SESSION_API.md)
 - "I need routing, budgets, testing, or rollout guidance"
@@ -61,6 +65,7 @@ If you are opening the repository for the first time, read the pages below in or
 - Cost policy and pricing notes: [COST_AND_PRICING.md](./COST_AND_PRICING.md)
 - Production setup guide: [PRODUCTION_SETUP.md](./PRODUCTION_SETUP.md)
 - Speech guide: [SPEECH.md](./SPEECH.md)
+- Agent instructions and skills guide: [AGENT_INSTRUCTIONS_AND_SKILLS.md](./AGENT_INSTRUCTIONS_AND_SKILLS.md)
 - Speech API research report: [SPEECH_API_RESEARCH_REPORT.md](./SPEECH_API_RESEARCH_REPORT.md)
 
 ## Current Provider Notes

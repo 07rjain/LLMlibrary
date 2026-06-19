@@ -563,7 +563,9 @@ const conversation = await client.conversation({
 });
 ```
 
-`loadAgentInstructions()` walks from the repository root to `cwd`, loading `AGENTS.override.md`, `AGENTS.md`, `agent.md`, or `Agent.md` in that order. Pass `filenames` when an application wants to restrict the accepted instruction filenames. `discoverSkills()` reads frontmatter from `.agents/skills/*/SKILL.md`; manifests preserve the raw `metadata` map and expose `disableModelInvocation` when `disable-model-invocation: true|false` is present. Full skill bodies are loaded only with `loadSkill()`. The library does not run skill scripts, load skill references, or implicitly select skills.
+`loadAgentInstructions()` walks from the repository root to `cwd`, loading `AGENTS.override.md`, `AGENTS.md`, `agent.md`, or `Agent.md` in that order. Pass `filenames` when an application wants to restrict the accepted instruction filenames. `discoverSkills()` reads frontmatter from `.agents/skills/*/SKILL.md`; manifests preserve the raw `metadata` map and expose `disableModelInvocation` when `disable-model-invocation: true|false` is present. Full skill bodies are loaded only with `loadSkill()`. The library does not run skill scripts, load skill references, call a model while discovering skills, or implicitly select skills.
+
+For file layout, `agent.md` examples, skill frontmatter, explicit skill selection, and isolation with `root`, see [docs/AGENT_INSTRUCTIONS_AND_SKILLS.md](docs/AGENT_INSTRUCTIONS_AND_SKILLS.md).
 
 ## Docs
 
@@ -572,6 +574,7 @@ const conversation = await client.conversation({
 - Getting started: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
 - Completions and streaming: [docs/COMPLETIONS_AND_STREAMING.md](docs/COMPLETIONS_AND_STREAMING.md)
 - Conversations and tools: [docs/CONVERSATIONS_AND_TOOLS.md](docs/CONVERSATIONS_AND_TOOLS.md)
+- Agent instructions and skills: [docs/AGENT_INSTRUCTIONS_AND_SKILLS.md](docs/AGENT_INSTRUCTIONS_AND_SKILLS.md)
 - Persistence and Session API: [docs/PERSISTENCE_AND_SESSION_API.md](docs/PERSISTENCE_AND_SESSION_API.md)
 - Production guide: [docs/PRODUCTION_GUIDE.md](docs/PRODUCTION_GUIDE.md)
 - Docs local dev server: `pnpm docs:dev`
