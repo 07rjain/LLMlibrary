@@ -15,7 +15,9 @@ export interface LoadAgentInstructionsOptions {
 }
 export interface AgentSkillManifest {
     description: string;
+    disableModelInvocation?: boolean;
     directory: string;
+    metadata: Record<string, string>;
     name: string;
     path: string;
 }

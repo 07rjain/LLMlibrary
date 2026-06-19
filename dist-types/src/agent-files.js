@@ -52,12 +52,17 @@ export async function discoverSkills(options) {
             const skillPath = resolve(skillDirectory, 'SKILL.md');
             const content = await readUtf8FileWithLimit(skillPath, maxBytes);
             const parsed = parseSkillMarkdown(content, skillPath);
-            manifests.push({
+            const manifest = {
                 description: parsed.description,
                 directory: skillDirectory,
+                metadata: parsed.metadata,
                 name: parsed.name,
                 path: skillPath,
-            });
+            };
+            if (parsed.disableModelInvocation !== undefined) {
+                manifest.disableModelInvocation = parsed.disableModelInvocation;
+            }
+            manifests.push(manifest);
         }
     }
     return manifests;
@@ -66,13 +71,18 @@ export async function loadSkill(skillOrPath, options = {}) {
     const skillPath = typeof skillOrPath === 'string' ? resolve(skillOrPath) : skillOrPath.path;
     const content = await readUtf8FileWithLimit(skillPath, options.maxBytes ?? DEFAULT_SKILL_MAX_BYTES);
     const parsed = parseSkillMarkdown(content, skillPath);
-    return {
+    const skill = {
         body: parsed.body,
         description: parsed.description,
         directory: dirname(skillPath),
+        metadata: parsed.metadata,
         name: parsed.name,
         path: skillPath,
     };
+    if (parsed.disableModelInvocation !== undefined) {
+        skill.disableModelInvocation = parsed.disableModelInvocation;
+    }
+    return skill;
 }
 export function composeAgentSystemPrompt(options) {
     const sections = [];
@@ -199,11 +209,29 @@ function parseSkillMarkdown(content, path) {
     if (!description) {
         throw new AgentFilesError(`Skill "${path}" is missing required frontmatter field "description".`);
     }
-    return {
+    const parsedSkill = {
         body,
         description,
+        metadata: Object.fromEntries(fields),
         name,
     };
+    const disableModelInvocation = parseOptionalBoolean(fields.get('disable-model-invocation'));
+    if (disableModelInvocation !== undefined) {
+        parsedSkill.disableModelInvocation = disableModelInvocation;
+    }
+    return parsedSkill;
+}
+function parseOptionalBoolean(value) {
+    if (value === undefined) {
+        return undefined;
+    }
+    if (/^true$/i.test(value)) {
+        return true;
+    }
+    if (/^false$/i.test(value)) {
+        return false;
+    }
+    return undefined;
 }
 function parseSimpleFrontmatter(frontmatter) {
     const fields = new Map();

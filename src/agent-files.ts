@@ -30,7 +30,9 @@ export interface LoadAgentInstructionsOptions {
 
 export interface AgentSkillManifest {
   description: string;
+  disableModelInvocation?: boolean;
   directory: string;
+  metadata: Record<string, string>;
   name: string;
   path: string;
 }
@@ -113,12 +115,17 @@ export async function discoverSkills(
       const skillPath = resolve(skillDirectory, 'SKILL.md');
       const content = await readUtf8FileWithLimit(skillPath, maxBytes);
       const parsed = parseSkillMarkdown(content, skillPath);
-      manifests.push({
+      const manifest: AgentSkillManifest = {
         description: parsed.description,
         directory: skillDirectory,
+        metadata: parsed.metadata,
         name: parsed.name,
         path: skillPath,
-      });
+      };
+      if (parsed.disableModelInvocation !== undefined) {
+        manifest.disableModelInvocation = parsed.disableModelInvocation;
+      }
+      manifests.push(manifest);
     }
   }
 
@@ -136,13 +143,18 @@ export async function loadSkill(
   );
   const parsed = parseSkillMarkdown(content, skillPath);
 
-  return {
+  const skill: AgentSkill = {
     body: parsed.body,
     description: parsed.description,
     directory: dirname(skillPath),
+    metadata: parsed.metadata,
     name: parsed.name,
     path: skillPath,
   };
+  if (parsed.disableModelInvocation !== undefined) {
+    skill.disableModelInvocation = parsed.disableModelInvocation;
+  }
+  return skill;
 }
 
 export function composeAgentSystemPrompt(
@@ -280,7 +292,13 @@ async function readUtf8FileWithLimit(path: string, maxBytes: number): Promise<st
 function parseSkillMarkdown(
   content: string,
   path: string,
-): { body: string; description: string; name: string } {
+): {
+  body: string;
+  description: string;
+  disableModelInvocation?: boolean;
+  metadata: Record<string, string>;
+  name: string;
+} {
   if (!content.startsWith('---\n')) {
     throw new AgentFilesError(`Skill "${path}" must start with YAML frontmatter.`);
   }
@@ -306,11 +324,36 @@ function parseSkillMarkdown(
     );
   }
 
-  return {
+  const parsedSkill: {
+    body: string;
+    description: string;
+    disableModelInvocation?: boolean;
+    metadata: Record<string, string>;
+    name: string;
+  } = {
     body,
     description,
+    metadata: Object.fromEntries(fields),
     name,
   };
+  const disableModelInvocation = parseOptionalBoolean(fields.get('disable-model-invocation'));
+  if (disableModelInvocation !== undefined) {
+    parsedSkill.disableModelInvocation = disableModelInvocation;
+  }
+  return parsedSkill;
+}
+
+function parseOptionalBoolean(value: string | undefined): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (/^true$/i.test(value)) {
+    return true;
+  }
+  if (/^false$/i.test(value)) {
+    return false;
+  }
+  return undefined;
 }
 
 function parseSimpleFrontmatter(frontmatter: string): Map<string, string> {

@@ -117,6 +117,10 @@ describe('agent file helpers', () => {
       {
         description: 'Publish package releases.',
         directory: skillDir,
+        metadata: {
+          description: 'Publish package releases.',
+          name: 'release-npm',
+        },
         name: 'release-npm',
         path: join(skillDir, 'SKILL.md'),
       },
@@ -145,8 +149,51 @@ describe('agent file helpers', () => {
       body: 'Check tenant isolation and SSRF controls.',
       description: 'Review security-sensitive changes.',
       directory: skillDir,
+      metadata: {
+        description: 'Review security-sensitive changes.',
+        name: 'security-review',
+      },
       name: 'security-review',
       path: join(skillDir, 'SKILL.md'),
+    });
+  });
+
+  it('preserves optional skill frontmatter metadata', async () => {
+    const skillDir = join(workspace, '.agents', 'skills', 'grumpy-engineer');
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(
+      join(skillDir, 'SKILL.md'),
+      [
+        '---',
+        'name: grumpy-engineer',
+        'description: Blunt production code review.',
+        'disable-model-invocation: true',
+        'owner: platform',
+        '---',
+        '',
+        'Review production risks with evidence.',
+      ].join('\n'),
+    );
+
+    const [manifest] = await discoverSkills({ cwd: workspace });
+    const skill = await loadSkill(manifest!);
+
+    expect(manifest).toMatchObject({
+      disableModelInvocation: true,
+      metadata: {
+        description: 'Blunt production code review.',
+        'disable-model-invocation': 'true',
+        name: 'grumpy-engineer',
+        owner: 'platform',
+      },
+    });
+    expect(skill).toMatchObject({
+      body: 'Review production risks with evidence.',
+      disableModelInvocation: true,
+      metadata: {
+        'disable-model-invocation': 'true',
+        owner: 'platform',
+      },
     });
   });
 
