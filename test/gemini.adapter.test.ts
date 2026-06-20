@@ -214,6 +214,58 @@ describe('Gemini adapter', () => {
     });
   });
 
+  it('maps Gemini thinking options into generationConfig.thinkingConfig', () => {
+    const request = translateGeminiRequest({
+      maxTokens: 512,
+      messages: [{ content: 'Think carefully.', role: 'user' }],
+      model: 'gemini-3-pro',
+      providerOptions: {
+        google: {
+          thinking: {
+            includeThoughts: true,
+            level: 'low',
+          },
+        },
+      },
+      temperature: 0,
+    });
+
+    expect(request).toMatchObject({
+      generationConfig: {
+        maxOutputTokens: 512,
+        temperature: 0,
+        thinkingConfig: {
+          includeThoughts: true,
+          thinkingLevel: 'low',
+        },
+      },
+    });
+  });
+
+  it('maps Gemini thinking budget into generationConfig.thinkingConfig', () => {
+    const request = translateGeminiRequest({
+      messages: [{ content: 'Think carefully.', role: 'user' }],
+      model: 'gemini-2.5-flash',
+      providerOptions: {
+        google: {
+          thinking: {
+            budgetTokens: 0,
+            includeThoughts: false,
+          },
+        },
+      },
+    });
+
+    expect(request).toMatchObject({
+      generationConfig: {
+        thinkingConfig: {
+          includeThoughts: false,
+          thinkingBudget: 0,
+        },
+      },
+    });
+  });
+
   it('translates Gemini embedding requests with task type, dimensions, and title', () => {
     const request = translateGeminiEmbeddingRequest(
       {
@@ -483,6 +535,7 @@ describe('Gemini adapter', () => {
           cachedContentTokenCount: 5,
           candidatesTokenCount: 12,
           promptTokenCount: 30,
+          thoughtsTokenCount: 7,
         },
       },
       'gemini-2.5-flash',
@@ -504,6 +557,7 @@ describe('Gemini adapter', () => {
         cachedTokens: 5,
         inputTokens: 30,
         outputTokens: 12,
+        reasoningTokens: 7,
       },
     });
   });

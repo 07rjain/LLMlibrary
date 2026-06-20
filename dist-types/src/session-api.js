@@ -344,6 +344,9 @@ export class SessionApi {
             ...(this.conversationDefaults.provider !== undefined
                 ? { provider: this.conversationDefaults.provider }
                 : {}),
+            ...(this.conversationDefaults.providerOptions !== undefined
+                ? { providerOptions: this.conversationDefaults.providerOptions }
+                : {}),
             ...(this.conversationDefaults.system !== undefined
                 ? { system: this.conversationDefaults.system }
                 : {}),
@@ -365,6 +368,7 @@ export class SessionApi {
             ...(config.maxToolRounds !== undefined ? { maxToolRounds: config.maxToolRounds } : {}),
             ...(config.model !== undefined ? { model: config.model } : {}),
             ...(config.provider !== undefined ? { provider: config.provider } : {}),
+            ...(config.providerOptions !== undefined ? { providerOptions: config.providerOptions } : {}),
             ...(config.system !== undefined ? { system: config.system } : {}),
             ...(config.toolChoice !== undefined ? { toolChoice: config.toolChoice } : {}),
             ...(config.toolExecutionTimeoutMs !== undefined

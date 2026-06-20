@@ -21,6 +21,7 @@ import type {
   CanonicalToolChoice,
   JsonObject,
   JsonValue,
+  AnthropicThinkingOptions,
   ProviderOptions,
   RemoteModelInfo,
   StreamChunk,
@@ -352,7 +353,8 @@ export function translateAnthropicRequest(
 ): Record<string, unknown> {
   const systemMessages = options.messages.filter((message) => message.role === 'system');
   const nonSystemMessages = options.messages.filter((message) => message.role !== 'system');
-  const cacheControl = options.providerOptions?.anthropic?.cacheControl;
+  const anthropicOptions = options.providerOptions?.anthropic;
+  const cacheControl = anthropicOptions?.cacheControl;
 
   const body: Record<string, unknown> = {
     max_tokens: options.maxTokens,
@@ -381,6 +383,54 @@ export function translateAnthropicRequest(
     body.cache_control = cacheControl;
   }
 
+  if (anthropicOptions?.thinking) {
+    body.thinking = translateAnthropicThinking(
+      anthropicOptions.thinking,
+      options.maxTokens,
+      options.model,
+    );
+  }
+
+  if (anthropicOptions?.effort) {
+    body.effort = anthropicOptions.effort;
+  }
+
+  return body;
+}
+
+function translateAnthropicThinking(
+  thinking: AnthropicThinkingOptions,
+  maxTokens: number | undefined,
+  model: string,
+): Record<string, unknown> {
+  if (
+    thinking.type === 'enabled' &&
+    thinking.budgetTokens !== undefined &&
+    maxTokens !== undefined &&
+    thinking.budgetTokens >= maxTokens
+  ) {
+    throw new ProviderCapabilityError(
+      'Anthropic thinking.budgetTokens must be less than maxTokens.',
+      {
+        details: {
+          budgetTokens: thinking.budgetTokens,
+          maxTokens,
+        },
+        model,
+        provider: 'anthropic',
+      },
+    );
+  }
+
+  const body: Record<string, unknown> = {
+    type: thinking.type,
+  };
+  if (thinking.budgetTokens !== undefined) {
+    body.budget_tokens = thinking.budgetTokens;
+  }
+  if (thinking.display !== undefined) {
+    body.display = thinking.display;
+  }
   return body;
 }
 

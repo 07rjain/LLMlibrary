@@ -2,9 +2,21 @@
 
 Date: 2026-06-20
 
+## Implementation Status
+
+The first implementation slice from this report has now been applied:
+
+- `providerOptions.openai.reasoning` maps to OpenAI Responses `reasoning` and optional `include: ["reasoning.encrypted_content"]`.
+- `providerOptions.anthropic.thinking` and `providerOptions.anthropic.effort` map to Anthropic Messages API thinking controls, with local validation that manual `budgetTokens` stay below `maxTokens`.
+- `providerOptions.google.thinking` maps to Gemini `generationConfig.thinkingConfig`.
+- `UsageMetrics.reasoningTokens` now reports OpenAI reasoning-token counts and Gemini thoughts-token counts when the provider returns them.
+- Session API conversation config accepts and persists `providerOptions`, so HTTP-created conversations can use the same provider-specific reasoning controls.
+
+Still intentionally out of scope: a top-level canonical `reasoning.effort`, parsing reasoning summaries or thought blocks into `response.text`, OpenAI encrypted reasoning replay, Anthropic thinking-signature persistence, and model-registry validation for every provider/model thinking mode.
+
 ## Executive Summary
 
-The library does not currently expose a reasoning-effort or thinking control for completions, streaming, conversations, or the Session API. The only request-level generation controls in the canonical surface are `maxTokens`, `temperature`, tools, and `providerOptions`. Provider-specific request options currently cover prompt caching, not reasoning.
+The original report found that the library did not expose reasoning-effort or thinking controls for completions, streaming, conversations, or the Session API. That gap is now closed for provider-specific request controls and provider-reported reasoning-token accounting. The library still intentionally avoids a single cross-provider `reasoningEffort` abstraction.
 
 We should add reasoning support, but not as a single over-simplified `reasoningEffort` string only. OpenAI, Anthropic, and Gemini expose overlapping but materially different controls:
 
@@ -40,7 +52,7 @@ Those should be separate implementation decisions.
 
 ## Current Library State
 
-Relevant current code:
+This was the relevant pre-implementation code state used for the review:
 
 - `src/client.ts` defines `LLMRequestOptions` without `reasoning` or `reasoningEffort`.
 - `src/types.ts` defines `ProviderOptions` with only:

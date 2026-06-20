@@ -2,7 +2,7 @@ import { type ContextManager } from './context-manager.js';
 import type { LLMClient } from './client.js';
 import type { ConversationSnapshot, ToolValidationMode } from './conversation.js';
 import type { SessionMeta, SessionRecord, SessionStore } from './session-store.js';
-import type { CanonicalMessage, CanonicalProvider, CanonicalTool, CanonicalToolChoice } from './types.js';
+import type { CanonicalMessage, CanonicalProvider, CanonicalTool, CanonicalToolChoice, ProviderOptions } from './types.js';
 import type { UsageSummary } from './usage.js';
 type MaybePromise<TValue> = Promise<TValue> | TValue;
 type TenantResolutionMode = 'legacy-request-tenant' | 'single-tenant' | 'trusted-context';
@@ -33,6 +33,7 @@ export interface SessionConversationConfig {
     maxToolRounds?: number;
     model?: string;
     provider?: CanonicalProvider;
+    providerOptions?: ProviderOptions;
     system?: string;
     toolChoice?: CanonicalToolChoice;
     toolExecutionTimeoutMs?: number;

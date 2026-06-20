@@ -581,7 +581,9 @@ function mediaTypeForSpeechFormat(format) {
 export function translateOpenAIRequest(options) {
     const input = [];
     const instructions = [];
-    const promptCaching = options.providerOptions?.openai?.promptCaching;
+    const openaiOptions = options.providerOptions?.openai;
+    const promptCaching = openaiOptions?.promptCaching;
+    const reasoning = openaiOptions?.reasoning;
     if (options.system) {
         instructions.push(options.system);
     }
@@ -614,6 +616,21 @@ export function translateOpenAIRequest(options) {
         body.tool_choice = mappedChoice.toolChoice;
         if (mappedChoice.parallelToolCalls !== undefined) {
             body.parallel_tool_calls = mappedChoice.parallelToolCalls;
+        }
+    }
+    if (reasoning) {
+        const reasoningBody = {};
+        if (reasoning.effort !== undefined) {
+            reasoningBody.effort = reasoning.effort;
+        }
+        if (reasoning.summary !== undefined) {
+            reasoningBody.summary = reasoning.summary;
+        }
+        if (Object.keys(reasoningBody).length > 0) {
+            body.reasoning = reasoningBody;
+        }
+        if (reasoning.includeEncryptedContent) {
+            body.include = ['reasoning.encrypted_content'];
         }
     }
     if (promptCaching?.key) {

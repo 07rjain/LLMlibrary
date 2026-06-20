@@ -5,8 +5,22 @@ export interface CacheControl {
     ttl?: '1h' | '5m';
     type: 'ephemeral';
 }
+export type OpenAIReasoningEffort = 'high' | 'low' | 'medium' | 'minimal' | 'none' | 'xhigh';
+export interface OpenAIReasoningOptions {
+    effort?: OpenAIReasoningEffort;
+    includeEncryptedContent?: boolean;
+    summary?: 'auto' | 'concise' | 'detailed';
+}
+export type AnthropicThinkingEffort = 'high' | 'low' | 'medium';
+export interface AnthropicThinkingOptions {
+    budgetTokens?: number;
+    display?: 'omitted' | 'summarized';
+    type: 'adaptive' | 'disabled' | 'enabled';
+}
 export interface AnthropicProviderOptions {
     cacheControl?: CacheControl;
+    effort?: AnthropicThinkingEffort;
+    thinking?: AnthropicThinkingOptions;
 }
 export interface OpenAIPromptCachingOptions {
     key?: string;
@@ -14,12 +28,19 @@ export interface OpenAIPromptCachingOptions {
 }
 export interface OpenAIProviderOptions {
     promptCaching?: OpenAIPromptCachingOptions;
+    reasoning?: OpenAIReasoningOptions;
 }
 export interface GooglePromptCachingOptions {
     cachedContent?: string;
 }
+export interface GoogleThinkingOptions {
+    budgetTokens?: number;
+    includeThoughts?: boolean;
+    level?: 'high' | 'low' | 'medium' | 'minimal';
+}
 export interface GoogleProviderOptions {
     promptCaching?: GooglePromptCachingOptions;
+    thinking?: GoogleThinkingOptions;
 }
 export interface ProviderOptions {
     anthropic?: AnthropicProviderOptions;
@@ -131,6 +152,7 @@ export interface UsageMetrics {
     costUSD: number;
     inputTokens: number;
     outputTokens: number;
+    reasoningTokens?: number;
 }
 export type EmbeddingProvider = Extract<CanonicalProvider, 'google' | 'mock'>;
 export type EmbeddingPurpose = 'retrieval_document' | 'retrieval_query' | 'semantic_similarity' | 'classification' | 'clustering';

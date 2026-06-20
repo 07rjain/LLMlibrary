@@ -159,24 +159,34 @@ export function openaiUsageToCanonical(usage) {
     const cachedReadTokens = usage?.input_tokens_details?.cached_tokens ??
         usage?.prompt_tokens_details?.cached_tokens ??
         0;
-    return {
+    const reasoningTokens = usage?.output_tokens_details?.reasoning_tokens ??
+        usage?.completion_tokens_details?.reasoning_tokens;
+    const counts = {
         billedInputTokens: Math.max(inputTokens - cachedReadTokens, 0),
         cachedReadTokens,
         cachedTokens: cachedReadTokens,
         inputTokens,
         outputTokens: usage?.output_tokens ?? usage?.completion_tokens ?? 0,
     };
+    if (reasoningTokens !== undefined) {
+        counts.reasoningTokens = reasoningTokens;
+    }
+    return counts;
 }
 export function geminiUsageToCanonical(usage) {
     const inputTokens = usage?.promptTokenCount ?? 0;
     const cachedTokens = usage?.cachedContentTokenCount ?? 0;
-    return {
+    const counts = {
         billedInputTokens: Math.max(inputTokens - cachedTokens, 0),
         cachedReadTokens: cachedTokens,
         cachedTokens,
         inputTokens,
         outputTokens: usage?.candidatesTokenCount ?? 0,
     };
+    if (usage?.thoughtsTokenCount !== undefined) {
+        counts.reasoningTokens = usage.thoughtsTokenCount;
+    }
+    return counts;
 }
 export function usageWithCost(model, usage) {
     const registry = new ModelRegistry({

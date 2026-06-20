@@ -9,6 +9,7 @@ Provider-agnostic TypeScript client for Anthropic, OpenAI, and Google Gemini wit
 - OpenAI uses the stateless Responses API under the hood while library-owned conversation state remains the source of truth
 - `defineTool()` helper for typed tool definitions
 - Non-streaming and streaming completions with explicit `stream.cancel()`
+- Provider-specific reasoning and thinking controls with usage token accounting
 - Conversation state with running token and cost totals
 - Automatic tool execution in conversations, including streaming pause/execute/resume
 - Context trimming via sliding window or summarisation strategies
@@ -441,6 +442,55 @@ const context = formatRetrievedContext(results, {
 - Node-only persistence: `PostgresSessionStore` and `PostgresUsageLogger`
 - Runtime safety probe: `pnpm edgecheck`
 
+## Reasoning And Thinking Controls
+
+OpenAI, Anthropic, and Gemini expose model reasoning differently, so the library keeps these controls under provider-specific options instead of pretending one top-level option is portable.
+
+```ts
+await client.complete({
+  model: 'gpt-5',
+  maxTokens: 800,
+  messages: [{ content: 'Audit this deployment plan.', role: 'user' }],
+  providerOptions: {
+    openai: {
+      reasoning: {
+        effort: 'medium',
+        summary: 'auto',
+      },
+    },
+  },
+});
+```
+
+```ts
+await client.complete({
+  model: 'claude-sonnet-4-6',
+  maxTokens: 1200,
+  messages: [{ content: 'Review this architecture change.', role: 'user' }],
+  providerOptions: {
+    anthropic: {
+      effort: 'medium',
+      thinking: { type: 'adaptive', display: 'omitted' },
+    },
+  },
+});
+```
+
+```ts
+await client.complete({
+  model: 'gemini-2.5-flash',
+  maxTokens: 700,
+  messages: [{ content: 'Find edge cases in this workflow.', role: 'user' }],
+  providerOptions: {
+    google: {
+      thinking: { budgetTokens: 0, includeThoughts: false },
+    },
+  },
+});
+```
+
+When the provider returns reasoning or thought-token counts, they are exposed as `response.usage.reasoningTokens`. Reasoning summaries and thoughts are not merged into `response.text`; see [docs/COMPLETIONS_AND_STREAMING.md](docs/COMPLETIONS_AND_STREAMING.md#reasoning-and-thinking-controls) and [docs/REASONING_EFFORTS_REPORT.md](docs/REASONING_EFFORTS_REPORT.md) for the tradeoffs.
+
 ## Prompt Caching Status
 
 - OpenAI automatic prompt caching works on supported models, and request-side hints are exposed via `providerOptions.openai.promptCaching`.
@@ -585,6 +635,7 @@ For file layout, `agent.md` examples, skill frontmatter, explicit skill selectio
 - Provider comparison: [docs/PROVIDER_COMPARISON.md](docs/PROVIDER_COMPARISON.md)
 - Speech API research report: [docs/SPEECH_API_RESEARCH_REPORT.md](docs/SPEECH_API_RESEARCH_REPORT.md)
 - Prompt caching report: [docs/PROMPT_CACHING_REPORT.md](docs/PROMPT_CACHING_REPORT.md)
+- Reasoning efforts report: [docs/REASONING_EFFORTS_REPORT.md](docs/REASONING_EFFORTS_REPORT.md)
 - Prompt caching task tracker: [prompt_caching_todo.md](prompt_caching_todo.md)
 - OpenAI Responses migration report: [docs/OPENAI_RESPONSES_MIGRATION_REPORT.md](docs/OPENAI_RESPONSES_MIGRATION_REPORT.md)
 - Migration guide: [docs/MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md)

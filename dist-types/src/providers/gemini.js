@@ -229,7 +229,8 @@ export class GeminiAdapter {
 export function translateGeminiRequest(options) {
     const systemMessages = options.messages.filter((message) => message.role === 'system');
     const nonSystemMessages = options.messages.filter((message) => message.role !== 'system');
-    const cachedContent = options.providerOptions?.google?.promptCaching?.cachedContent;
+    const googleOptions = options.providerOptions?.google;
+    const cachedContent = googleOptions?.promptCaching?.cachedContent;
     const body = {
         contents: nonSystemMessages.map(translateGeminiMessage),
     };
@@ -244,6 +245,9 @@ export function translateGeminiRequest(options) {
     if (options.temperature !== undefined) {
         generationConfig.temperature = options.temperature;
     }
+    if (googleOptions?.thinking) {
+        generationConfig.thinkingConfig = translateGeminiThinkingConfig(googleOptions.thinking);
+    }
     if (Object.keys(generationConfig).length > 0) {
         body.generationConfig = generationConfig;
     }
@@ -257,6 +261,19 @@ export function translateGeminiRequest(options) {
         body.cachedContent = cachedContent;
     }
     return body;
+}
+function translateGeminiThinkingConfig(thinking) {
+    const config = {};
+    if (thinking.level !== undefined) {
+        config.thinkingLevel = thinking.level;
+    }
+    if (thinking.budgetTokens !== undefined) {
+        config.thinkingBudget = thinking.budgetTokens;
+    }
+    if (thinking.includeThoughts !== undefined) {
+        config.includeThoughts = thinking.includeThoughts;
+    }
+    return config;
 }
 export function translateGeminiEmbeddingRequest(options, input) {
     const body = {

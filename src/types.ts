@@ -24,8 +24,32 @@ export interface CacheControl {
   type: 'ephemeral';
 }
 
+export type OpenAIReasoningEffort =
+  | 'high'
+  | 'low'
+  | 'medium'
+  | 'minimal'
+  | 'none'
+  | 'xhigh';
+
+export interface OpenAIReasoningOptions {
+  effort?: OpenAIReasoningEffort;
+  includeEncryptedContent?: boolean;
+  summary?: 'auto' | 'concise' | 'detailed';
+}
+
+export type AnthropicThinkingEffort = 'high' | 'low' | 'medium';
+
+export interface AnthropicThinkingOptions {
+  budgetTokens?: number;
+  display?: 'omitted' | 'summarized';
+  type: 'adaptive' | 'disabled' | 'enabled';
+}
+
 export interface AnthropicProviderOptions {
   cacheControl?: CacheControl;
+  effort?: AnthropicThinkingEffort;
+  thinking?: AnthropicThinkingOptions;
 }
 
 export interface OpenAIPromptCachingOptions {
@@ -35,14 +59,22 @@ export interface OpenAIPromptCachingOptions {
 
 export interface OpenAIProviderOptions {
   promptCaching?: OpenAIPromptCachingOptions;
+  reasoning?: OpenAIReasoningOptions;
 }
 
 export interface GooglePromptCachingOptions {
   cachedContent?: string;
 }
 
+export interface GoogleThinkingOptions {
+  budgetTokens?: number;
+  includeThoughts?: boolean;
+  level?: 'high' | 'low' | 'medium' | 'minimal';
+}
+
 export interface GoogleProviderOptions {
   promptCaching?: GooglePromptCachingOptions;
+  thinking?: GoogleThinkingOptions;
 }
 
 export interface ProviderOptions {
@@ -180,6 +212,7 @@ export interface UsageMetrics {
   costUSD: number;
   inputTokens: number;
   outputTokens: number;
+  reasoningTokens?: number;
 }
 
 export type EmbeddingProvider = Extract<CanonicalProvider, 'google' | 'mock'>;

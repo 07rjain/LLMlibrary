@@ -111,6 +111,7 @@ interface GeminiUsageMetadata {
   cachedContentTokenCount?: number;
   candidatesTokenCount?: number;
   promptTokenCount?: number;
+  thoughtsTokenCount?: number;
   totalTokenCount?: number;
 }
 
@@ -625,7 +626,8 @@ export function translateGeminiRequest(
 ): Record<string, unknown> {
   const systemMessages = options.messages.filter((message) => message.role === 'system');
   const nonSystemMessages = options.messages.filter((message) => message.role !== 'system');
-  const cachedContent = options.providerOptions?.google?.promptCaching?.cachedContent;
+  const googleOptions = options.providerOptions?.google;
+  const cachedContent = googleOptions?.promptCaching?.cachedContent;
 
   const body: Record<string, unknown> = {
     contents: nonSystemMessages.map(translateGeminiMessage),
@@ -646,6 +648,11 @@ export function translateGeminiRequest(
   if (options.temperature !== undefined) {
     generationConfig.temperature = options.temperature;
   }
+  if (googleOptions?.thinking) {
+    generationConfig.thinkingConfig = translateGeminiThinkingConfig(
+      googleOptions.thinking,
+    );
+  }
   if (Object.keys(generationConfig).length > 0) {
     body.generationConfig = generationConfig;
   }
@@ -663,6 +670,22 @@ export function translateGeminiRequest(
   }
 
   return body;
+}
+
+function translateGeminiThinkingConfig(
+  thinking: NonNullable<NonNullable<ProviderOptions['google']>['thinking']>,
+): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+  if (thinking.level !== undefined) {
+    config.thinkingLevel = thinking.level;
+  }
+  if (thinking.budgetTokens !== undefined) {
+    config.thinkingBudget = thinking.budgetTokens;
+  }
+  if (thinking.includeThoughts !== undefined) {
+    config.includeThoughts = thinking.includeThoughts;
+  }
+  return config;
 }
 
 export function translateGeminiEmbeddingRequest(

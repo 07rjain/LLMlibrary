@@ -15,6 +15,7 @@ export interface CanonicalUsageCounts {
     cachedWriteTokens?: number;
     inputTokens: number;
     outputTokens: number;
+    reasoningTokens?: number;
 }
 export interface SpeechCostCalculationInput {
     audioInputTokens?: number;
@@ -37,11 +38,17 @@ export interface SpeechCostResult {
 }
 export interface OpenAIUsagePayload {
     completion_tokens?: number;
+    completion_tokens_details?: {
+        reasoning_tokens?: number;
+    };
     input_tokens?: number;
     input_tokens_details?: {
         cached_tokens?: number;
     };
     output_tokens?: number;
+    output_tokens_details?: {
+        reasoning_tokens?: number;
+    };
     prompt_tokens?: number;
     prompt_tokens_details?: {
         cached_tokens?: number;
@@ -57,6 +64,7 @@ export interface GeminiUsagePayload {
     cachedContentTokenCount?: number;
     candidatesTokenCount?: number;
     promptTokenCount?: number;
+    thoughtsTokenCount?: number;
 }
 export declare function calcCostUSD(input: CostCalculationInput, registry?: ModelRegistry): number;
 export declare function calcSpeechCostUSD(input: SpeechCostCalculationInput, registry?: ModelRegistry): SpeechCostResult;
