@@ -50,6 +50,122 @@ console.log(response.usage);
 - `budgetUsd`
   Estimated spend cap for the request
 
+## Reasoning And Thinking Controls
+
+Reasoning controls are exposed through provider-specific options. This is intentional: OpenAI, Anthropic, and Gemini use different request fields and the values are not perfectly portable across model families.
+
+OpenAI Responses API reasoning options:
+
+```ts
+const response = await client.complete({
+  model: 'gpt-5',
+  maxTokens: 800,
+  messages: [{ role: 'user', content: 'Solve this step by step.' }],
+  providerOptions: {
+    openai: {
+      reasoning: {
+        effort: 'medium',
+        summary: 'auto',
+      },
+    },
+  },
+});
+
+console.log(response.usage?.reasoningTokens);
+```
+
+Set `includeEncryptedContent: true` only when your application is ready to preserve OpenAI encrypted reasoning items for later continuation:
+
+```ts
+await client.complete({
+  model: 'gpt-5',
+  messages: [{ role: 'user', content: 'Continue the analysis.' }],
+  providerOptions: {
+    openai: {
+      reasoning: {
+        effort: 'low',
+        includeEncryptedContent: true,
+      },
+    },
+  },
+});
+```
+
+Anthropic thinking options:
+
+```ts
+await client.complete({
+  model: 'claude-sonnet-4-6',
+  maxTokens: 1200,
+  messages: [{ role: 'user', content: 'Review this migration plan.' }],
+  providerOptions: {
+    anthropic: {
+      effort: 'medium',
+      thinking: {
+        type: 'adaptive',
+        display: 'omitted',
+      },
+    },
+  },
+});
+```
+
+For Claude models that support manual budgets, use `budgetTokens`; the library rejects manual thinking budgets that are greater than or equal to `maxTokens` before sending the request:
+
+```ts
+await client.complete({
+  model: 'claude-sonnet-4-6',
+  maxTokens: 2000,
+  messages: [{ role: 'user', content: 'Analyze this incident timeline.' }],
+  providerOptions: {
+    anthropic: {
+      thinking: {
+        type: 'enabled',
+        budgetTokens: 1024,
+        display: 'summarized',
+      },
+    },
+  },
+});
+```
+
+Gemini thinking options:
+
+```ts
+await client.complete({
+  model: 'gemini-2.5-flash',
+  maxTokens: 700,
+  messages: [{ role: 'user', content: 'Find the risks in this proposal.' }],
+  providerOptions: {
+    google: {
+      thinking: {
+        budgetTokens: 0,
+        includeThoughts: false,
+      },
+    },
+  },
+});
+```
+
+For Gemini model families that use thinking levels:
+
+```ts
+await client.complete({
+  model: 'gemini-3-pro',
+  messages: [{ role: 'user', content: 'Compare these two designs.' }],
+  providerOptions: {
+    google: {
+      thinking: {
+        level: 'low',
+        includeThoughts: false,
+      },
+    },
+  },
+});
+```
+
+Reasoning and thinking tokens can increase latency and cost, and they may consume part of the provider's output budget. The library exposes provider-reported counts as `usage.reasoningTokens` when the upstream response includes them. Reasoning summaries, Anthropic thinking blocks, and Gemini thoughts are not merged into `response.text` by default.
+
 ## Message Shapes
 
 Plain text messages are the most common case:

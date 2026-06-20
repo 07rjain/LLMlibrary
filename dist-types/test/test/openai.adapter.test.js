@@ -128,6 +128,36 @@ describe('OpenAI adapter', () => {
             prompt_cache_retention: '24h',
         });
     });
+    it('maps OpenAI reasoning options into Responses request fields', () => {
+        const request = translateOpenAIRequest({
+            messages: [{ content: 'Solve carefully.', role: 'user' }],
+            model: 'gpt-5.5',
+            providerOptions: {
+                openai: {
+                    reasoning: {
+                        effort: 'medium',
+                        includeEncryptedContent: true,
+                        summary: 'auto',
+                    },
+                },
+            },
+        });
+        expect(request).toMatchObject({
+            include: ['reasoning.encrypted_content'],
+            reasoning: {
+                effort: 'medium',
+                summary: 'auto',
+            },
+        });
+    });
+    it('omits OpenAI reasoning fields when no reasoning options are set', () => {
+        const request = translateOpenAIRequest({
+            messages: [{ content: 'Hello', role: 'user' }],
+            model: 'gpt-4o',
+        });
+        expect(request).not.toHaveProperty('reasoning');
+        expect(request).not.toHaveProperty('include');
+    });
     it('translates Responses payloads into canonical responses', () => {
         const response = translateOpenAIResponse({
             id: 'resp_1',
@@ -161,6 +191,7 @@ describe('OpenAI adapter', () => {
                 input_tokens: 40,
                 input_tokens_details: { cached_tokens: 10 },
                 output_tokens: 12,
+                output_tokens_details: { reasoning_tokens: 7 },
             },
         });
         expect(response).toMatchObject({
@@ -178,6 +209,7 @@ describe('OpenAI adapter', () => {
         });
         expect(response.usage.cachedReadTokens).toBe(10);
         expect(response.usage.inputTokens).toBe(40);
+        expect(response.usage.reasoningTokens).toBe(7);
     });
     it('falls back to the requested model when OpenAI returns a versioned model id', () => {
         const response = translateOpenAIResponse({

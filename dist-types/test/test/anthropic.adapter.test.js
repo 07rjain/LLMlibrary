@@ -117,6 +117,67 @@ describe('Anthropic adapter', () => {
             },
         });
     });
+    it('maps Anthropic thinking and effort options into requests', () => {
+        const request = translateAnthropicRequest({
+            maxTokens: 4096,
+            messages: [{ content: 'Think carefully.', role: 'user' }],
+            model: 'claude-sonnet-4-6',
+            providerOptions: {
+                anthropic: {
+                    effort: 'medium',
+                    thinking: {
+                        display: 'omitted',
+                        type: 'adaptive',
+                    },
+                },
+            },
+        });
+        expect(request).toMatchObject({
+            effort: 'medium',
+            thinking: {
+                display: 'omitted',
+                type: 'adaptive',
+            },
+        });
+    });
+    it('maps Anthropic manual thinking budget to budget_tokens', () => {
+        const request = translateAnthropicRequest({
+            maxTokens: 4096,
+            messages: [{ content: 'Think carefully.', role: 'user' }],
+            model: 'claude-sonnet-4-6',
+            providerOptions: {
+                anthropic: {
+                    thinking: {
+                        budgetTokens: 1024,
+                        display: 'summarized',
+                        type: 'enabled',
+                    },
+                },
+            },
+        });
+        expect(request).toMatchObject({
+            thinking: {
+                budget_tokens: 1024,
+                display: 'summarized',
+                type: 'enabled',
+            },
+        });
+    });
+    it('rejects Anthropic manual thinking budgets that are not less than maxTokens', () => {
+        expect(() => translateAnthropicRequest({
+            maxTokens: 1024,
+            messages: [{ content: 'Think carefully.', role: 'user' }],
+            model: 'claude-sonnet-4-6',
+            providerOptions: {
+                anthropic: {
+                    thinking: {
+                        budgetTokens: 1024,
+                        type: 'enabled',
+                    },
+                },
+            },
+        })).toThrow(ProviderCapabilityError);
+    });
     it('maps cache_control onto cacheable Anthropic content blocks and tool definitions', () => {
         const request = translateAnthropicRequest({
             maxTokens: 64,

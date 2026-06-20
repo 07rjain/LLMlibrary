@@ -491,6 +491,14 @@ describe('SessionApi', () => {
                 maxToolRounds: 4,
                 model: 'mock-model',
                 provider: 'mock',
+                providerOptions: {
+                    openai: {
+                        reasoning: {
+                            effort: 'low',
+                            summary: 'auto',
+                        },
+                    },
+                },
                 system: 'Default system',
                 toolChoice: { type: 'auto' },
                 toolExecutionTimeoutMs: 999,
@@ -515,6 +523,14 @@ describe('SessionApi', () => {
                 { content: 'System from messages', role: 'system' },
                 { content: 'History item', role: 'user' },
             ],
+            providerOptions: {
+                openai: {
+                    reasoning: {
+                        effort: 'medium',
+                        summary: 'detailed',
+                    },
+                },
+            },
         }));
         const created = (await createResponse.json());
         const createdRecord = await store.get(created.session.id);
@@ -522,6 +538,14 @@ describe('SessionApi', () => {
         expect(createdRecord?.snapshot.system).toBe('System from messages');
         expect(createdRecord?.snapshot.maxTokens).toBe(55);
         expect(createdRecord?.snapshot.maxToolRounds).toBe(4);
+        expect(createdRecord?.snapshot.providerOptions).toEqual({
+            openai: {
+                reasoning: {
+                    effort: 'medium',
+                    summary: 'detailed',
+                },
+            },
+        });
         expect(createdRecord?.snapshot.toolChoice).toEqual({ type: 'auto' });
         const listFilteredResponse = await api.handle(new Request('https://example.test/v1/sessions?model=other-model&provider=openai'));
         const listFilteredPayload = (await listFilteredResponse.json());

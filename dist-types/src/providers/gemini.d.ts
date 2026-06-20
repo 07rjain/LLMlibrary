@@ -62,6 +62,7 @@ interface GeminiUsageMetadata {
     cachedContentTokenCount?: number;
     candidatesTokenCount?: number;
     promptTokenCount?: number;
+    thoughtsTokenCount?: number;
     totalTokenCount?: number;
 }
 type GeminiFinishReason = 'BLOCKLIST' | 'LANGUAGE' | 'MALFORMED_FUNCTION_CALL' | 'MAX_TOKENS' | 'OTHER' | 'PROHIBITED_CONTENT' | 'RECITATION' | 'SAFETY' | 'SPII' | 'STOP' | null;

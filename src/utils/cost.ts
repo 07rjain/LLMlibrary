@@ -24,6 +24,7 @@ export interface CanonicalUsageCounts {
   cachedWriteTokens?: number;
   inputTokens: number;
   outputTokens: number;
+  reasoningTokens?: number;
 }
 
 export interface SpeechCostCalculationInput {
@@ -49,11 +50,17 @@ export interface SpeechCostResult {
 
 export interface OpenAIUsagePayload {
   completion_tokens?: number;
+  completion_tokens_details?: {
+    reasoning_tokens?: number;
+  };
   input_tokens?: number;
   input_tokens_details?: {
     cached_tokens?: number;
   };
   output_tokens?: number;
+  output_tokens_details?: {
+    reasoning_tokens?: number;
+  };
   prompt_tokens?: number;
   prompt_tokens_details?: {
     cached_tokens?: number;
@@ -71,6 +78,7 @@ export interface GeminiUsagePayload {
   cachedContentTokenCount?: number;
   candidatesTokenCount?: number;
   promptTokenCount?: number;
+  thoughtsTokenCount?: number;
 }
 
 export function calcCostUSD(
@@ -275,13 +283,20 @@ export function openaiUsageToCanonical(
     usage?.input_tokens_details?.cached_tokens ??
     usage?.prompt_tokens_details?.cached_tokens ??
     0;
-  return {
+  const reasoningTokens =
+    usage?.output_tokens_details?.reasoning_tokens ??
+    usage?.completion_tokens_details?.reasoning_tokens;
+  const counts: CanonicalUsageCounts = {
     billedInputTokens: Math.max(inputTokens - cachedReadTokens, 0),
     cachedReadTokens,
     cachedTokens: cachedReadTokens,
     inputTokens,
     outputTokens: usage?.output_tokens ?? usage?.completion_tokens ?? 0,
   };
+  if (reasoningTokens !== undefined) {
+    counts.reasoningTokens = reasoningTokens;
+  }
+  return counts;
 }
 
 export function geminiUsageToCanonical(
@@ -289,13 +304,17 @@ export function geminiUsageToCanonical(
 ): CanonicalUsageCounts {
   const inputTokens = usage?.promptTokenCount ?? 0;
   const cachedTokens = usage?.cachedContentTokenCount ?? 0;
-  return {
+  const counts: CanonicalUsageCounts = {
     billedInputTokens: Math.max(inputTokens - cachedTokens, 0),
     cachedReadTokens: cachedTokens,
     cachedTokens,
     inputTokens,
     outputTokens: usage?.candidatesTokenCount ?? 0,
   };
+  if (usage?.thoughtsTokenCount !== undefined) {
+    counts.reasoningTokens = usage.thoughtsTokenCount;
+  }
+  return counts;
 }
 
 export function usageWithCost(

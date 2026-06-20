@@ -36,6 +36,7 @@ export default defineConfig({
         items: [
           { text: 'Completions And Streaming', link: '/COMPLETIONS_AND_STREAMING' },
           { text: 'Conversations And Tools', link: '/CONVERSATIONS_AND_TOOLS' },
+          { text: 'Agent Instructions And Skills', link: '/AGENT_INSTRUCTIONS_AND_SKILLS' },
           { text: 'Speech', link: '/SPEECH' },
           { text: 'Persistence And Session API', link: '/PERSISTENCE_AND_SESSION_API' },
           { text: 'Session API Reference', link: '/SESSION_API_REFERENCE' },

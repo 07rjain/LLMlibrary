@@ -7,11 +7,12 @@ If you are opening the repository for the first time, read the pages below in or
 1. [Getting Started](./GETTING_STARTED.md)
 2. [Completions And Streaming](./COMPLETIONS_AND_STREAMING.md)
 3. [Conversations And Tools](./CONVERSATIONS_AND_TOOLS.md)
-4. [Persistence And Session API](./PERSISTENCE_AND_SESSION_API.md)
-5. [Speech](./SPEECH.md)
-6. [Session API Reference](./SESSION_API_REFERENCE.md)
-7. [Production Setup](./PRODUCTION_SETUP.md)
-8. [Production Guide](./PRODUCTION_GUIDE.md)
+4. [Agent Instructions And Skills](./AGENT_INSTRUCTIONS_AND_SKILLS.md)
+5. [Persistence And Session API](./PERSISTENCE_AND_SESSION_API.md)
+6. [Speech](./SPEECH.md)
+7. [Session API Reference](./SESSION_API_REFERENCE.md)
+8. [Production Setup](./PRODUCTION_SETUP.md)
+9. [Production Guide](./PRODUCTION_GUIDE.md)
 
 ## What This Library Gives You
 
@@ -29,6 +30,7 @@ If you are opening the repository for the first time, read the pages below in or
 - OpenAI batch speech support through `client.speak()` and `client.transcribe()`
 - Optional retrieval helpers through `unified-llm-client/retrieval`
 - Reusable chunking helpers through `unified-llm-client/chunking`
+- Node-only agent instruction and skill loading through `unified-llm-client/agent-files`
 
 ## Which Page To Read For Which Task
 
@@ -38,6 +40,8 @@ If you are opening the repository for the first time, read the pages below in or
   Read [Completions And Streaming](./COMPLETIONS_AND_STREAMING.md)
 - "I need tool calls or persistent conversation state"
   Read [Conversations And Tools](./CONVERSATIONS_AND_TOOLS.md)
+- "I need users to add `agent.md` files or skills to their agents"
+  Read [Agent Instructions And Skills](./AGENT_INSTRUCTIONS_AND_SKILLS.md)
 - "I need saved history or HTTP endpoints"
   Read [Persistence And Session API](./PERSISTENCE_AND_SESSION_API.md)
 - "I need routing, budgets, testing, or rollout guidance"
@@ -56,11 +60,13 @@ If you are opening the repository for the first time, read the pages below in or
 - Embeddings review cross-check: [EMBEDDINGS_REVIEW_CROSSCHECK.md](./EMBEDDINGS_REVIEW_CROSSCHECK.md)
 - Embeddings follow-up fix plan: [EMBEDDINGS_FOLLOW_UP_FIX_PLAN.md](./EMBEDDINGS_FOLLOW_UP_FIX_PLAN.md)
 - Prompt caching implementation report: [PROMPT_CACHING_REPORT.md](./PROMPT_CACHING_REPORT.md)
+- Reasoning efforts report: [REASONING_EFFORTS_REPORT.md](./REASONING_EFFORTS_REPORT.md)
 - OpenAI Responses migration report: [OPENAI_RESPONSES_MIGRATION_REPORT.md](./OPENAI_RESPONSES_MIGRATION_REPORT.md)
 - Migration notes: [MIGRATION_GUIDE.md](./MIGRATION_GUIDE.md)
 - Cost policy and pricing notes: [COST_AND_PRICING.md](./COST_AND_PRICING.md)
 - Production setup guide: [PRODUCTION_SETUP.md](./PRODUCTION_SETUP.md)
 - Speech guide: [SPEECH.md](./SPEECH.md)
+- Agent instructions and skills guide: [AGENT_INSTRUCTIONS_AND_SKILLS.md](./AGENT_INSTRUCTIONS_AND_SKILLS.md)
 - Speech API research report: [SPEECH_API_RESEARCH_REPORT.md](./SPEECH_API_RESEARCH_REPORT.md)
 
 ## Current Provider Notes
@@ -70,6 +76,7 @@ If you are opening the repository for the first time, read the pages below in or
 - OpenAI uses `providerOptions.openai.promptCaching`.
 - Anthropic uses part-level `cacheControl`, tool-level `cacheControl`, and request-level `providerOptions.anthropic.cacheControl`.
 - Gemini uses `providerOptions.google.promptCaching.cachedContent`, and explicit cache resources can be managed with `client.googleCaches`.
+- Reasoning and thinking controls are also provider-specific: `providerOptions.openai.reasoning`, `providerOptions.anthropic.thinking`, `providerOptions.anthropic.effort`, and `providerOptions.google.thinking`.
 - `client.models.listRemote({ provider })` fetches the provider's live model list without changing the local routing registry.
 - `client.embed()` is now available for Google Embedding 2.
 - OpenAI batch speech is available through `client.speak()` and `client.transcribe()`. Speech usage is tracked separately through `client.getSpeechUsage()` and `client.exportSpeechUsage()`.
@@ -225,6 +232,55 @@ await client.complete({
 ```
 
 `client.googleCaches.create()` returns cache names in the provider format `cachedContents/{id}`. Pass that name directly into `providerOptions.google.promptCaching.cachedContent` when you want to reuse the cache.
+
+## Reasoning And Thinking Quick Start
+
+Use provider-specific options when you want a model to spend more or less effort on hidden reasoning or thinking. The library does not expose a single top-level reasoning knob because provider behavior differs too much across model families.
+
+```ts
+await client.complete({
+  model: 'gpt-5',
+  maxTokens: 800,
+  messages: [{ content: 'Audit this rollout plan.', role: 'user' }],
+  providerOptions: {
+    openai: {
+      reasoning: {
+        effort: 'medium',
+        summary: 'auto',
+      },
+    },
+  },
+});
+```
+
+```ts
+await client.complete({
+  model: 'claude-sonnet-4-6',
+  maxTokens: 1200,
+  messages: [{ content: 'Review this architecture decision.', role: 'user' }],
+  providerOptions: {
+    anthropic: {
+      effort: 'medium',
+      thinking: { type: 'adaptive', display: 'omitted' },
+    },
+  },
+});
+```
+
+```ts
+await client.complete({
+  model: 'gemini-2.5-flash',
+  maxTokens: 700,
+  messages: [{ content: 'Find edge cases in this workflow.', role: 'user' }],
+  providerOptions: {
+    google: {
+      thinking: { budgetTokens: 0, includeThoughts: false },
+    },
+  },
+});
+```
+
+Provider-reported reasoning or thought-token counts are exposed as `usage.reasoningTokens` when available. Reasoning summaries and thoughts are not merged into `response.text`.
 
 ## Typical Adoption Path
 
