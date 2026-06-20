@@ -66,6 +66,7 @@ If you are opening the repository for the first time, read the pages below in or
 - Production setup guide: [PRODUCTION_SETUP.md](./PRODUCTION_SETUP.md)
 - Speech guide: [SPEECH.md](./SPEECH.md)
 - Agent instructions and skills guide: [AGENT_INSTRUCTIONS_AND_SKILLS.md](./AGENT_INSTRUCTIONS_AND_SKILLS.md)
+- Reasoning efforts report: [REASONING_EFFORTS_REPORT.md](./REASONING_EFFORTS_REPORT.md)
 - Speech API research report: [SPEECH_API_RESEARCH_REPORT.md](./SPEECH_API_RESEARCH_REPORT.md)
 
 ## Current Provider Notes
