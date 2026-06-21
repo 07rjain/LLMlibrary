@@ -489,7 +489,7 @@ await client.complete({
 });
 ```
 
-When the provider returns reasoning or thought-token counts, they are exposed as `response.usage.reasoningTokens`. Reasoning summaries and thoughts are not merged into `response.text`; see [docs/COMPLETIONS_AND_STREAMING.md](docs/COMPLETIONS_AND_STREAMING.md#reasoning-and-thinking-controls) and [docs/REASONING_EFFORTS_REPORT.md](docs/REASONING_EFFORTS_REPORT.md) for the tradeoffs.
+When the provider returns reasoning or thought-token counts, they are exposed as `response.usage.reasoningTokens`. Gemini reports thought tokens separately from visible output tokens, so the library adds those thought tokens to `response.usage.costUSD` at the model's output-token rate. OpenAI reports reasoning tokens inside `output_tokens`, so those are not double-counted. Reasoning summaries and thoughts are not merged into `response.text`; see [docs/COMPLETIONS_AND_STREAMING.md](docs/COMPLETIONS_AND_STREAMING.md#reasoning-and-thinking-controls) and [docs/REASONING_EFFORTS_REPORT.md](docs/REASONING_EFFORTS_REPORT.md) for the tradeoffs.
 
 ## Prompt Caching Status
 

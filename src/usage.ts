@@ -33,6 +33,7 @@ export interface UsageBreakdown {
   totalCostUSD: number;
   totalInputTokens: number;
   totalOutputTokens: number;
+  totalReasoningTokens?: number;
 }
 
 /** Aggregate usage totals returned by `client.getUsage()`. */
@@ -43,6 +44,7 @@ export interface UsageSummary {
   totalCostUSD: number;
   totalInputTokens: number;
   totalOutputTokens: number;
+  totalReasoningTokens?: number;
 }
 
 export interface SpeechUsageQuery {
@@ -131,6 +133,7 @@ interface PostgresUsageSummaryRow {
   total_cost_usd: number | string;
   total_input_tokens: number | string;
   total_output_tokens: number | string;
+  total_reasoning_tokens: number | string;
 }
 
 interface PostgresSpeechUsageSummaryRow {
@@ -257,6 +260,7 @@ export class PostgresUsageLogger implements UsageLogger {
           cached_tokens INTEGER NOT NULL,
           cached_read_tokens INTEGER NOT NULL DEFAULT 0,
           cached_write_tokens INTEGER NOT NULL DEFAULT 0,
+          reasoning_tokens INTEGER NOT NULL DEFAULT 0,
           cost_usd DOUBLE PRECISION NOT NULL,
           finish_reason TEXT NOT NULL,
           duration_ms INTEGER NOT NULL,
@@ -265,6 +269,10 @@ export class PostgresUsageLogger implements UsageLogger {
           bot_id TEXT,
           routing_decision TEXT
         )`,
+      );
+      await pool.query(
+        `ALTER TABLE ${this.qualifiedTableName()}
+         ADD COLUMN IF NOT EXISTS reasoning_tokens INTEGER NOT NULL DEFAULT 0`,
       );
       await pool.query(
         `CREATE INDEX IF NOT EXISTS ${quoteIdentifier(
@@ -367,6 +375,7 @@ export class PostgresUsageLogger implements UsageLogger {
          COUNT(*) AS request_count,
          COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
          COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+         COALESCE(SUM(reasoning_tokens), 0) AS total_reasoning_tokens,
          COALESCE(SUM(cached_tokens), 0) AS total_cached_tokens,
          COALESCE(SUM(cost_usd), 0) AS total_cost_usd
        FROM ${this.qualifiedTableName()}
@@ -384,6 +393,7 @@ export class PostgresUsageLogger implements UsageLogger {
       totalCostUSD: Number(row.total_cost_usd),
       totalInputTokens: Number(row.total_input_tokens),
       totalOutputTokens: Number(row.total_output_tokens),
+      totalReasoningTokens: Number(row.total_reasoning_tokens),
     }));
 
     return breakdown.reduce<UsageSummary>(
@@ -394,6 +404,7 @@ export class PostgresUsageLogger implements UsageLogger {
         summary.totalCostUSD += row.totalCostUSD;
         summary.totalInputTokens += row.totalInputTokens;
         summary.totalOutputTokens += row.totalOutputTokens;
+        summary.totalReasoningTokens = (summary.totalReasoningTokens ?? 0) + (row.totalReasoningTokens ?? 0);
         return summary;
       },
       {
@@ -403,6 +414,7 @@ export class PostgresUsageLogger implements UsageLogger {
         totalCostUSD: 0,
         totalInputTokens: 0,
         totalOutputTokens: 0,
+        totalReasoningTokens: 0,
       },
     );
   }
@@ -513,6 +525,7 @@ export class PostgresUsageLogger implements UsageLogger {
         'cached_tokens',
         'cached_read_tokens',
         'cached_write_tokens',
+        'reasoning_tokens',
         'cost_usd',
         'finish_reason',
         'duration_ms',
@@ -533,6 +546,7 @@ export class PostgresUsageLogger implements UsageLogger {
           event.cachedTokens,
           event.cachedReadTokens ?? 0,
           event.cachedWriteTokens ?? 0,
+          event.reasoningTokens ?? 0,
           event.costUSD,
           event.finishReason,
           event.durationMs,
@@ -820,6 +834,7 @@ export function exportUsageSummary(
       'requestCount',
       'totalInputTokens',
       'totalOutputTokens',
+      'totalReasoningTokens',
       'totalCachedTokens',
       'totalCostUSD',
     ].join(','),
@@ -833,6 +848,7 @@ export function exportUsageSummary(
         row.requestCount,
         row.totalInputTokens,
         row.totalOutputTokens,
+        row.totalReasoningTokens ?? 0,
         row.totalCachedTokens,
         row.totalCostUSD.toFixed(6),
       ]

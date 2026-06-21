@@ -250,6 +250,7 @@ export class SessionApi {
                     totalCostUSD: 0,
                     totalInputTokens: 0,
                     totalOutputTokens: 0,
+                    totalReasoningTokens: 0,
                 }
                 : {}),
         };
@@ -317,6 +318,7 @@ export class SessionApi {
                 costUSD: record.snapshot.totalCostUSD,
                 inputTokens: record.snapshot.totalInputTokens,
                 outputTokens: record.snapshot.totalOutputTokens,
+                reasoningTokens: record.snapshot.totalReasoningTokens ?? 0,
             };
         }
         if (include.has('usage')) {

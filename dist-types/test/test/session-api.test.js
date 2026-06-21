@@ -79,6 +79,7 @@ describe('SessionApi', () => {
         expect(messageResponse.status).toBe(200);
         expect(messaged.response.text).toBe('First reply');
         expect(messaged.session.totals.costUSD).toBe(0.01);
+        expect(messaged.session.totals.reasoningTokens).toBe(1);
         expect(messaged.session.usage?.requestCount).toBe(1);
         expect(messaged.session.messages).toEqual([
             { content: 'Be brief.', pinned: true, role: 'system' },
@@ -91,6 +92,7 @@ describe('SessionApi', () => {
         expect(inspectResponse.status).toBe(200);
         expect(inspected.session.id).toBe('session-1');
         expect(inspected.session.totals.costUSD).toBe(0.01);
+        expect(inspected.session.totals.reasoningTokens).toBe(1);
         expect(inspected.session.usage?.requestCount).toBe(1);
         expect(inspected.session.messages).toEqual(messaged.session.messages);
         const pagedMessagesResponse = await api.handle(new Request('https://example.test/sessions/session-1/messages?limit=2'));
@@ -579,6 +581,7 @@ describe('SessionApi', () => {
             totalCostUSD: 0.25,
             totalInputTokens: 11,
             totalOutputTokens: 5,
+            totalReasoningTokens: 3,
             updatedAt: '2026-04-15T10:00:00.000Z',
         }, {});
         const forkPreserveUsageResponse = await api.handle(jsonRequest('https://example.test/v1/sessions/usage-preserved/fork', 'POST', {
@@ -588,6 +591,7 @@ describe('SessionApi', () => {
         const forkPreserveUsagePayload = (await forkPreserveUsageResponse.json());
         expect(forkPreserveUsageResponse.status).toBe(201);
         expect(forkPreserveUsagePayload.session.totals.costUSD).toBe(0.25);
+        expect(forkPreserveUsagePayload.session.totals.reasoningTokens).toBe(3);
         const missingDeleteResponse = await api.handle(new Request('https://example.test/v1/sessions/missing', {
             method: 'DELETE',
         }));
@@ -692,6 +696,7 @@ function mockResponse(text, costUSD) {
             costUSD,
             inputTokens: 4,
             outputTokens: 2,
+            reasoningTokens: 1,
         },
     };
 }

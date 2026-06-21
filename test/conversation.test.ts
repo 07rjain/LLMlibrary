@@ -123,6 +123,7 @@ describe('Conversation', () => {
           costUSD: 0.01,
           inputTokens: 10,
           outputTokens: 5,
+          reasoningTokens: 3,
         },
       })),
       stream: vi.fn(),
@@ -153,9 +154,11 @@ describe('Conversation', () => {
       costUSD: 0.01,
       inputTokens: 10,
       outputTokens: 5,
+      reasoningTokens: 3,
     });
     expect(stored?.snapshot.messages).toEqual(conversation.history);
     expect(stored?.meta.totalCostUSD).toBe(0.01);
+    expect(stored?.snapshot.totalReasoningTokens).toBe(3);
   });
 
   it('streams responses and commits state on done', async () => {

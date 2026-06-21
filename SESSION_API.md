@@ -63,6 +63,7 @@ Returns `201` with:
 - `session.updatedAt`
 - `session.messages`
 - `session.totals`
+  Stored cost, input-token, output-token, reasoning-token, and cached-token totals
 
 ### `POST /sessions/{id}/message`
 
@@ -241,7 +242,7 @@ Mapping:
 - `usage`
   Equivalent intent: include aggregated usage data when the configured usage logger supports aggregation
 - `cost`
-  Equivalent intent: include stored session totals such as token/cost aggregates
+  Equivalent intent: include stored session totals such as token/cost aggregates, including reasoning tokens when available
 
 ## Error Model
 

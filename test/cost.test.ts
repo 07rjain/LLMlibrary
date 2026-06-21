@@ -79,6 +79,26 @@ describe('cost utilities', () => {
     ).toBe(0);
   });
 
+  it('prices separately billable reasoning tokens at the output rate', () => {
+    const gemini = registry.get('gemini-2.5-flash');
+    const expected =
+      (100 / 1_000_000) * gemini.inputPrice +
+      (20 / 1_000_000) * gemini.outputPrice +
+      (80 / 1_000_000) * gemini.outputPrice;
+
+    expect(
+      calcCostUSD(
+        {
+          billableReasoningTokens: 80,
+          inputTokens: 100,
+          model: gemini.id,
+          outputTokens: 20,
+        },
+        registry,
+      ),
+    ).toBeCloseTo(expected, 9);
+  });
+
   it('formats costs consistently', () => {
     expect(formatCost(0)).toBe('$0.00');
     expect(formatCost(0.00234)).toBe('$0.0023');
@@ -134,13 +154,16 @@ describe('cost utilities', () => {
         cachedContentTokenCount: 12,
         candidatesTokenCount: 50,
         promptTokenCount: 100,
+        thoughtsTokenCount: 7,
       }),
     ).toEqual({
       billedInputTokens: 88,
+      billableReasoningTokens: 7,
       cachedReadTokens: 12,
       cachedTokens: 12,
       inputTokens: 100,
       outputTokens: 50,
+      reasoningTokens: 7,
     });
 
     expect(anthropicUsageToCanonical(undefined)).toEqual({
@@ -227,6 +250,25 @@ describe('cost utilities', () => {
     expect(usageWithCost(openai, usage).costUSD).toBeCloseTo(expected, 9);
   });
 
+  it('does not double-count OpenAI reasoning tokens already included in output tokens', () => {
+    const openai = registry.get('o3');
+    const usage = openaiUsageToCanonical({
+      input_tokens: 100,
+      output_tokens: 50,
+      output_tokens_details: { reasoning_tokens: 40 },
+    });
+    const expected =
+      (100 / 1_000_000) * openai.inputPrice +
+      (50 / 1_000_000) * openai.outputPrice;
+
+    expect(usageWithCost(openai, usage)).toMatchObject({
+      costUSD: expect.closeTo(expected, 9),
+      outputTokens: 50,
+      reasoningTokens: 40,
+    });
+    expect(usageWithCost(openai, usage)).not.toHaveProperty('billableReasoningTokens');
+  });
+
   it('does not double-count cached Gemini input tokens', () => {
     const gemini = registry.get('gemini-2.5-flash');
     const usage = geminiUsageToCanonical({
@@ -240,6 +282,25 @@ describe('cost utilities', () => {
       (50 / 1_000_000) * gemini.outputPrice;
 
     expect(usageWithCost(gemini, usage).costUSD).toBeCloseTo(expected, 9);
+  });
+
+  it('prices Gemini thoughts without exposing the internal billable reasoning field', () => {
+    const gemini = registry.get('gemini-2.5-flash');
+    const usage = geminiUsageToCanonical({
+      cachedContentTokenCount: 12,
+      candidatesTokenCount: 50,
+      promptTokenCount: 100,
+      thoughtsTokenCount: 25,
+    });
+    const expected =
+      (88 / 1_000_000) * gemini.inputPrice +
+      (12 / 1_000_000) * (gemini.cacheReadPrice ?? gemini.inputPrice * 0.1) +
+      ((50 + 25) / 1_000_000) * gemini.outputPrice;
+    const withCost = usageWithCost(gemini, usage);
+
+    expect(withCost.costUSD).toBeCloseTo(expected, 9);
+    expect(withCost.reasoningTokens).toBe(25);
+    expect(withCost).not.toHaveProperty('billableReasoningTokens');
   });
 
   it('calculates text-to-speech costs from text and audio billing units', () => {

@@ -7,6 +7,7 @@ export function calcCostUSD(input, registry = new ModelRegistry()) {
     const billedInputTokens = input.billedInputTokens ?? input.inputTokens;
     return roundUsd(costForTokens(billedInputTokens, model.inputPrice) +
         costForTokens(input.outputTokens, model.outputPrice) +
+        costForTokens(input.billableReasoningTokens ?? 0, model.outputPrice) +
         costForTokens(input.cachedReadTokens ?? 0, model.cacheReadPrice ?? model.inputPrice * 0.1) +
         costForTokens(input.cachedWriteTokens ?? 0, model.cacheWritePrice ?? model.inputPrice * 1.25));
 }
@@ -184,11 +185,13 @@ export function geminiUsageToCanonical(usage) {
         outputTokens: usage?.candidatesTokenCount ?? 0,
     };
     if (usage?.thoughtsTokenCount !== undefined) {
+        counts.billableReasoningTokens = usage.thoughtsTokenCount;
         counts.reasoningTokens = usage.thoughtsTokenCount;
     }
     return counts;
 }
 export function usageWithCost(model, usage) {
+    const { billableReasoningTokens, ...publicUsage } = usage;
     const registry = new ModelRegistry({
         [model.id]: toRegistryEntry(model),
     });
@@ -200,6 +203,9 @@ export function usageWithCost(model, usage) {
     if (usage.billedInputTokens !== undefined) {
         costInput.billedInputTokens = usage.billedInputTokens;
     }
+    if (billableReasoningTokens !== undefined) {
+        costInput.billableReasoningTokens = billableReasoningTokens;
+    }
     if (usage.cachedReadTokens !== undefined) {
         costInput.cachedReadTokens = usage.cachedReadTokens;
     }
@@ -208,7 +214,7 @@ export function usageWithCost(model, usage) {
     }
     const costUSD = calcCostUSD(costInput, registry);
     return {
-        ...usage,
+        ...publicUsage,
         cost: formatCost(costUSD),
         costUSD,
     };

@@ -44,6 +44,7 @@ export class Conversation {
     totalCostUSD = 0;
     totalInputTokens = 0;
     totalOutputTokens = 0;
+    totalReasoningTokens = 0;
     updatedAt;
     constructor(client, options = {}) {
         this.budgetExceededAction = options.budgetExceededAction ?? 'throw';
@@ -86,6 +87,7 @@ export class Conversation {
             costUSD: this.totalCostUSD,
             inputTokens: this.totalInputTokens,
             outputTokens: this.totalOutputTokens,
+            reasoningTokens: this.totalReasoningTokens,
         };
     }
     /** Appends a user turn, executes the model/tool loop, and commits state. */
@@ -139,6 +141,7 @@ export class Conversation {
             totalCostUSD: this.totalCostUSD,
             totalInputTokens: this.totalInputTokens,
             totalOutputTokens: this.totalOutputTokens,
+            totalReasoningTokens: this.totalReasoningTokens,
             updatedAt: this.updatedAt,
         };
     }
@@ -161,6 +164,7 @@ export class Conversation {
             `| Total Cost | ${this.cost} |`,
             `| Input Tokens | ${this.totalInputTokens} |`,
             `| Output Tokens | ${this.totalOutputTokens} |`,
+            `| Reasoning Tokens | ${this.totalReasoningTokens} |`,
             `| Cached Tokens | ${this.totalCachedTokens} |`,
         ];
         if (this.model) {
@@ -223,6 +227,7 @@ export class Conversation {
         conversation.totalCostUSD = snapshot.totalCostUSD;
         conversation.totalInputTokens = snapshot.totalInputTokens;
         conversation.totalOutputTokens = snapshot.totalOutputTokens;
+        conversation.totalReasoningTokens = snapshot.totalReasoningTokens ?? 0;
         conversation.updatedAt = snapshot.updatedAt;
         return conversation;
     }
@@ -231,6 +236,7 @@ export class Conversation {
         this.totalCostUSD += usage.costUSD;
         this.totalInputTokens += usage.inputTokens;
         this.totalOutputTokens += usage.outputTokens;
+        this.totalReasoningTokens += usage.reasoningTokens ?? 0;
         this.updatedAt = new Date().toISOString();
     }
     async prepareMessages(userMessage) {
@@ -650,6 +656,7 @@ function accumulateUsage(total, next) {
     const costUSD = total.costUSD + next.costUSD;
     const cachedReadTokens = sumOptionalMetric(total.cachedReadTokens, next.cachedReadTokens);
     const cachedWriteTokens = sumOptionalMetric(total.cachedWriteTokens, next.cachedWriteTokens);
+    const reasoningTokens = sumOptionalMetric(total.reasoningTokens, next.reasoningTokens);
     return {
         cachedTokens: total.cachedTokens + next.cachedTokens,
         cost: formatCost(costUSD),
@@ -658,6 +665,7 @@ function accumulateUsage(total, next) {
         outputTokens: total.outputTokens + next.outputTokens,
         ...(cachedReadTokens !== undefined ? { cachedReadTokens } : {}),
         ...(cachedWriteTokens !== undefined ? { cachedWriteTokens } : {}),
+        ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     };
 }
 function capitaliseRole(role) {

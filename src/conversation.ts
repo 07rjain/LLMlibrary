@@ -88,6 +88,7 @@ export interface ConversationSnapshot {
   totalCostUSD: number;
   totalInputTokens: number;
   totalOutputTokens: number;
+  totalReasoningTokens?: number;
   updatedAt: string;
 }
 
@@ -154,6 +155,7 @@ export class Conversation {
   private totalCostUSD = 0;
   private totalInputTokens = 0;
   private totalOutputTokens = 0;
+  private totalReasoningTokens = 0;
   private updatedAt: string;
 
   constructor(client: ConversationClient, options: ConversationOptions = {}) {
@@ -200,6 +202,7 @@ export class Conversation {
     costUSD: number;
     inputTokens: number;
     outputTokens: number;
+    reasoningTokens: number;
   } {
     return {
       cachedTokens: this.totalCachedTokens,
@@ -207,6 +210,7 @@ export class Conversation {
       costUSD: this.totalCostUSD,
       inputTokens: this.totalInputTokens,
       outputTokens: this.totalOutputTokens,
+      reasoningTokens: this.totalReasoningTokens,
     };
   }
 
@@ -277,6 +281,7 @@ export class Conversation {
       totalCostUSD: this.totalCostUSD,
       totalInputTokens: this.totalInputTokens,
       totalOutputTokens: this.totalOutputTokens,
+      totalReasoningTokens: this.totalReasoningTokens,
       updatedAt: this.updatedAt,
     };
   }
@@ -301,6 +306,7 @@ export class Conversation {
       `| Total Cost | ${this.cost} |`,
       `| Input Tokens | ${this.totalInputTokens} |`,
       `| Output Tokens | ${this.totalOutputTokens} |`,
+      `| Reasoning Tokens | ${this.totalReasoningTokens} |`,
       `| Cached Tokens | ${this.totalCachedTokens} |`,
     ];
 
@@ -374,6 +380,7 @@ export class Conversation {
     conversation.totalCostUSD = snapshot.totalCostUSD;
     conversation.totalInputTokens = snapshot.totalInputTokens;
     conversation.totalOutputTokens = snapshot.totalOutputTokens;
+    conversation.totalReasoningTokens = snapshot.totalReasoningTokens ?? 0;
     conversation.updatedAt = snapshot.updatedAt;
     return conversation;
   }
@@ -383,6 +390,7 @@ export class Conversation {
     this.totalCostUSD += usage.costUSD;
     this.totalInputTokens += usage.inputTokens;
     this.totalOutputTokens += usage.outputTokens;
+    this.totalReasoningTokens += usage.reasoningTokens ?? 0;
     this.updatedAt = new Date().toISOString();
   }
 
@@ -981,6 +989,7 @@ function accumulateUsage(total: UsageMetrics, next: UsageMetrics): UsageMetrics 
   const costUSD = total.costUSD + next.costUSD;
   const cachedReadTokens = sumOptionalMetric(total.cachedReadTokens, next.cachedReadTokens);
   const cachedWriteTokens = sumOptionalMetric(total.cachedWriteTokens, next.cachedWriteTokens);
+  const reasoningTokens = sumOptionalMetric(total.reasoningTokens, next.reasoningTokens);
 
   return {
     cachedTokens: total.cachedTokens + next.cachedTokens,
@@ -990,6 +999,7 @@ function accumulateUsage(total: UsageMetrics, next: UsageMetrics): UsageMetrics 
     outputTokens: total.outputTokens + next.outputTokens,
     ...(cachedReadTokens !== undefined ? { cachedReadTokens } : {}),
     ...(cachedWriteTokens !== undefined ? { cachedWriteTokens } : {}),
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
   };
 }
 

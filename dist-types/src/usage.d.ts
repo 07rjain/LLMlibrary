@@ -19,6 +19,7 @@ export interface UsageBreakdown {
     totalCostUSD: number;
     totalInputTokens: number;
     totalOutputTokens: number;
+    totalReasoningTokens?: number;
 }
 /** Aggregate usage totals returned by `client.getUsage()`. */
 export interface UsageSummary {
@@ -28,6 +29,7 @@ export interface UsageSummary {
     totalCostUSD: number;
     totalInputTokens: number;
     totalOutputTokens: number;
+    totalReasoningTokens?: number;
 }
 export interface SpeechUsageQuery {
     botId?: string;

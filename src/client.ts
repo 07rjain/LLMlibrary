@@ -926,8 +926,12 @@ export class LLMClient {
       : options.messages;
     const estimatedInputTokens = estimateMessageTokens(estimatedMessages);
     const estimatedOutputTokens = options.maxTokens;
+    const estimatedReasoningTokens = estimateBillableReasoningTokens(options);
     const estimatedCostUSD = calcCostUSD(
       {
+        ...(estimatedReasoningTokens > 0
+          ? { billableReasoningTokens: estimatedReasoningTokens }
+          : {}),
         inputTokens: estimatedInputTokens,
         model: options.model,
         outputTokens: estimatedOutputTokens,
@@ -949,6 +953,7 @@ export class LLMClient {
           estimatedCostUSD,
           estimatedInputTokens,
           estimatedOutputTokens,
+          ...(estimatedReasoningTokens > 0 ? { estimatedReasoningTokens } : {}),
         },
         model: options.model,
         provider: options.provider,
@@ -1609,6 +1614,22 @@ function buildUsageEvent(input: {
     ...(input.options.sessionId !== undefined ? { sessionId: input.options.sessionId } : {}),
     ...(input.options.tenantId !== undefined ? { tenantId: input.options.tenantId } : {}),
   };
+}
+
+function estimateBillableReasoningTokens(options: {
+  provider: CanonicalProvider;
+  providerOptions?: ProviderOptions;
+}): number {
+  if (options.provider !== 'google') {
+    return 0;
+  }
+
+  const thinkingBudget = options.providerOptions?.google?.thinking?.budgetTokens;
+  if (thinkingBudget === undefined || thinkingBudget <= 0) {
+    return 0;
+  }
+
+  return thinkingBudget;
 }
 
 function joinRoutingDecision(attemptedRoutes: string[]): string | undefined {

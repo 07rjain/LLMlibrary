@@ -56,7 +56,7 @@ The `Conversation` instance exposes several useful methods:
 - `conversation.toMessages()`
   Full message list, including the pinned system prompt
 - `conversation.totals`
-  Aggregate input tokens, output tokens, cached tokens, and cost
+  Aggregate input tokens, output tokens, reasoning tokens, cached tokens, and cost
 - `conversation.toMarkdown()`
   Markdown transcript export
 - `conversation.serialise()`

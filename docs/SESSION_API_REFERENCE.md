@@ -72,6 +72,7 @@ Returns `201` with:
 - `session.updatedAt`
 - `session.messages`
 - `session.totals`
+  Stored cost, input-token, output-token, reasoning-token, and cached-token totals
 
 ### `POST /sessions/{id}/message`
 

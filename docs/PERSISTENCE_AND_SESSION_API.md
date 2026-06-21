@@ -132,6 +132,7 @@ const csv = await client.exportUsage('csv', {
 });
 
 console.log(usage.totalCostUSD);
+console.log(usage.totalReasoningTokens ?? 0);
 console.log(csv);
 ```
 

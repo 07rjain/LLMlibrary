@@ -57,6 +57,7 @@ export interface ConversationSnapshot {
     totalCostUSD: number;
     totalInputTokens: number;
     totalOutputTokens: number;
+    totalReasoningTokens?: number;
     updatedAt: string;
 }
 /** Configuration for a new or restored `Conversation`. */
@@ -121,6 +122,7 @@ export declare class Conversation {
     private totalCostUSD;
     private totalInputTokens;
     private totalOutputTokens;
+    private totalReasoningTokens;
     private updatedAt;
     constructor(client: ConversationClient, options?: ConversationOptions);
     get cost(): string;
@@ -132,6 +134,7 @@ export declare class Conversation {
         costUSD: number;
         inputTokens: number;
         outputTokens: number;
+        reasoningTokens: number;
     };
     /** Appends a user turn, executes the model/tool loop, and commits state. */
     send(input: CanonicalMessage['content'], options?: {

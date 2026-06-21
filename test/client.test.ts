@@ -1797,6 +1797,35 @@ describe('LLMClient', () => {
     expect(fetchImplementation).not.toHaveBeenCalled();
   });
 
+  it('includes explicit Gemini thinking budgets in per-call budget guards', async () => {
+    const fetchImplementation = vi.fn();
+    const client = new LLMClient({
+      defaultModel: 'gemini-2.5-flash',
+      fetchImplementation,
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.complete({
+        budgetUsd: 0.0001,
+        maxTokens: 1,
+        messages: [{ content: 'Hello', role: 'user' }],
+        providerOptions: {
+          google: {
+            thinking: {
+              budgetTokens: 1000,
+            },
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      details: expect.objectContaining({
+        estimatedReasoningTokens: 1000,
+      }),
+    });
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
   it('can warn and continue when a request exceeds the per-call budget', async () => {
     const onWarning = vi.fn();
     const fetchImplementation = vi.fn(async () =>
@@ -1927,6 +1956,7 @@ describe('LLMClient', () => {
           totalCostUSD: 0.03,
           totalInputTokens: 20,
           totalOutputTokens: 8,
+          totalReasoningTokens: 3,
         },
       ],
       requestCount: 2,
@@ -1934,6 +1964,7 @@ describe('LLMClient', () => {
       totalCostUSD: 0.03,
       totalInputTokens: 20,
       totalOutputTokens: 8,
+      totalReasoningTokens: 3,
     };
     const usageLogger = {
       getUsage: vi.fn(async () => summary),
@@ -1965,6 +1996,7 @@ describe('LLMClient', () => {
             totalCostUSD: 0.01,
             totalInputTokens: 10,
             totalOutputTokens: 4,
+            totalReasoningTokens: 2,
           },
         ],
         requestCount: 1,
@@ -1972,6 +2004,7 @@ describe('LLMClient', () => {
         totalCostUSD: 0.01,
         totalInputTokens: 10,
         totalOutputTokens: 4,
+        totalReasoningTokens: 2,
       })),
       log: vi.fn(async () => undefined),
     };
@@ -1980,7 +2013,7 @@ describe('LLMClient', () => {
     });
 
     await expect(client.exportUsage('csv')).resolves.toContain(
-      'provider,model,requestCount,totalInputTokens,totalOutputTokens,totalCachedTokens,totalCostUSD',
+      'provider,model,requestCount,totalInputTokens,totalOutputTokens,totalReasoningTokens,totalCachedTokens,totalCostUSD',
     );
   });
 

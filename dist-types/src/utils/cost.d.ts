@@ -2,6 +2,7 @@ import { ModelRegistry } from '../models/registry.js';
 import type { ModelInfo, SpeechBillingUnits, SpeechCostLineItem, SpeechUsageMetrics, UsageMetrics } from '../types.js';
 export interface CostCalculationInput {
     billedInputTokens?: number;
+    billableReasoningTokens?: number;
     cachedReadTokens?: number;
     cachedWriteTokens?: number;
     inputTokens: number;
@@ -10,6 +11,7 @@ export interface CostCalculationInput {
 }
 export interface CanonicalUsageCounts {
     billedInputTokens?: number;
+    billableReasoningTokens?: number;
     cachedReadTokens?: number;
     cachedTokens: number;
     cachedWriteTokens?: number;

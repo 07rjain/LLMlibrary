@@ -10,6 +10,7 @@ import type {
 
 export interface CostCalculationInput {
   billedInputTokens?: number;
+  billableReasoningTokens?: number;
   cachedReadTokens?: number;
   cachedWriteTokens?: number;
   inputTokens: number;
@@ -19,6 +20,7 @@ export interface CostCalculationInput {
 
 export interface CanonicalUsageCounts {
   billedInputTokens?: number;
+  billableReasoningTokens?: number;
   cachedReadTokens?: number;
   cachedTokens: number;
   cachedWriteTokens?: number;
@@ -95,6 +97,7 @@ export function calcCostUSD(
   return roundUsd(
     costForTokens(billedInputTokens, model.inputPrice) +
       costForTokens(input.outputTokens, model.outputPrice) +
+      costForTokens(input.billableReasoningTokens ?? 0, model.outputPrice) +
       costForTokens(
         input.cachedReadTokens ?? 0,
         model.cacheReadPrice ?? model.inputPrice * 0.1,
@@ -312,6 +315,7 @@ export function geminiUsageToCanonical(
     outputTokens: usage?.candidatesTokenCount ?? 0,
   };
   if (usage?.thoughtsTokenCount !== undefined) {
+    counts.billableReasoningTokens = usage.thoughtsTokenCount;
     counts.reasoningTokens = usage.thoughtsTokenCount;
   }
   return counts;
@@ -321,6 +325,7 @@ export function usageWithCost(
   model: ModelInfo,
   usage: CanonicalUsageCounts,
 ): UsageMetrics {
+  const { billableReasoningTokens, ...publicUsage } = usage;
   const registry = new ModelRegistry({
     [model.id]: toRegistryEntry(model),
   });
@@ -334,6 +339,10 @@ export function usageWithCost(
     costInput.billedInputTokens = usage.billedInputTokens;
   }
 
+  if (billableReasoningTokens !== undefined) {
+    costInput.billableReasoningTokens = billableReasoningTokens;
+  }
+
   if (usage.cachedReadTokens !== undefined) {
     costInput.cachedReadTokens = usage.cachedReadTokens;
   }
@@ -345,7 +354,7 @@ export function usageWithCost(
   const costUSD = calcCostUSD(costInput, registry);
 
   return {
-    ...usage,
+    ...publicUsage,
     cost: formatCost(costUSD),
     costUSD,
   };

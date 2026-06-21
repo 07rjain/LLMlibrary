@@ -7,7 +7,10 @@ Updated: 2026-04-25
 
 - Cost outputs are estimates derived from [src/models/prices.json](../src/models/prices.json) plus provider token usage returned at runtime.
 - The library treats provider-reported usage as authoritative whenever the provider returns token counts.
+- Reasoning tokens are exposed as `usage.reasoningTokens` when the provider reports them. Gemini thought tokens are billed into `usage.costUSD` at the model output-token rate because Gemini reports them separately from visible candidate output tokens. OpenAI reasoning tokens are already included in provider `output_tokens`, so they are tracked but not billed a second time.
 - `Conversation` totals and `UsageLogger` aggregates accumulate those estimated USD values, not provider billing exports.
+- `Conversation.totals`, Session API cost views, and `client.getUsage()` include reasoning-token totals when available.
+- Per-call `budgetUsd` preflight estimates include explicit Gemini `providerOptions.google.thinking.budgetTokens` as separately billable reasoning tokens. Provider-selected automatic thinking remains an estimate until the provider returns final usage.
 - When provider pricing is tiered by prompt size, execution mode, or preview/stable status, the checked-in registry stores one explicit baseline price per model. Those cases should be treated as routing-grade estimates, not invoice-grade pricing.
 
 ## Token Counting

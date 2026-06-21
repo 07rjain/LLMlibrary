@@ -109,7 +109,7 @@ describe('SessionApi', () => {
       response: { text: string };
       session: {
         messages: Array<{ content: unknown; role: string }>;
-        totals: { costUSD: number };
+        totals: { costUSD: number; reasoningTokens: number };
         usage: { requestCount: number } | null;
       };
     };
@@ -117,6 +117,7 @@ describe('SessionApi', () => {
     expect(messageResponse.status).toBe(200);
     expect(messaged.response.text).toBe('First reply');
     expect(messaged.session.totals.costUSD).toBe(0.01);
+    expect(messaged.session.totals.reasoningTokens).toBe(1);
     expect(messaged.session.usage?.requestCount).toBe(1);
     expect(messaged.session.messages).toEqual([
       { content: 'Be brief.', pinned: true, role: 'system' },
@@ -132,7 +133,7 @@ describe('SessionApi', () => {
       session: {
         id: string;
         messages: Array<{ content: unknown; role: string }>;
-        totals: { costUSD: number };
+        totals: { costUSD: number; reasoningTokens: number };
         usage: { requestCount: number } | null;
       };
     };
@@ -140,6 +141,7 @@ describe('SessionApi', () => {
     expect(inspectResponse.status).toBe(200);
     expect(inspected.session.id).toBe('session-1');
     expect(inspected.session.totals.costUSD).toBe(0.01);
+    expect(inspected.session.totals.reasoningTokens).toBe(1);
     expect(inspected.session.usage?.requestCount).toBe(1);
     expect(inspected.session.messages).toEqual(messaged.session.messages);
 
@@ -807,6 +809,7 @@ describe('SessionApi', () => {
         totalCostUSD: 0.25,
         totalInputTokens: 11,
         totalOutputTokens: 5,
+        totalReasoningTokens: 3,
         updatedAt: '2026-04-15T10:00:00.000Z',
       },
       {},
@@ -819,11 +822,12 @@ describe('SessionApi', () => {
       }),
     );
     const forkPreserveUsagePayload = (await forkPreserveUsageResponse.json()) as {
-      session: { totals: { costUSD: number } };
+      session: { totals: { costUSD: number; reasoningTokens: number } };
     };
 
     expect(forkPreserveUsageResponse.status).toBe(201);
     expect(forkPreserveUsagePayload.session.totals.costUSD).toBe(0.25);
+    expect(forkPreserveUsagePayload.session.totals.reasoningTokens).toBe(3);
 
     const missingDeleteResponse = await api.handle(
       new Request('https://example.test/v1/sessions/missing', {
@@ -961,6 +965,7 @@ function mockResponse(text: string, costUSD: number) {
       costUSD,
       inputTokens: 4,
       outputTokens: 2,
+      reasoningTokens: 1,
     },
   };
 }

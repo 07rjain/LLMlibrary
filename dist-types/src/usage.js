@@ -91,6 +91,7 @@ export class PostgresUsageLogger {
           cached_tokens INTEGER NOT NULL,
           cached_read_tokens INTEGER NOT NULL DEFAULT 0,
           cached_write_tokens INTEGER NOT NULL DEFAULT 0,
+          reasoning_tokens INTEGER NOT NULL DEFAULT 0,
           cost_usd DOUBLE PRECISION NOT NULL,
           finish_reason TEXT NOT NULL,
           duration_ms INTEGER NOT NULL,
@@ -99,6 +100,8 @@ export class PostgresUsageLogger {
           bot_id TEXT,
           routing_decision TEXT
         )`);
+            await pool.query(`ALTER TABLE ${this.qualifiedTableName()}
+         ADD COLUMN IF NOT EXISTS reasoning_tokens INTEGER NOT NULL DEFAULT 0`);
             await pool.query(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${this.tableName}_tenant_timestamp_idx`)} ON ${this.qualifiedTableName()} (tenant_id, timestamp DESC)`);
             await pool.query(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${this.tableName}_session_timestamp_idx`)} ON ${this.qualifiedTableName()} (session_id, timestamp DESC)`);
             await pool.query(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${this.tableName}_provider_model_timestamp_idx`)} ON ${this.qualifiedTableName()} (provider, model, timestamp DESC)`);
@@ -171,6 +174,7 @@ export class PostgresUsageLogger {
          COUNT(*) AS request_count,
          COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
          COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+         COALESCE(SUM(reasoning_tokens), 0) AS total_reasoning_tokens,
          COALESCE(SUM(cached_tokens), 0) AS total_cached_tokens,
          COALESCE(SUM(cost_usd), 0) AS total_cost_usd
        FROM ${this.qualifiedTableName()}
@@ -185,6 +189,7 @@ export class PostgresUsageLogger {
             totalCostUSD: Number(row.total_cost_usd),
             totalInputTokens: Number(row.total_input_tokens),
             totalOutputTokens: Number(row.total_output_tokens),
+            totalReasoningTokens: Number(row.total_reasoning_tokens),
         }));
         return breakdown.reduce((summary, row) => {
             summary.breakdown.push(row);
@@ -193,6 +198,7 @@ export class PostgresUsageLogger {
             summary.totalCostUSD += row.totalCostUSD;
             summary.totalInputTokens += row.totalInputTokens;
             summary.totalOutputTokens += row.totalOutputTokens;
+            summary.totalReasoningTokens = (summary.totalReasoningTokens ?? 0) + (row.totalReasoningTokens ?? 0);
             return summary;
         }, {
             breakdown: [],
@@ -201,6 +207,7 @@ export class PostgresUsageLogger {
             totalCostUSD: 0,
             totalInputTokens: 0,
             totalOutputTokens: 0,
+            totalReasoningTokens: 0,
         });
     }
     async getSpeechUsage(query = {}) {
@@ -290,6 +297,7 @@ export class PostgresUsageLogger {
                 'cached_tokens',
                 'cached_read_tokens',
                 'cached_write_tokens',
+                'reasoning_tokens',
                 'cost_usd',
                 'finish_reason',
                 'duration_ms',
@@ -301,7 +309,7 @@ export class PostgresUsageLogger {
             const values = [];
             const placeholders = batch.map((event, index) => {
                 const offset = index * columns.length;
-                values.push(event.timestamp, event.provider, event.model, event.inputTokens, event.outputTokens, event.cachedTokens, event.cachedReadTokens ?? 0, event.cachedWriteTokens ?? 0, event.costUSD, event.finishReason, event.durationMs, normalizeTenantId(event.tenantId), event.sessionId ?? null, event.botId ?? null, event.routingDecision ?? null);
+                values.push(event.timestamp, event.provider, event.model, event.inputTokens, event.outputTokens, event.cachedTokens, event.cachedReadTokens ?? 0, event.cachedWriteTokens ?? 0, event.reasoningTokens ?? 0, event.costUSD, event.finishReason, event.durationMs, normalizeTenantId(event.tenantId), event.sessionId ?? null, event.botId ?? null, event.routingDecision ?? null);
                 return `(${columns.map((_, columnIndex) => `$${offset + columnIndex + 1}`).join(', ')})`;
             });
             const pool = await this.getPool();
@@ -505,6 +513,7 @@ export function exportUsageSummary(summary, format) {
             'requestCount',
             'totalInputTokens',
             'totalOutputTokens',
+            'totalReasoningTokens',
             'totalCachedTokens',
             'totalCostUSD',
         ].join(','),
@@ -516,6 +525,7 @@ export function exportUsageSummary(summary, format) {
             row.requestCount,
             row.totalInputTokens,
             row.totalOutputTokens,
+            row.totalReasoningTokens ?? 0,
             row.totalCachedTokens,
             row.totalCostUSD.toFixed(6),
         ]

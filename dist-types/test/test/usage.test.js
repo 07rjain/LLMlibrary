@@ -83,6 +83,7 @@ describe('Usage logging', () => {
                 total_cost_usd: '0.03',
                 total_input_tokens: '30',
                 total_output_tokens: '12',
+                total_reasoning_tokens: '5',
             },
         ]);
         const summary = await logger.getUsage({ tenantId: 'tenant-1' });
@@ -98,6 +99,7 @@ describe('Usage logging', () => {
                     totalCostUSD: 0.03,
                     totalInputTokens: 30,
                     totalOutputTokens: 12,
+                    totalReasoningTokens: 5,
                 },
             ],
             requestCount: 2,
@@ -105,6 +107,7 @@ describe('Usage logging', () => {
             totalCostUSD: 0.03,
             totalInputTokens: 30,
             totalOutputTokens: 12,
+            totalReasoningTokens: 5,
         });
     });
     it('batches Postgres speech usage writes and aggregates speech summaries', async () => {
@@ -250,6 +253,7 @@ describe('Usage logging', () => {
                 total_cost_usd: '0.01',
                 total_input_tokens: '10',
                 total_output_tokens: '4',
+                total_reasoning_tokens: '2',
             },
         ]);
         await logger.getUsage({
@@ -286,6 +290,7 @@ describe('Usage logging', () => {
                     totalCostUSD: 0.03,
                     totalInputTokens: 20,
                     totalOutputTokens: 8,
+                    totalReasoningTokens: 3,
                 },
             ],
             requestCount: 2,
@@ -293,10 +298,11 @@ describe('Usage logging', () => {
             totalCostUSD: 0.03,
             totalInputTokens: 20,
             totalOutputTokens: 8,
+            totalReasoningTokens: 3,
         };
         expect(exportUsageSummary(summary, 'json')).toContain('"requestCount": 2');
-        expect(exportUsageSummary(summary, 'csv')).toContain('provider,model,requestCount,totalInputTokens,totalOutputTokens,totalCachedTokens,totalCostUSD');
-        expect(exportUsageSummary(summary, 'csv')).toContain('openai,"gpt,4o",2,20,8,4,0.030000');
+        expect(exportUsageSummary(summary, 'csv')).toContain('provider,model,requestCount,totalInputTokens,totalOutputTokens,totalReasoningTokens,totalCachedTokens,totalCostUSD');
+        expect(exportUsageSummary(summary, 'csv')).toContain('openai,"gpt,4o",2,20,8,3,4,0.030000');
     });
     it('exports aggregated speech usage as JSON and CSV', () => {
         const summary = {

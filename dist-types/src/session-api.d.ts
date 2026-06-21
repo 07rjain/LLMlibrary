@@ -84,6 +84,7 @@ export interface SessionView {
         costUSD: number;
         inputTokens: number;
         outputTokens: number;
+        reasoningTokens: number;
     };
     usage?: UsageSummary | null;
     updatedAt: string;
