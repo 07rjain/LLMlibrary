@@ -196,6 +196,48 @@ describe('Gemini adapter', () => {
     });
   });
 
+  it('strips JSON Schema fields unsupported by Gemini function declarations', () => {
+    expect(
+      translateGeminiTools([
+        {
+          description: 'Lookup weather',
+          name: 'weather_lookup',
+          parameters: {
+            additionalProperties: false,
+            properties: {
+              city: {
+                additionalProperties: false,
+                properties: {
+                  name: { type: 'string' },
+                },
+                type: 'object',
+              },
+            },
+            type: 'object',
+          },
+        },
+      ]),
+    ).toEqual({
+      functionDeclarations: [
+        {
+          description: 'Lookup weather',
+          name: 'weather_lookup',
+          parameters: {
+            properties: {
+              city: {
+                properties: {
+                  name: { type: 'STRING' },
+                },
+                type: 'OBJECT',
+              },
+            },
+            type: 'OBJECT',
+          },
+        },
+      ],
+    });
+  });
+
   it('maps Gemini cachedContent references into generateContent payloads', () => {
     const request = translateGeminiRequest({
       messages: [{ content: 'Hello', role: 'user' }],

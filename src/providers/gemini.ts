@@ -1307,10 +1307,6 @@ function translateGeminiSchema(schema: CanonicalToolSchema): GeminiToolSchema {
     translated.required = schema.required;
   }
 
-  if (schema.additionalProperties !== undefined) {
-    translated.additionalProperties = schema.additionalProperties;
-  }
-
   if (schema.items !== undefined) {
     translated.items = translateGeminiSchema(schema.items);
   }
