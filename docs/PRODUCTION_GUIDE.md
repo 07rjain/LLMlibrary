@@ -153,6 +153,30 @@ Use mock clients for:
 - CI checks that must not depend on external APIs
 - deterministic examples and snapshots
 
+## Testing With Live Providers
+
+Live-provider tests are opt-in because they consume quota and depend on account
+state. Keep normal CI on `pnpm test`; run live checks manually or in a protected
+pipeline with provider keys available.
+
+```bash
+LIVE_TESTS=1 pnpm test:live
+pnpm test:real:health
+pnpm test:real:package
+pnpm test:real:providers
+pnpm test:real:sessions
+pnpm test:real:tools
+pnpm test:real:budgets
+pnpm test:real
+```
+
+The `test:real:*` suite loads `.env` with a safe parser and validates package
+exports, provider adapters, conversations, tools, Session API tenant isolation,
+budgets, retrieval, Postgres stores, usage logging, and selected security
+guards. Tests that touch Postgres require `DATABASE_URL`. Provider account
+limits are not treated as deterministic code failures; rerun after resolving
+credit or rate-limit issues.
+
 Keep live-provider tests opt-in and separate from the default test suite.
 
 ## Versioning And Reuse Across Projects

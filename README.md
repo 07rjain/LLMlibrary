@@ -665,6 +665,24 @@ LIVE_TESTS=1 pnpm test:embeddings:live
 pnpm test:prompt-caching:live
 ```
 
+Deeper real-service integration checks are also opt-in and use a safe `.env`
+parser instead of shell-sourcing secrets:
+
+```bash
+pnpm test:real:health
+pnpm test:real:package
+pnpm test:real:providers
+pnpm test:real:sessions
+pnpm test:real:tools
+pnpm test:real:budgets
+pnpm test:real
+```
+
+These commands require the matching provider keys in `.env`; Postgres coverage
+also requires `DATABASE_URL`. Provider account limits still apply, so Anthropic
+credit exhaustion or Gemini rate limits can block the affected live checks even
+when the library code is healthy.
+
 ## Testing
 
 ```bash
