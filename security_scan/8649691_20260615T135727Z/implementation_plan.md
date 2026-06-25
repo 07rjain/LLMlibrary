@@ -363,4 +363,4 @@ pnpm run ci
 - All seven findings have regression tests.
 - Reproduction snippets from `recheck.md` no longer demonstrate the vulnerable behavior under secure defaults.
 - Compatibility escape hatches, if included, are explicit and documented as unsafe or legacy behavior.
-- `pnpm ci` passes.
+- `pnpm run ci` passes.

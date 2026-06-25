@@ -50,6 +50,72 @@ console.log(response.usage);
 - `budgetUsd`
   Estimated spend cap for the request
 
+## JSON And Structured Output
+
+Use `responseFormat` when your application needs JSON instead of free-form text.
+The same option works on direct `complete()` calls, `conversation()`, and the
+Session API. Non-streaming `complete()` responses are parsed into
+`response.parsed` by default.
+
+```ts
+const response = await client.complete({
+  model: 'gpt-4o',
+  messages: [{ role: 'user', content: 'Return the user profile.' }],
+  responseFormat: {
+    type: 'json_schema',
+    name: 'user_profile',
+    schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        plan: { type: 'string', enum: ['free', 'pro', 'enterprise'] },
+      },
+      required: ['name', 'plan'],
+    },
+  },
+});
+
+console.log(response.parsed);
+console.log(response.structuredOutputStatus);
+```
+
+Supported modes:
+
+- `responseFormat: { type: 'json_schema', schema, name?, strict?, parse? }`
+  requests provider-native schema output where supported.
+- `responseFormat: { type: 'json_object', parse? }` requests provider-native
+  JSON object mode where supported.
+- `parse: false` keeps the provider output as text and marks
+  `structuredOutputStatus` as `disabled`.
+
+Provider behavior:
+
+- OpenAI uses the Responses API `text.format` field. For `json_object`, at
+  least one system or message text must contain the literal string `JSON`; the
+  library rejects the request before dispatch when it is missing. For
+  `json_schema`, OpenAI strict schemas are normalized before dispatch so object
+  properties are required and `additionalProperties: false` is applied.
+- Gemini uses `generationConfig.responseFormat.text.mimeType =
+  'application/json'` and passes `schema` for `json_schema`.
+- Anthropic supports `json_schema` through `output_config.format`. Anthropic
+  `json_object` without a schema is intentionally unsupported in v1; use
+  `json_schema` instead.
+
+The first release intentionally accepts a portable schema subset: `type`,
+`properties`, `required`, `items`, `enum`, `description`, and boolean
+`additionalProperties`. Keywords such as `anyOf`, `$ref`, numeric/string/array
+constraints, `format`, `title`, and `prefixItems` are rejected for now even when
+some providers support them.
+
+If parsing fails, the call does not throw. The response includes
+`structuredOutputStatus: 'parse_error'` and `parseError`. Provider refusals are
+reported as `structuredOutputStatus: 'refusal'` with `response.refusal`, so they
+are not treated as malformed JSON.
+
+Streaming currently supports request mapping only. The stream chunks stay
+canonical (`text-delta`, tool chunks, `done`) and do not include parsed JSON
+metadata in v1.
+
 ## Reasoning And Thinking Controls
 
 Reasoning controls are exposed through provider-specific options. This is intentional: OpenAI, Anthropic, and Gemini use different request fields and the values are not perfectly portable across model families.

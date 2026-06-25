@@ -112,6 +112,43 @@ export interface CanonicalToolSchema {
     required?: readonly string[];
     type: 'array' | 'boolean' | 'integer' | 'number' | 'object' | 'string';
 }
+export interface CanonicalJsonSchema {
+    $defs?: Record<string, CanonicalJsonSchema>;
+    $ref?: string;
+    additionalProperties?: boolean | CanonicalJsonSchema;
+    anyOf?: CanonicalJsonSchema[];
+    description?: string;
+    enum?: readonly JsonPrimitive[];
+    format?: string;
+    items?: CanonicalJsonSchema;
+    maxItems?: number;
+    maxLength?: number;
+    maximum?: number;
+    minItems?: number;
+    minLength?: number;
+    minimum?: number;
+    prefixItems?: CanonicalJsonSchema[];
+    properties?: Record<string, CanonicalJsonSchema>;
+    required?: readonly string[];
+    title?: string;
+    type?: 'array' | 'boolean' | 'integer' | 'null' | 'number' | 'object' | 'string' | readonly ('array' | 'boolean' | 'integer' | 'null' | 'number' | 'object' | 'string')[];
+}
+export type StructuredOutputMode = 'json_object' | 'json_schema' | 'text';
+export type StructuredOutputStatus = 'disabled' | 'parse_error' | 'parsed' | 'refusal';
+export interface JsonObjectResponseFormat {
+    parse?: boolean;
+    type: 'json_object';
+}
+export interface JsonSchemaResponseFormat {
+    name?: string;
+    parse?: boolean;
+    schema: CanonicalJsonSchema;
+    strict?: boolean;
+    type: 'json_schema';
+}
+export type ResponseFormat = JsonObjectResponseFormat | JsonSchemaResponseFormat | {
+    type: 'text';
+};
 export interface ToolExecutionContext {
     model?: string;
     provider?: CanonicalProvider;
@@ -337,8 +374,13 @@ export interface CanonicalResponse {
     content: CanonicalPart[];
     finishReason: CanonicalFinishReason;
     model: string;
+    parsed?: JsonValue;
+    parseError?: string;
     provider: CanonicalProvider;
     raw: unknown;
+    refusal?: string;
+    responseFormat?: StructuredOutputMode;
+    structuredOutputStatus?: StructuredOutputStatus;
     text: string;
     toolCalls: CanonicalToolCall[];
     usage: UsageMetrics;
@@ -398,7 +440,10 @@ export interface ModelInfo {
     supportedInputModalities?: Array<'audio' | 'document' | 'image' | 'text' | 'video'>;
     speechPrices?: SpeechPriceBook;
     supportedOutputModalities?: Array<'audio' | 'text'>;
+    supportsJsonObjectOutput?: boolean;
+    supportsJsonSchemaOutput?: boolean;
     supportsStreaming: boolean;
+    supportsStructuredOutputStreaming?: boolean;
     supportsTools: boolean;
     supportsVision: boolean;
 }
@@ -413,7 +458,7 @@ export interface SpeechPriceBook {
     textInputTokenPrice?: number;
     textOutputTokenPrice?: number;
 }
-export type ModelCapability = keyof Pick<ModelInfo, 'supportsStreaming' | 'supportsTools' | 'supportsVision'>;
+export type ModelCapability = keyof Pick<ModelInfo, 'supportsJsonObjectOutput' | 'supportsJsonSchemaOutput' | 'supportsStreaming' | 'supportsStructuredOutputStreaming' | 'supportsTools' | 'supportsVision'>;
 export type RemoteModelProvider = Extract<CanonicalProvider, 'anthropic' | 'google' | 'openai'>;
 export interface RemoteModelInfo {
     createdAt?: string;

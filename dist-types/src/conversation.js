@@ -31,6 +31,7 @@ export class Conversation {
     model;
     provider;
     providerOptions;
+    responseFormat;
     sessionId;
     store;
     system;
@@ -59,6 +60,9 @@ export class Conversation {
         this.model = options.model;
         this.provider = options.provider;
         this.providerOptions = options.providerOptions ? cloneValue(options.providerOptions) : undefined;
+        this.responseFormat = options.responseFormat
+            ? cloneValue(options.responseFormat)
+            : undefined;
         this.sessionId = options.sessionId ?? generateSessionId();
         this.store = options.store;
         this.system = options.system;
@@ -125,6 +129,9 @@ export class Conversation {
             ...(this.provider !== undefined ? { provider: this.provider } : {}),
             ...(this.providerOptions !== undefined
                 ? { providerOptions: cloneValue(this.providerOptions) }
+                : {}),
+            ...(this.responseFormat !== undefined
+                ? { responseFormat: cloneValue(this.responseFormat) }
                 : {}),
             sessionId: this.sessionId,
             ...(this.system !== undefined ? { system: this.system } : {}),
@@ -200,6 +207,9 @@ export class Conversation {
             ...(snapshot.provider !== undefined ? { provider: snapshot.provider } : {}),
             ...(snapshot.providerOptions !== undefined
                 ? { providerOptions: snapshot.providerOptions }
+                : {}),
+            ...(snapshot.responseFormat !== undefined
+                ? { responseFormat: snapshot.responseFormat }
                 : {}),
             sessionId: snapshot.sessionId,
             ...(options.store !== undefined ? { store: options.store } : {}),
@@ -485,6 +495,7 @@ export class Conversation {
             ...(this.model !== undefined ? { model: this.model } : {}),
             ...(this.provider !== undefined ? { provider: this.provider } : {}),
             ...(this.providerOptions !== undefined ? { providerOptions: this.providerOptions } : {}),
+            ...(this.responseFormat !== undefined ? { responseFormat: this.responseFormat } : {}),
             sessionId: this.sessionId,
             ...(signal !== undefined ? { signal } : {}),
             ...(this.system !== undefined ? { system: this.system } : {}),

@@ -227,6 +227,46 @@ describe('SessionApi', () => {
     await expect(store.get('session-1-fork')).resolves.toBeNull();
   });
 
+  it('persists responseFormat from session creation config', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      sessionStore: store,
+    });
+    const api = createSessionApi({
+      client,
+      sessionStore: store,
+    });
+
+    const response = await api.handle(
+      jsonRequest('https://example.test/sessions', 'POST', {
+        responseFormat: {
+          schema: {
+            properties: {
+              answer: { type: 'string' },
+            },
+            type: 'object',
+          },
+          type: 'json_schema',
+        },
+        sessionId: 'structured-session',
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    const record = await store.get('structured-session');
+    expect(record?.snapshot.responseFormat).toMatchObject({
+      schema: {
+        properties: {
+          answer: { type: 'string' },
+        },
+        type: 'object',
+      },
+      type: 'json_schema',
+    });
+  });
+
   it('streams canonical SSE events for session messages', async () => {
     const store = new InMemorySessionStore<ConversationSnapshot>();
     const client = LLMClient.mock({

@@ -13,6 +13,7 @@ import type {
   CanonicalTool,
   JsonObject,
   JsonValue,
+  ResponseFormat,
   StreamChunk,
   ToolExecutionContext,
 } from '../src/types.js';
@@ -101,6 +102,62 @@ describe('Conversation', () => {
       totalCostUSD: 0,
       totalInputTokens: 2,
       totalOutputTokens: 0,
+    });
+  });
+
+  it('propagates responseFormat through requests and snapshots', async () => {
+    const client: ConversationClient = {
+      complete: vi.fn(async (): Promise<CanonicalResponse> => ({
+        content: [{ text: '{"answer":"ok"}', type: 'text' }],
+        finishReason: 'stop',
+        model: 'gpt-4o',
+        parsed: { answer: 'ok' },
+        provider: 'openai',
+        raw: {},
+        responseFormat: 'json_schema',
+        structuredOutputStatus: 'parsed',
+        text: '{"answer":"ok"}',
+        toolCalls: [],
+        usage: {
+          cachedTokens: 0,
+          cost: '$0.00',
+          costUSD: 0,
+          inputTokens: 1,
+          outputTokens: 1,
+        },
+      })),
+      stream: vi.fn(),
+    };
+    const responseFormat: ResponseFormat = {
+      schema: {
+        properties: {
+          answer: { type: 'string' },
+        },
+        type: 'object',
+      },
+      type: 'json_schema' as const,
+    };
+    const conversation = new Conversation(client, {
+      responseFormat,
+      sessionId: 'structured-session',
+    });
+
+    await conversation.send('Return a structured response.');
+
+    expect(client.complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        responseFormat,
+      }),
+    );
+    expect(conversation.serialise()).toMatchObject({
+      responseFormat,
+      sessionId: 'structured-session',
+    });
+
+    const restored = Conversation.restore(client, conversation.serialise());
+    expect(restored.serialise()).toMatchObject({
+      responseFormat,
+      sessionId: 'structured-session',
     });
   });
 

@@ -1,6 +1,6 @@
 import { AuthenticationError, ContextLimitError, ProviderError, RateLimitError } from '../errors.js';
 import { ModelRegistry } from '../models/registry.js';
-import type { CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, CanonicalToolSchema, EmbeddingInputItem, EmbeddingRequestOptions, EmbeddingResponse, JsonObject, ProviderOptions, RemoteModelInfo, StreamChunk } from '../types.js';
+import type { CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, CanonicalToolSchema, EmbeddingInputItem, EmbeddingRequestOptions, EmbeddingResponse, JsonObject, ProviderOptions, RemoteModelInfo, ResponseFormat, StreamChunk } from '../types.js';
 import type { RetryOptions } from '../utils/retry.js';
 type GeminiRole = 'model' | 'user';
 type GeminiPart = GeminiTextPart | GeminiInlineDataPart | GeminiFileDataPart | GeminiFunctionCallPart | GeminiFunctionResponsePart;
@@ -122,6 +122,7 @@ export interface GeminiCompletionOptions {
     messages: CanonicalMessage[];
     model: string;
     providerOptions?: ProviderOptions;
+    responseFormat?: ResponseFormat;
     signal?: AbortSignal;
     system?: string;
     temperature?: number;

@@ -118,6 +118,65 @@ describe('OpenAI adapter', () => {
     ]);
   });
 
+  it('maps responseFormat to OpenAI Responses text.format', () => {
+    expect(
+      translateOpenAIRequest({
+        messages: [{ content: 'Return JSON with an answer key.', role: 'user' }],
+        model: 'gpt-4o',
+        responseFormat: { type: 'json_object' },
+      }),
+    ).toMatchObject({
+      text: {
+        format: {
+          type: 'json_object',
+        },
+      },
+    });
+
+    expect(
+      translateOpenAIRequest({
+        messages: [{ content: 'Return the answer.', role: 'user' }],
+        model: 'gpt-4o',
+        responseFormat: {
+          name: 'answer_payload',
+          schema: {
+            properties: {
+              answer: { type: 'string' },
+            },
+            type: 'object',
+          },
+          type: 'json_schema',
+        },
+      }),
+    ).toMatchObject({
+      text: {
+        format: {
+          name: 'answer_payload',
+          schema: {
+            additionalProperties: false,
+            properties: {
+              answer: { type: 'string' },
+            },
+            required: ['answer'],
+            type: 'object',
+          },
+          strict: true,
+          type: 'json_schema',
+        },
+      },
+    });
+  });
+
+  it('rejects OpenAI JSON object mode without a JSON instruction', () => {
+    expect(() =>
+      translateOpenAIRequest({
+        messages: [{ content: 'Return an object.', role: 'user' }],
+        model: 'gpt-4o',
+        responseFormat: { type: 'json_object' },
+      }),
+    ).toThrow(ProviderCapabilityError);
+  });
+
   it('maps tool choice aliases', () => {
     expect(translateOpenAIToolChoice({ type: 'any' })).toEqual({
       toolChoice: 'required',
@@ -234,6 +293,37 @@ describe('OpenAI adapter', () => {
     expect(response.usage.cachedReadTokens).toBe(10);
     expect(response.usage.inputTokens).toBe(40);
     expect(response.usage.reasoningTokens).toBe(7);
+  });
+
+  it('preserves OpenAI refusal parts before structured parsing', () => {
+    const response = translateOpenAIResponse({
+      id: 'resp_refusal',
+      model: 'gpt-4o',
+      object: 'response',
+      output: [
+        {
+          content: [
+            {
+              refusal: 'I cannot help with that.',
+              type: 'refusal',
+            },
+          ],
+          id: 'msg_1',
+          role: 'assistant',
+          status: 'completed',
+          type: 'message',
+        },
+      ],
+      status: 'completed',
+      usage: {
+        input_tokens: 10,
+        output_tokens: 4,
+      },
+    });
+
+    expect(response.refusal).toBe('I cannot help with that.');
+    expect(response.structuredOutputStatus).toBe('refusal');
+    expect(response.text).toBe('I cannot help with that.');
   });
 
   it('falls back to the requested model when OpenAI returns a versioned model id', () => {

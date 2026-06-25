@@ -4,6 +4,7 @@ import { openaiUsageToCanonical, speechUsageWithCost, usageWithCost, } from '../
 import { parseSSE } from '../utils/parse-sse.js';
 import { withRetry } from '../utils/retry.js';
 import { estimateTokens } from '../utils/token-estimator.js';
+import { buildOpenAITextFormat } from '../structured-output.js';
 export class OpenAIAdapter {
     apiKey;
     baseUrl;
@@ -608,6 +609,13 @@ export function translateOpenAIRequest(options) {
     if (options.temperature !== undefined) {
         body.temperature = options.temperature;
     }
+    const textFormat = buildOpenAITextFormat(options.responseFormat, {
+        messages: options.messages,
+        ...(options.system !== undefined ? { system: options.system } : {}),
+    });
+    if (textFormat !== undefined) {
+        body.text = textFormat;
+    }
     if (options.tools && options.tools.length > 0) {
         body.tools = options.tools.map(translateOpenAITool);
     }
@@ -678,6 +686,7 @@ export function translateOpenAIResponse(payload, modelRegistry = new ModelRegist
     const content = [];
     const toolCalls = [];
     const textSegments = [];
+    let refusal;
     for (const item of payload.output ?? []) {
         if (isOpenAIMessageOutput(item) && item.role === 'assistant') {
             for (const part of item.content) {
@@ -690,6 +699,7 @@ export function translateOpenAIResponse(payload, modelRegistry = new ModelRegist
                     continue;
                 }
                 if (isOpenAIRefusalPart(part)) {
+                    refusal = refusal === undefined ? part.refusal : `${refusal}${part.refusal}`;
                     content.push({
                         text: part.refusal,
                         type: 'text',
@@ -720,6 +730,12 @@ export function translateOpenAIResponse(payload, modelRegistry = new ModelRegist
         model: resolvedModelId,
         provider: 'openai',
         raw: payload,
+        ...(refusal !== undefined
+            ? {
+                refusal,
+                structuredOutputStatus: 'refusal',
+            }
+            : {}),
         text: textSegments.join(''),
         toolCalls,
         usage,

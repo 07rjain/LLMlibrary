@@ -14,6 +14,7 @@ import {
 import { parseSSE } from '../utils/parse-sse.js';
 import { withRetry } from '../utils/retry.js';
 import { estimateTokens } from '../utils/token-estimator.js';
+import { buildOpenAITextFormat } from '../structured-output.js';
 
 import type {
   AudioInput,
@@ -28,6 +29,7 @@ import type {
   JsonValue,
   ProviderOptions,
   RemoteModelInfo,
+  ResponseFormat,
   SpeechRequestOptions,
   SpeechResponse,
   StreamChunk,
@@ -251,6 +253,7 @@ export interface OpenAICompletionOptions {
   messages: CanonicalMessage[];
   model: string;
   providerOptions?: ProviderOptions;
+  responseFormat?: ResponseFormat;
   signal?: AbortSignal;
   system?: string;
   temperature?: number;
@@ -1143,6 +1146,14 @@ export function translateOpenAIRequest(
     body.temperature = options.temperature;
   }
 
+  const textFormat = buildOpenAITextFormat(options.responseFormat, {
+    messages: options.messages,
+    ...(options.system !== undefined ? { system: options.system } : {}),
+  });
+  if (textFormat !== undefined) {
+    body.text = textFormat;
+  }
+
   if (options.tools && options.tools.length > 0) {
     body.tools = options.tools.map(translateOpenAITool);
   }
@@ -1230,6 +1241,7 @@ export function translateOpenAIResponse(
   const content: CanonicalPart[] = [];
   const toolCalls: CanonicalToolCall[] = [];
   const textSegments: string[] = [];
+  let refusal: string | undefined;
 
   for (const item of payload.output ?? []) {
     if (isOpenAIMessageOutput(item) && item.role === 'assistant') {
@@ -1244,6 +1256,7 @@ export function translateOpenAIResponse(
         }
 
         if (isOpenAIRefusalPart(part)) {
+          refusal = refusal === undefined ? part.refusal : `${refusal}${part.refusal}`;
           content.push({
             text: part.refusal,
             type: 'text',
@@ -1280,6 +1293,12 @@ export function translateOpenAIResponse(
     model: resolvedModelId,
     provider: 'openai',
     raw: payload,
+    ...(refusal !== undefined
+      ? {
+          refusal,
+          structuredOutputStatus: 'refusal' as const,
+        }
+      : {}),
     text: textSegments.join(''),
     toolCalls,
     usage,

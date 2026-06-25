@@ -9,6 +9,7 @@ import { ModelRegistry } from '../models/registry.js';
 import { geminiUsageToCanonical, usageWithCost } from '../utils/cost.js';
 import { parseSSE } from '../utils/parse-sse.js';
 import { withRetry } from '../utils/retry.js';
+import { buildGeminiResponseFormat } from '../structured-output.js';
 
 import type {
   CanonicalFinishReason,
@@ -30,6 +31,7 @@ import type {
   JsonValue,
   ProviderOptions,
   RemoteModelInfo,
+  ResponseFormat,
   StreamChunk,
 } from '../types.js';
 import type { GeminiErrorDetail, RetryOptions } from '../utils/retry.js';
@@ -214,6 +216,7 @@ export interface GeminiCompletionOptions {
   messages: CanonicalMessage[];
   model: string;
   providerOptions?: ProviderOptions;
+  responseFormat?: ResponseFormat;
   signal?: AbortSignal;
   system?: string;
   temperature?: number;
@@ -652,6 +655,10 @@ export function translateGeminiRequest(
     generationConfig.thinkingConfig = translateGeminiThinkingConfig(
       googleOptions.thinking,
     );
+  }
+  const responseFormat = buildGeminiResponseFormat(options.responseFormat);
+  if (responseFormat !== undefined) {
+    generationConfig.responseFormat = responseFormat;
   }
   if (Object.keys(generationConfig).length > 0) {
     body.generationConfig = generationConfig;

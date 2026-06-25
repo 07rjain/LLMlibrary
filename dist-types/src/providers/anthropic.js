@@ -3,6 +3,7 @@ import { ModelRegistry } from '../models/registry.js';
 import { anthropicUsageToCanonical, usageWithCost } from '../utils/cost.js';
 import { parseSSE } from '../utils/parse-sse.js';
 import { withRetry } from '../utils/retry.js';
+import { buildAnthropicOutputConfig } from '../structured-output.js';
 export class AnthropicAdapter {
     apiKey;
     baseUrl;
@@ -134,6 +135,10 @@ export function translateAnthropicRequest(options) {
     if (options.temperature !== undefined) {
         body.temperature = options.temperature;
     }
+    const outputConfig = buildAnthropicOutputConfig(options.responseFormat);
+    if (outputConfig !== undefined) {
+        body.output_config = outputConfig;
+    }
     if (options.tools && options.tools.length > 0) {
         body.tools = options.tools.map(translateAnthropicTool);
     }
@@ -230,6 +235,12 @@ export function translateAnthropicResponse(payload, modelRegistry = new ModelReg
         model: resolvedModelId,
         provider: 'anthropic',
         raw: payload,
+        ...(payload.stop_reason === 'refusal'
+            ? {
+                refusal: text,
+                structuredOutputStatus: 'refusal',
+            }
+            : {}),
         text,
         toolCalls,
         usage,
@@ -511,6 +522,8 @@ function normalizeAnthropicFinishReason(finishReason) {
             return 'length';
         case 'tool_use':
             return 'tool_call';
+        case 'refusal':
+            return 'content_filter';
         case 'end_turn':
         case 'stop_sequence':
         case null:

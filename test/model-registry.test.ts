@@ -50,6 +50,41 @@ describe('ModelRegistry', () => {
     );
   });
 
+  it('adds structured-output capability metadata for built-in completion models only', () => {
+    const registry = new ModelRegistry();
+
+    expect(registry.get('gpt-4o')).toMatchObject({
+      supportsJsonObjectOutput: true,
+      supportsJsonSchemaOutput: true,
+      supportsStructuredOutputStreaming: true,
+    });
+    expect(registry.get('gemini-2.5-flash')).toMatchObject({
+      supportsJsonObjectOutput: true,
+      supportsJsonSchemaOutput: true,
+      supportsStructuredOutputStreaming: true,
+    });
+    expect(registry.get('claude-sonnet-4-6')).toMatchObject({
+      supportsJsonSchemaOutput: true,
+      supportsStructuredOutputStreaming: true,
+    });
+    expect(registry.get('claude-sonnet-4-6').supportsJsonObjectOutput).toBeUndefined();
+    expect(registry.get('gemini-embedding-2').supportsJsonSchemaOutput).toBeUndefined();
+
+    registry.register({
+      contextWindow: 64000,
+      id: 'custom-openai',
+      inputPrice: 1,
+      lastUpdated: '2026-04-15',
+      outputPrice: 2,
+      provider: 'openai',
+      supportsStreaming: true,
+      supportsTools: false,
+      supportsVision: false,
+    });
+
+    expect(registry.get('custom-openai').supportsJsonSchemaOutput).toBeUndefined();
+  });
+
   it('throws for unknown models', () => {
     const registry = new ModelRegistry();
 

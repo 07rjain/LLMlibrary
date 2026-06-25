@@ -5,7 +5,7 @@ import type { ConversationOptions, ConversationSnapshot } from './conversation.j
 import type { GeminiCachedContent, GeminiCachedContentPage, GeminiCreateCacheOptions, GeminiListCachesOptions, GeminiUpdateCacheOptions } from './providers/gemini.js';
 import type { SessionStore } from './session-store.js';
 import type { ModelRouter } from './router.js';
-import type { CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, BudgetExceededAction, CancelableStream, EmbeddingProvider, EmbeddingRequestOptions, EmbeddingResponse, ProviderOptions, RemoteModelInfo, RemoteModelListOptions, SpeechProvider, SpeechRequestOptions, SpeechResponse, StreamChunk, TranscriptionRequestOptions, TranscriptionResponse } from './types.js';
+import type { CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, BudgetExceededAction, CancelableStream, EmbeddingProvider, EmbeddingRequestOptions, EmbeddingResponse, ProviderOptions, RemoteModelInfo, RemoteModelListOptions, ResponseFormat, SpeechProvider, SpeechRequestOptions, SpeechResponse, StreamChunk, TranscriptionRequestOptions, TranscriptionResponse } from './types.js';
 import type { UsageExportFormat, UsageLogger, UsageQuery, UsageSummary, SpeechUsageQuery, SpeechUsageSummary } from './usage.js';
 import type { RetryOptions } from './utils/retry.js';
 /** Constructor options for `LLMClient`. */
@@ -39,6 +39,7 @@ export interface LLMRequestOptions {
     model?: string;
     provider?: CanonicalProvider;
     providerOptions?: ProviderOptions;
+    responseFormat?: ResponseFormat;
     sessionId?: string;
     signal?: AbortSignal;
     system?: string;

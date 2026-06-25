@@ -3,6 +3,7 @@ import { ModelRegistry } from '../models/registry.js';
 import { geminiUsageToCanonical, usageWithCost } from '../utils/cost.js';
 import { parseSSE } from '../utils/parse-sse.js';
 import { withRetry } from '../utils/retry.js';
+import { buildGeminiResponseFormat } from '../structured-output.js';
 export class GeminiAdapter {
     apiKey;
     baseUrl;
@@ -247,6 +248,10 @@ export function translateGeminiRequest(options) {
     }
     if (googleOptions?.thinking) {
         generationConfig.thinkingConfig = translateGeminiThinkingConfig(googleOptions.thinking);
+    }
+    const responseFormat = buildGeminiResponseFormat(options.responseFormat);
+    if (responseFormat !== undefined) {
+        generationConfig.responseFormat = responseFormat;
     }
     if (Object.keys(generationConfig).length > 0) {
         body.generationConfig = generationConfig;
