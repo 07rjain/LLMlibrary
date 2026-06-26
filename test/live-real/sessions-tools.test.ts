@@ -54,7 +54,7 @@ liveDescribe('live-real sessions, tools, and context', () => {
     const restored = await client.conversation({ sessionId });
     expect(restored.history.length).toBe(conversation.history.length);
     expect(restored.totals.costUSD).toBe(conversation.totals.costUSD);
-  }, 90_000);
+  }, 360_000);
 
   it('streams inside Conversation and persists final usage', async () => {
     requireLiveEnv('OPENAI_API_KEY');
@@ -78,7 +78,7 @@ liveDescribe('live-real sessions, tools, and context', () => {
     expect(result.done).toBeDefined();
     expect(conversation.history.length).toBe(2);
     expect(conversation.totals.costUSD).toBeGreaterThanOrEqual(0);
-  }, 60_000);
+  }, 120_000);
 
   it('validates strict and permissive tool argument modes', async () => {
     const badToolResponse = buildToolCallResponse({ city: 123 });
@@ -229,7 +229,7 @@ liveDescribe('live-real sessions, tools, and context', () => {
       jsonRequest('DELETE', `/sessions/${sessionId}`),
     );
     expect(deleted.status).toBe(200);
-  }, 120_000);
+  }, 180_000);
 
   it('trims context with sliding window and summarizes with a real LLM', async () => {
     requireLiveEnv('OPENAI_API_KEY');
@@ -283,7 +283,7 @@ liveDescribe('live-real sessions, tools, and context', () => {
       },
     });
     await expect(failing.trim(messages, {})).rejects.toThrow('summarizer failed');
-  }, 90_000);
+  }, 180_000);
 
   it('loads older snapshots that are missing reasoning totals safely', () => {
     const snapshot = {

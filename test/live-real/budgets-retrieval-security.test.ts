@@ -62,7 +62,7 @@ liveDescribe('live-real budgets, usage, retrieval, stores, and security', () => 
         outputTokens: response.usage.outputTokens,
       }),
     ).toBeCloseTo(response.usage.costUSD, 9);
-  }, 60_000);
+  }, 120_000);
 
   it('preflights request budgets including Gemini thinking budget', async () => {
     requireLiveEnv('GEMINI_API_KEY');

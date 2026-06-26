@@ -1,8 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { BudgetExceededError, LLMError } from '../../src/errors.js';
+import { BudgetExceededError, LLMError, RateLimitError } from '../../src/errors.js';
 import { calcCostUSD } from '../../src/utils/cost.js';
 import { assertCanonicalResponse, collectStream, expectNoSecretLeak, hasEnv, liveClient, liveRealEnabled, providerModels, requireLiveEnv, tinyPngBase64, weatherTool, } from './helpers.js';
 const liveDescribe = liveRealEnabled ? describe : describe.skip;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function withGeminiGenerateQuotaRetry(action) {
+    const maxAttempts = Math.max(1, Number(process.env.GEMINI_LIVE_QUOTA_RETRY_ATTEMPTS ?? 2));
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+            return await action();
+        }
+        catch (error) {
+            const retryAfterSeconds = String(error.message).match(/retry in ([\d.]+)s/i)?.[1];
+            const isGenerateFreeTierQuota = error instanceof RateLimitError &&
+                String(error.message).includes('generate_content_free_tier_requests') &&
+                retryAfterSeconds;
+            if (!isGenerateFreeTierQuota || attempt === maxAttempts) {
+                throw error;
+            }
+            await sleep(Math.ceil(Number(retryAfterSeconds) * 1000) + 1_000);
+        }
+    }
+    throw new Error('unreachable Gemini quota retry state');
+}
 liveDescribe('live-real provider adapters', () => {
     it('uses OpenAI for completion, streaming, tools, vision, and errors', async () => {
         requireLiveEnv('OPENAI_API_KEY');
@@ -72,7 +92,7 @@ liveDescribe('live-real provider adapters', () => {
             model: 'not-a-real-openai-model-live-real',
             provider: 'openai',
         })).rejects.toBeInstanceOf(LLMError);
-    }, 90_000);
+    }, 300_000);
     it('uses Anthropic for completion, streaming, tools, and errors', async () => {
         requireLiveEnv('ANTHROPIC_API_KEY');
         const client = liveClient();
@@ -125,26 +145,26 @@ liveDescribe('live-real provider adapters', () => {
         requireLiveEnv('GEMINI_API_KEY');
         const client = liveClient();
         const model = providerModels.gemini;
-        const completion = await client.complete({
+        const completion = await withGeminiGenerateQuotaRetry(() => client.complete({
             maxTokens: 64,
             messages: [{ content: 'Reply with exactly: GEMINI_REAL_OK', role: 'user' }],
             model,
             provider: 'google',
             temperature: 0,
-        });
+        }));
         assertCanonicalResponse(completion, 'google');
         expect(completion.text).toContain('GEMINI_REAL_OK');
-        const stream = await collectStream(client.stream({
+        const stream = await withGeminiGenerateQuotaRetry(() => collectStream(client.stream({
             maxTokens: 64,
             messages: [{ content: 'Reply with exactly: GEMINI_STREAM_OK', role: 'user' }],
             model,
             provider: 'google',
             temperature: 0,
-        }));
+        })));
         expect(stream.done).toBeDefined();
         expect(stream.text).toContain('GEMINI_STREAM_OK');
-        const tool = await client.complete({
-            maxTokens: 64,
+        const tool = await withGeminiGenerateQuotaRetry(() => client.complete({
+            maxTokens: 256,
             messages: [
                 {
                     content: 'Use get_weather for Tokyo. Do not answer from memory.',
@@ -156,12 +176,12 @@ liveDescribe('live-real provider adapters', () => {
             temperature: 0,
             toolChoice: { name: 'get_weather', type: 'tool' },
             tools: [weatherTool()],
-        });
+        }));
         assertCanonicalResponse(tool, 'google');
         expect(tool.finishReason).toBe('tool_call');
         expect(tool.toolCalls[0]?.name).toBe('get_weather');
-        const vision = await client.complete({
-            maxTokens: 16,
+        const vision = await withGeminiGenerateQuotaRetry(() => client.complete({
+            maxTokens: 64,
             messages: [
                 {
                     content: [
@@ -178,10 +198,10 @@ liveDescribe('live-real provider adapters', () => {
             model,
             provider: 'google',
             temperature: 0,
-        });
+        }));
         assertCanonicalResponse(vision, 'google');
         expect(vision.text.length).toBeGreaterThan(0);
-        const thinking = await client.complete({
+        const thinking = await withGeminiGenerateQuotaRetry(() => client.complete({
             maxTokens: 32,
             messages: [
                 {
@@ -200,7 +220,7 @@ liveDescribe('live-real provider adapters', () => {
                 },
             },
             temperature: 0,
-        });
+        }));
         assertCanonicalResponse(thinking, 'google');
         expect(thinking.usage.reasoningTokens ?? 0).toBeGreaterThan(0);
         expect(thinking.usage.costUSD).toBeGreaterThan(0);
@@ -216,7 +236,7 @@ liveDescribe('live-real provider adapters', () => {
             model: 'not-a-real-gemini-model-live-real',
             provider: 'google',
         })).rejects.toBeInstanceOf(LLMError);
-    }, 120_000);
+    }, 180_000);
     it('enforces budgets before provider calls and supports stream cancellation', async () => {
         requireLiveEnv('OPENAI_API_KEY');
         const client = liveClient();
