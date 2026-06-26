@@ -160,6 +160,56 @@ describe('Gemini adapter', () => {
     ]);
   });
 
+  it('maps responseFormat to Gemini generationConfig.responseFormat', () => {
+    expect(
+      translateGeminiRequest({
+        messages: [{ content: 'Return an object.', role: 'user' }],
+        model: 'gemini-2.5-flash',
+        responseFormat: { type: 'json_object' },
+      }),
+    ).toMatchObject({
+      generationConfig: {
+        responseFormat: {
+          text: {
+            mimeType: 'application/json',
+          },
+        },
+      },
+    });
+
+    expect(
+      translateGeminiRequest({
+        messages: [{ content: 'Return the answer.', role: 'user' }],
+        model: 'gemini-2.5-flash',
+        responseFormat: {
+          schema: {
+            properties: {
+              answer: { type: 'string' },
+            },
+            required: ['answer'],
+            type: 'object',
+          },
+          type: 'json_schema',
+        },
+      }),
+    ).toMatchObject({
+      generationConfig: {
+        responseFormat: {
+          text: {
+            mimeType: 'application/json',
+            schema: {
+              properties: {
+                answer: { type: 'string' },
+              },
+              required: ['answer'],
+              type: 'object',
+            },
+          },
+        },
+      },
+    });
+  });
+
   it('maps Gemini tool choice aliases and schema bundles', () => {
     expect(translateGeminiToolChoice({ type: 'auto' })).toEqual({
       functionCallingConfig: { mode: 'AUTO' },
@@ -187,6 +237,48 @@ describe('Gemini adapter', () => {
               city: {
                 enum: ['Berlin', 'Paris'],
                 type: 'STRING',
+              },
+            },
+            type: 'OBJECT',
+          },
+        },
+      ],
+    });
+  });
+
+  it('strips JSON Schema fields unsupported by Gemini function declarations', () => {
+    expect(
+      translateGeminiTools([
+        {
+          description: 'Lookup weather',
+          name: 'weather_lookup',
+          parameters: {
+            additionalProperties: false,
+            properties: {
+              city: {
+                additionalProperties: false,
+                properties: {
+                  name: { type: 'string' },
+                },
+                type: 'object',
+              },
+            },
+            type: 'object',
+          },
+        },
+      ]),
+    ).toEqual({
+      functionDeclarations: [
+        {
+          description: 'Lookup weather',
+          name: 'weather_lookup',
+          parameters: {
+            properties: {
+              city: {
+                properties: {
+                  name: { type: 'STRING' },
+                },
+                type: 'OBJECT',
               },
             },
             type: 'OBJECT',

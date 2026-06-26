@@ -9,6 +9,7 @@ import { ModelRegistry } from '../models/registry.js';
 import { anthropicUsageToCanonical, usageWithCost } from '../utils/cost.js';
 import { parseSSE } from '../utils/parse-sse.js';
 import { withRetry } from '../utils/retry.js';
+import { buildAnthropicOutputConfig } from '../structured-output.js';
 
 import type {
   CacheControl,
@@ -24,6 +25,7 @@ import type {
   AnthropicThinkingOptions,
   ProviderOptions,
   RemoteModelInfo,
+  ResponseFormat,
   StreamChunk,
 } from '../types.js';
 import type { RetryOptions } from '../utils/retry.js';
@@ -104,7 +106,13 @@ interface AnthropicResponsePayload {
   id: string;
   model: string;
   role: 'assistant';
-  stop_reason: 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use' | null;
+  stop_reason:
+    | 'end_turn'
+    | 'max_tokens'
+    | 'refusal'
+    | 'stop_sequence'
+    | 'tool_use'
+    | null;
   usage?: AnthropicUsage;
 }
 
@@ -162,6 +170,7 @@ export interface AnthropicCompletionOptions {
   messages: CanonicalMessage[];
   model: string;
   providerOptions?: ProviderOptions;
+  responseFormat?: ResponseFormat;
   signal?: AbortSignal;
   system?: string;
   temperature?: number;
@@ -371,6 +380,11 @@ export function translateAnthropicRequest(
     body.temperature = options.temperature;
   }
 
+  const outputConfig = buildAnthropicOutputConfig(options.responseFormat);
+  if (outputConfig !== undefined) {
+    body.output_config = outputConfig;
+  }
+
   if (options.tools && options.tools.length > 0) {
     body.tools = options.tools.map(translateAnthropicTool);
   }
@@ -506,6 +520,12 @@ export function translateAnthropicResponse(
     model: resolvedModelId,
     provider: 'anthropic',
     raw: payload,
+    ...(payload.stop_reason === 'refusal'
+      ? {
+          refusal: text,
+          structuredOutputStatus: 'refusal' as const,
+        }
+      : {}),
     text,
     toolCalls,
     usage,
@@ -860,6 +880,8 @@ function normalizeAnthropicFinishReason(
       return 'length';
     case 'tool_use':
       return 'tool_call';
+    case 'refusal':
+      return 'content_filter';
     case 'end_turn':
     case 'stop_sequence':
     case null:

@@ -79,6 +79,56 @@ describe('Conversation', () => {
             totalOutputTokens: 0,
         });
     });
+    it('propagates responseFormat through requests and snapshots', async () => {
+        const client = {
+            complete: vi.fn(async () => ({
+                content: [{ text: '{"answer":"ok"}', type: 'text' }],
+                finishReason: 'stop',
+                model: 'gpt-4o',
+                parsed: { answer: 'ok' },
+                provider: 'openai',
+                raw: {},
+                responseFormat: 'json_schema',
+                structuredOutputStatus: 'parsed',
+                text: '{"answer":"ok"}',
+                toolCalls: [],
+                usage: {
+                    cachedTokens: 0,
+                    cost: '$0.00',
+                    costUSD: 0,
+                    inputTokens: 1,
+                    outputTokens: 1,
+                },
+            })),
+            stream: vi.fn(),
+        };
+        const responseFormat = {
+            schema: {
+                properties: {
+                    answer: { type: 'string' },
+                },
+                type: 'object',
+            },
+            type: 'json_schema',
+        };
+        const conversation = new Conversation(client, {
+            responseFormat,
+            sessionId: 'structured-session',
+        });
+        await conversation.send('Return a structured response.');
+        expect(client.complete).toHaveBeenCalledWith(expect.objectContaining({
+            responseFormat,
+        }));
+        expect(conversation.serialise()).toMatchObject({
+            responseFormat,
+            sessionId: 'structured-session',
+        });
+        const restored = Conversation.restore(client, conversation.serialise());
+        expect(restored.serialise()).toMatchObject({
+            responseFormat,
+            sessionId: 'structured-session',
+        });
+    });
     it('sends messages, updates totals, and auto-saves snapshots', async () => {
         const store = new InMemorySessionStore({
             now: () => new Date('2026-04-15T10:00:00.000Z'),

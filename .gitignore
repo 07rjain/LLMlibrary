@@ -9,4 +9,5 @@ chatbot_widget_report.docx
 chatbot_widget_report.md
 docs/.vitepress/cache
 docs/.vitepress/dist
+test/live-real/artifacts/*.json
 .DS_Store

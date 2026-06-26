@@ -9,6 +9,7 @@ Provider-agnostic TypeScript client for Anthropic, OpenAI, and Google Gemini wit
 - OpenAI uses the stateless Responses API under the hood while library-owned conversation state remains the source of truth
 - `defineTool()` helper for typed tool definitions
 - Non-streaming and streaming completions with explicit `stream.cancel()`
+- JSON and schema-constrained structured output across supported providers
 - Provider-specific reasoning and thinking controls with usage token accounting
 - Conversation state with running token and cost totals
 - Automatic tool execution in conversations, including streaming pause/execute/resume
@@ -89,6 +90,37 @@ console.log(response.usage.costUSD);
 ```
 
 Use `response.usage.costUSD` for arithmetic, alerts, and persistence. `response.usage.cost` is the pre-formatted display string.
+
+## Structured Output
+
+Use `responseFormat` when you need machine-readable JSON.
+
+```ts
+const response = await client.complete({
+  model: 'gpt-4o',
+  messages: [{ content: 'Return a JSON customer summary.', role: 'user' }],
+  responseFormat: {
+    type: 'json_schema',
+    name: 'customer_summary',
+    schema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string' },
+        priority: { type: 'string', enum: ['low', 'medium', 'high'] },
+      },
+      required: ['status', 'priority'],
+    },
+  },
+});
+
+console.log(response.parsed);
+console.log(response.structuredOutputStatus);
+```
+
+OpenAI and Gemini support `json_object` and `json_schema`. Anthropic supports
+`json_schema`; schema-less `json_object` is rejected so callers do not depend on
+undocumented behavior. See [Completions And Streaming](./docs/COMPLETIONS_AND_STREAMING.md#json-and-structured-output)
+for provider caveats and the portable schema subset.
 
 ## Conversations
 
@@ -664,6 +696,24 @@ LIVE_TESTS=1 pnpm test:live
 LIVE_TESTS=1 pnpm test:embeddings:live
 pnpm test:prompt-caching:live
 ```
+
+Deeper real-service integration checks are also opt-in and use a safe `.env`
+parser instead of shell-sourcing secrets:
+
+```bash
+pnpm test:real:health
+pnpm test:real:package
+pnpm test:real:providers
+pnpm test:real:sessions
+pnpm test:real:tools
+pnpm test:real:budgets
+pnpm test:real
+```
+
+These commands require the matching provider keys in `.env`; Postgres coverage
+also requires `DATABASE_URL`. Provider account limits still apply, so Anthropic
+credit exhaustion or Gemini rate limits can block the affected live checks even
+when the library code is healthy.
 
 ## Testing
 

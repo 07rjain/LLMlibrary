@@ -1,6 +1,6 @@
 import type { ContextManager } from './context-manager.js';
 import type { SessionStore } from './session-store.js';
-import type { BudgetExceededAction, CancelableStream, CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, ProviderOptions, StreamChunk } from './types.js';
+import type { BudgetExceededAction, CancelableStream, CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, ProviderOptions, ResponseFormat, StreamChunk } from './types.js';
 export type ToolValidationMode = 'permissive' | 'strict';
 /** Minimal client contract consumed by `Conversation`. */
 export interface ConversationClient {
@@ -12,6 +12,7 @@ export interface ConversationClient {
         model?: string;
         provider?: CanonicalProvider;
         providerOptions?: ProviderOptions;
+        responseFormat?: ResponseFormat;
         sessionId?: string;
         signal?: AbortSignal;
         system?: string;
@@ -27,6 +28,7 @@ export interface ConversationClient {
         model?: string;
         provider?: CanonicalProvider;
         providerOptions?: ProviderOptions;
+        responseFormat?: ResponseFormat;
         sessionId?: string;
         signal?: AbortSignal;
         system?: string;
@@ -46,6 +48,7 @@ export interface ConversationSnapshot {
     model?: string;
     provider?: CanonicalProvider;
     providerOptions?: ProviderOptions;
+    responseFormat?: ResponseFormat;
     sessionId: string;
     system?: string;
     tenantId?: string;
@@ -72,6 +75,7 @@ export interface ConversationOptions {
     model?: string;
     provider?: CanonicalProvider;
     providerOptions?: ProviderOptions;
+    responseFormat?: ResponseFormat;
     sessionId?: string;
     store?: SessionStore<ConversationSnapshot>;
     system?: string;
@@ -109,6 +113,7 @@ export declare class Conversation {
     private model;
     private provider;
     private readonly providerOptions;
+    private readonly responseFormat;
     private readonly sessionId;
     private readonly store;
     private system;

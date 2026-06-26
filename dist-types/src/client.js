@@ -7,6 +7,7 @@ import { OpenAIAdapter } from './providers/openai.js';
 import { getEnvironmentVariable } from './runtime.js';
 import { PostgresSessionStore } from './session-store.js';
 import { createCancelableStream } from './stream-control.js';
+import { assertResponseFormatSupported, parseStructuredOutput, } from './structured-output.js';
 import { calcCostUSD, estimateMessageTokens, formatCost } from './utils/index.js';
 import { calcSpeechCostUSD } from './utils/cost.js';
 import { estimateTokens } from './utils/token-estimator.js';
@@ -118,7 +119,7 @@ export class LLMClient {
                     }));
                     return response;
                 }
-                const response = await this.dispatchComplete(attempt.request);
+                const response = parseStructuredOutput(await this.dispatchComplete(attempt.request), attempt.request.responseFormat);
                 await this.logUsageEvent(buildUsageEvent({
                     durationMs: Date.now() - startedAt,
                     finishReason: response.finishReason,
@@ -179,7 +180,7 @@ export class LLMClient {
     }
     /** Executes a streaming completion request and yields canonical chunks. */
     stream(options) {
-        const plan = this.resolveRequestPlan(options);
+        const plan = this.resolveRequestPlan(options, { stream: true });
         const startedAt = Date.now();
         return createCancelableStream((signal) => this.streamWithFallback(plan, {
             ...options,
@@ -354,7 +355,7 @@ export class LLMClient {
                 });
         }
     }
-    resolveRequest(options, target = {}) {
+    resolveRequest(options, target = {}, resolveOptions = {}) {
         const model = target.model ?? options.model ?? this.defaultModel;
         if (!model) {
             throw new ProviderCapabilityError('No model was supplied. Set defaultModel on LLMClient or pass model per request.');
@@ -367,6 +368,7 @@ export class LLMClient {
                 provider,
             });
         }
+        assertResponseFormatSupported(modelInfo, options.responseFormat, resolveOptions);
         return {
             ...options,
             maxTokens: options.maxTokens ?? 1024,
@@ -454,18 +456,18 @@ export class LLMClient {
             provider,
         };
     }
-    resolveRequestPlan(options) {
-        const resolvedRoute = this.resolveRoute(options);
+    resolveRequestPlan(options, resolveOptions = {}) {
+        const resolvedRoute = this.resolveRoute(options, resolveOptions);
         return {
             attempts: resolvedRoute.attempts.map((attempt) => ({
                 decision: attempt.decision,
-                request: this.resolveRequest(options, attempt),
+                request: this.resolveRequest(options, attempt, resolveOptions),
             })),
         };
     }
-    resolveRoute(options) {
+    resolveRoute(options, resolveOptions = {}) {
         if (!this.modelRouter) {
-            const directRequest = this.resolveRequest(options);
+            const directRequest = this.resolveRequest(options, {}, resolveOptions);
             const decision = options.model ? `requested:${directRequest.model}` : `default:${directRequest.model}`;
             return {
                 attempts: [
@@ -773,7 +775,7 @@ class MockLLMClient extends LLMClient {
             return buildMockResponse(extractLastUserText(resolved.messages), resolved);
         }
         const response = typeof next === 'function' ? await next(resolved) : next;
-        return response;
+        return parseStructuredOutput(response, resolved.responseFormat);
     }
     async speak(options) {
         const resolved = this.resolveMockSpeechRequest(options);

@@ -1,6 +1,6 @@
 import { AuthenticationError, ContextLimitError, ProviderError, RateLimitError } from '../errors.js';
 import { ModelRegistry } from '../models/registry.js';
-import type { CacheControl, CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, JsonObject, ProviderOptions, RemoteModelInfo, StreamChunk } from '../types.js';
+import type { CacheControl, CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, JsonObject, ProviderOptions, RemoteModelInfo, ResponseFormat, StreamChunk } from '../types.js';
 import type { RetryOptions } from '../utils/retry.js';
 type AnthropicContentBlock = AnthropicTextBlock | AnthropicImageBlock | AnthropicDocumentBlock | AnthropicToolUseBlock | AnthropicToolResultBlock;
 interface AnthropicTextBlock {
@@ -71,7 +71,7 @@ interface AnthropicResponsePayload {
     id: string;
     model: string;
     role: 'assistant';
-    stop_reason: 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use' | null;
+    stop_reason: 'end_turn' | 'max_tokens' | 'refusal' | 'stop_sequence' | 'tool_use' | null;
     usage?: AnthropicUsage;
 }
 export interface AnthropicClientConfig {
@@ -86,6 +86,7 @@ export interface AnthropicCompletionOptions {
     messages: CanonicalMessage[];
     model: string;
     providerOptions?: ProviderOptions;
+    responseFormat?: ResponseFormat;
     signal?: AbortSignal;
     system?: string;
     temperature?: number;

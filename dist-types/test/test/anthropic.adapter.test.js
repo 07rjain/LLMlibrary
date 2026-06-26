@@ -91,6 +91,45 @@ describe('Anthropic adapter', () => {
             },
         ]);
     });
+    it('maps json_schema responseFormat to Anthropic output_config', () => {
+        const request = translateAnthropicRequest({
+            maxTokens: 64,
+            messages: [{ content: 'Return the answer.', role: 'user' }],
+            model: 'claude-sonnet-4-6',
+            responseFormat: {
+                schema: {
+                    properties: {
+                        answer: { type: 'string' },
+                    },
+                    required: ['answer'],
+                    type: 'object',
+                },
+                type: 'json_schema',
+            },
+        });
+        expect(request).toMatchObject({
+            output_config: {
+                format: {
+                    schema: {
+                        properties: {
+                            answer: { type: 'string' },
+                        },
+                        required: ['answer'],
+                        type: 'object',
+                    },
+                    type: 'json_schema',
+                },
+            },
+        });
+    });
+    it('rejects Anthropic json_object responseFormat without a schema', () => {
+        expect(() => translateAnthropicRequest({
+            maxTokens: 64,
+            messages: [{ content: 'Return JSON.', role: 'user' }],
+            model: 'claude-sonnet-4-6',
+            responseFormat: { type: 'json_object' },
+        })).toThrow(ProviderCapabilityError);
+    });
     it('translates tool choices', () => {
         expect(translateAnthropicToolChoice({ type: 'auto' })).toEqual({
             type: 'auto',
@@ -362,6 +401,22 @@ describe('Anthropic adapter', () => {
                 },
             ],
         });
+    });
+    it('preserves Anthropic refusal stop reasons before structured parsing', () => {
+        const response = translateAnthropicResponse({
+            content: [{ text: 'I cannot help with that.', type: 'text' }],
+            id: 'msg_refusal',
+            model: 'claude-sonnet-4-6',
+            role: 'assistant',
+            stop_reason: 'refusal',
+            usage: {
+                input_tokens: 10,
+                output_tokens: 4,
+            },
+        });
+        expect(response.finishReason).toBe('content_filter');
+        expect(response.refusal).toBe('I cannot help with that.');
+        expect(response.structuredOutputStatus).toBe('refusal');
     });
     it('falls back to the requested model when Anthropic returns a versioned model id', () => {
         const response = translateAnthropicResponse({

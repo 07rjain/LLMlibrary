@@ -42,8 +42,13 @@ export class ModelRegistry {
     this.now = options.now ?? (() => new Date());
     this.onWarning = options.onWarning ?? ((message) => console.warn(message));
 
+    const isDefaultSeed = seed === defaultModelPrices;
     for (const [id, model] of Object.entries(seed)) {
-      this.models.set(id, normalizeModelInfo({ ...model, id }));
+      const modelInfo = normalizeModelInfo({ ...model, id });
+      this.models.set(
+        id,
+        isDefaultSeed ? withBuiltInStructuredOutputDefaults(modelInfo) : modelInfo,
+      );
     }
 
     if (options.emitStalenessWarning ?? !isProductionRuntime()) {
@@ -151,4 +156,31 @@ function normalizeModelInfo(model: ModelInfo): ModelInfo {
     ...model,
     kind: model.kind ?? 'completion',
   };
+}
+
+function withBuiltInStructuredOutputDefaults(model: ModelInfo): ModelInfo {
+  if ((model.kind ?? 'completion') !== 'completion') {
+    return model;
+  }
+
+  switch (model.provider) {
+    case 'anthropic':
+      return {
+        ...model,
+        supportsJsonSchemaOutput: model.supportsJsonSchemaOutput ?? true,
+        supportsStructuredOutputStreaming:
+          model.supportsStructuredOutputStreaming ?? true,
+      };
+    case 'google':
+    case 'openai':
+      return {
+        ...model,
+        supportsJsonObjectOutput: model.supportsJsonObjectOutput ?? true,
+        supportsJsonSchemaOutput: model.supportsJsonSchemaOutput ?? true,
+        supportsStructuredOutputStreaming:
+          model.supportsStructuredOutputStreaming ?? true,
+      };
+    default:
+      return model;
+  }
 }

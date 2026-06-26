@@ -1,6 +1,6 @@
 import { AuthenticationError, ContextLimitError, ProviderError, RateLimitError } from '../errors.js';
 import { ModelRegistry } from '../models/registry.js';
-import type { CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, ProviderOptions, RemoteModelInfo, SpeechRequestOptions, SpeechResponse, StreamChunk, TranscriptionRequestOptions, TranscriptionResponse } from '../types.js';
+import type { CanonicalMessage, CanonicalResponse, CanonicalTool, CanonicalToolChoice, ProviderOptions, RemoteModelInfo, ResponseFormat, SpeechRequestOptions, SpeechResponse, StreamChunk, TranscriptionRequestOptions, TranscriptionResponse } from '../types.js';
 import type { OpenAIUsagePayload } from '../utils/cost.js';
 import type { RetryOptions } from '../utils/retry.js';
 interface OpenAIToolDefinition {
@@ -80,6 +80,7 @@ export interface OpenAICompletionOptions {
     messages: CanonicalMessage[];
     model: string;
     providerOptions?: ProviderOptions;
+    responseFormat?: ResponseFormat;
     signal?: AbortSignal;
     system?: string;
     temperature?: number;

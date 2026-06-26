@@ -1152,6 +1152,110 @@ describe('LLMClient', () => {
     }
   });
 
+  it('parses structured output and sends provider request format through complete()', async () => {
+    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      expect(request).toMatchObject({
+        text: {
+          format: {
+            schema: {
+              additionalProperties: false,
+              properties: {
+                answer: { type: 'string' },
+              },
+              required: ['answer'],
+              type: 'object',
+            },
+            strict: true,
+            type: 'json_schema',
+          },
+        },
+      });
+
+      return new Response(
+        JSON.stringify({
+          id: 'resp_1',
+          model: 'gpt-4o',
+          object: 'response',
+          output: [
+            {
+              content: [
+                {
+                  annotations: [],
+                  text: '{"answer":"ok"}',
+                  type: 'output_text',
+                },
+              ],
+              id: 'msg_1',
+              role: 'assistant',
+              status: 'completed',
+              type: 'message',
+            },
+          ],
+          status: 'completed',
+          usage: {
+            input_tokens: 5,
+            output_tokens: 3,
+          },
+        }),
+        {
+          headers: { 'content-type': 'application/json' },
+          status: 200,
+        },
+      );
+    });
+    const client = new LLMClient({
+      defaultModel: 'gpt-4o',
+      fetchImplementation,
+      openaiApiKey: 'openai-key',
+    });
+
+    const response = await client.complete({
+      messages: [{ content: 'Return the result.', role: 'user' }],
+      responseFormat: {
+        schema: {
+          properties: {
+            answer: { type: 'string' },
+          },
+          type: 'object',
+        },
+        type: 'json_schema',
+      },
+    });
+
+    expect(response.parsed).toEqual({ answer: 'ok' });
+    expect(response.responseFormat).toBe('json_schema');
+    expect(response.structuredOutputStatus).toBe('parsed');
+  });
+
+  it('rejects structured output for custom models without explicit capability flags', async () => {
+    const fetchImplementation = vi.fn();
+    const client = new LLMClient({
+      defaultModel: 'custom-openai',
+      fetchImplementation,
+      openaiApiKey: 'openai-key',
+    });
+    client.models.register({
+      contextWindow: 8192,
+      id: 'custom-openai',
+      inputPrice: 1,
+      lastUpdated: '2026-04-15',
+      outputPrice: 1,
+      provider: 'openai',
+      supportsStreaming: true,
+      supportsTools: false,
+      supportsVision: false,
+    });
+
+    await expect(
+      client.complete({
+        messages: [{ content: 'Return JSON.', role: 'user' }],
+        responseFormat: { type: 'json_object' },
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
   it('throws on missing API keys and provider/model mismatches', async () => {
     const openaiClient = new LLMClient({
       defaultModel: 'gpt-4o',
@@ -1354,6 +1458,45 @@ describe('LLMClient', () => {
       { delta: 'Mock stream', type: 'text-delta' },
       expect.objectContaining({ finishReason: 'stop', type: 'done' }),
     ]);
+  });
+
+  it('parses structured output responses through LLMClient.mock()', async () => {
+    const client = LLMClient.mock({
+      responses: [
+        {
+          content: [{ text: '{"answer":"mock"}', type: 'text' }],
+          finishReason: 'stop',
+          model: 'mock-model',
+          provider: 'mock',
+          raw: {},
+          text: '{"answer":"mock"}',
+          toolCalls: [],
+          usage: {
+            cachedTokens: 0,
+            cost: '$0.00',
+            costUSD: 0,
+            inputTokens: 1,
+            outputTokens: 1,
+          },
+        },
+      ],
+    });
+
+    const response = await client.complete({
+      messages: [{ content: 'Hello', role: 'user' }],
+      responseFormat: {
+        schema: {
+          properties: {
+            answer: { type: 'string' },
+          },
+          type: 'object',
+        },
+        type: 'json_schema',
+      },
+    });
+
+    expect(response.parsed).toEqual({ answer: 'mock' });
+    expect(response.structuredOutputStatus).toBe('parsed');
   });
 
   it('throws for unimplemented providers in complete() and stream()', async () => {

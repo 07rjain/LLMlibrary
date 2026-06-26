@@ -34,3 +34,4 @@ These are the checked-in seeded completion models, not the provider's full live 
 - All three adapters map auth, rate-limit, context-window, and generic provider failures into typed `LLMError` subclasses.
 - OpenAI and Gemini cached-read usage is priced separately from uncached input when the provider returns cached-token counts.
 - Live-provider smoke tests can be executed with `LIVE_TESTS=1 pnpm test:live` after populating `.env`.
+- Deeper real-service integration checks can be executed with `pnpm test:real:providers` or `pnpm test:real` after populating `.env`. These are intentionally opt-in because they consume provider quota and can fail for account-state reasons such as Anthropic low credits or Gemini rate limits.
