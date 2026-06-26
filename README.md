@@ -29,9 +29,23 @@ Provider-agnostic TypeScript client for Anthropic, OpenAI, and Google Gemini wit
 
 ## Install
 
+### Use From npm
+
+```bash
+pnpm add unified-llm-client
+```
+
+Equivalent commands for other package managers:
+
+```bash
+npm install unified-llm-client
+yarn add unified-llm-client
+bun add unified-llm-client
+```
+
 ### Use As A Library From GitHub
 
-Once this repo is on GitHub, install it in another project with:
+If you need to install directly from the repository instead of npm:
 
 ```bash
 pnpm add github:07rjain/LLMlibrary
