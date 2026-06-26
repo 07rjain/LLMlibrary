@@ -1,6 +1,6 @@
 {
   "name": "unified-llm-client",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Provider-agnostic LLM client library for Anthropic, OpenAI, and Gemini.",
   "repository": {
     "type": "git",
