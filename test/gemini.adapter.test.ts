@@ -1400,6 +1400,52 @@ describe('Gemini adapter', () => {
     });
     expect(deleteRequest[0]).toContain('/v1beta/cachedContents/cache_1');
   });
+
+  it('rejects cache names that could alter the authenticated request path', async () => {
+    const fetchImplementation = vi.fn<() => Promise<Response>>();
+    const adapter = new GeminiAdapter({
+      apiKey: 'gemini-key',
+      fetchImplementation,
+    });
+
+    const malicious = [
+      '../models/gemini-pro:generateContent',
+      'cachedContents/../models/gemini-pro:generateContent',
+      'cache_1?alt=media',
+      'cache_1/../../secret',
+      'cache 1',
+      'cachedContents/',
+    ];
+
+    for (const name of malicious) {
+      await expect(adapter.getCache(name)).rejects.toThrow(/Invalid Gemini cache name/);
+      await expect(
+        adapter.updateCache(name, { expireTime: '2026-04-21T12:00:00Z' }),
+      ).rejects.toThrow(/Invalid Gemini cache name/);
+      await expect(adapter.deleteCache(name)).rejects.toThrow(/Invalid Gemini cache name/);
+    }
+
+    // No network call should ever be attempted for an invalid name.
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it('accepts valid cache names with or without the resource prefix', async () => {
+    const fetchImplementation = vi.fn<() => Promise<Response>>().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({ model: 'models/gemini-2.5-flash', name: 'cachedContents/cache_1' }),
+          { headers: { 'content-type': 'application/json' }, status: 200 },
+        ),
+    );
+    const adapter = new GeminiAdapter({ apiKey: 'gemini-key', fetchImplementation });
+
+    await adapter.getCache('cache_1');
+    await adapter.getCache('cachedContents/cache_1');
+
+    const calls = fetchImplementation.mock.calls as unknown as [string][];
+    expect(calls[0]?.[0]).toContain('/v1beta/cachedContents/cache_1');
+    expect(calls[1]?.[0]).toContain('/v1beta/cachedContents/cache_1');
+  });
 });
 
 function makeSSEStream(events: unknown[]): ReadableStream<Uint8Array> {

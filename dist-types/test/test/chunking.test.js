@@ -14,6 +14,17 @@ describe('chunking helpers', () => {
     it('decodes named and numeric HTML entities while preserving unknown entities', () => {
         expect(stripHtml('<p>&lt;tag&gt; &quot;x&quot; &apos;y&apos; &#35; &#x41; &unknown;</p>')).toBe('<tag> "x" \'y\' # A &unknown;');
     });
+    it('preserves out-of-range and malformed numeric entities without throwing', () => {
+        // Values above U+10FFFF would throw RangeError from String.fromCodePoint.
+        expect(() => stripHtml('<p>&#xFFFFFFFF; &#99999999; &#x110000; &#xD800;</p>')).not.toThrow();
+        expect(stripHtml('<p>&#xFFFFFFFF; &#99999999; &#x110000; &#xD800;</p>')).toBe('&#xFFFFFFFF; &#99999999; &#x110000; &#xD800;');
+    });
+    it('decodes valid boundary numeric code points', () => {
+        // U+10FFFF is the highest valid code point (astral plane).
+        expect(stripHtml('<p>&#x10FFFF;</p>')).toBe(String.fromCodePoint(0x10ffff));
+        // NUL is stripped by cleanText's control-character handling.
+        expect(stripHtml('<p>A&#0;B</p>')).toBe('A B');
+    });
     it('returns a single chunk for short input', () => {
         const text = 'Refunds are available for 30 days.';
         expect(chunkText(text)).toEqual([

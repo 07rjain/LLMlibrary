@@ -88,15 +88,24 @@ function decodeHtmlEntities(input) {
             default:
                 if (entity.startsWith('#x') || entity.startsWith('#X')) {
                     const codePoint = Number.parseInt(entity.slice(2), 16);
-                    return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match;
+                    return isValidCodePoint(codePoint) ? String.fromCodePoint(codePoint) : match;
                 }
                 if (entity.startsWith('#')) {
                     const codePoint = Number.parseInt(entity.slice(1), 10);
-                    return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match;
+                    return isValidCodePoint(codePoint) ? String.fromCodePoint(codePoint) : match;
                 }
                 return match;
         }
     });
+}
+function isValidCodePoint(codePoint) {
+    // String.fromCodePoint throws RangeError for non-integers, negatives, and
+    // values above U+10FFFF. Lone surrogates (U+D800–U+DFFF) do not throw but
+    // yield malformed output, so reject them too and keep the literal entity.
+    return (Number.isInteger(codePoint) &&
+        codePoint >= 0 &&
+        codePoint <= 0x10ffff &&
+        !(codePoint >= 0xd800 && codePoint <= 0xdfff));
 }
 function findChunkBoundary(input, startOffset, proposedEnd, minChunkSize) {
     const minimumEnd = Math.min(startOffset + minChunkSize, proposedEnd);
