@@ -8,7 +8,7 @@ import { LLMClient } from '../src/client.js';
 
 import type { ConversationSnapshot } from '../src/conversation.js';
 import type { SessionApiOptions } from '../src/session-api.js';
-import type { JsonObject } from '../src/types.js';
+import type { JsonObject, StreamChunk } from '../src/types.js';
 
 describe('SessionApi', () => {
   it('requires a session store and allows middleware to short-circuit requests', async () => {
@@ -74,6 +74,7 @@ describe('SessionApi', () => {
       totalOutputTokens: 2,
     });
     const api = createSessionApi({
+      allowClientOverrides: ['system'],
       client,
       contextManager: new SlidingWindowStrategy({ maxMessages: 2 }),
       sessionStore: store,
@@ -297,6 +298,67 @@ describe('SessionApi', () => {
     });
   });
 
+  it('ignores client system prompts on session creation unless allowlisted', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      sessionStore: store,
+    });
+    const api = createSessionApi({
+      client,
+      conversationDefaults: {
+        system: 'SERVER_SYSTEM_PROMPT',
+      },
+      sessionStore: store,
+    });
+
+    const response = await api.handle(
+      jsonRequest('https://example.test/sessions', 'POST', {
+        messages: [
+          { content: 'ATTACKER_SYSTEM', role: 'system' },
+          { content: 'Hello', role: 'user' },
+        ],
+        sessionId: 'system-denied-session',
+        system: 'ATTACKER_BODY_SYSTEM',
+      }),
+    );
+    const record = await store.get('system-denied-session');
+
+    expect(response.status).toBe(201);
+    expect(record?.snapshot.system).toBe('SERVER_SYSTEM_PROMPT');
+    expect(record?.snapshot.messages).toEqual([{ content: 'Hello', role: 'user' }]);
+
+    const trustedStore = new InMemorySessionStore<ConversationSnapshot>();
+    const trustedClient = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      sessionStore: trustedStore,
+    });
+    const trustedApi = createSessionApi({
+      allowClientOverrides: ['system'],
+      client: trustedClient,
+      conversationDefaults: {
+        system: 'SERVER_SYSTEM_PROMPT',
+      },
+      sessionStore: trustedStore,
+    });
+
+    const trustedResponse = await trustedApi.handle(
+      jsonRequest('https://example.test/sessions', 'POST', {
+        messages: [
+          { content: 'ALLOWLISTED_SYSTEM', role: 'system' },
+          { content: 'Hello', role: 'user' },
+        ],
+        sessionId: 'system-allowed-session',
+      }),
+    );
+    const trustedRecord = await trustedStore.get('system-allowed-session');
+
+    expect(trustedResponse.status).toBe(201);
+    expect(trustedRecord?.snapshot.system).toBe('ALLOWLISTED_SYSTEM');
+  });
+
   it('streams canonical SSE events for session messages', async () => {
     const store = new InMemorySessionStore<ConversationSnapshot>();
     const client = LLMClient.mock({
@@ -358,6 +420,66 @@ describe('SessionApi', () => {
     expect(text).toContain('"redacted":true');
     expect(text).not.toContain('raw-tool-secret');
     expect(text).toContain('event: response.completed');
+  });
+
+  it('aborts streamed session work when the request signal is aborted', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    let observedSignal: AbortSignal | undefined;
+    let resolveAbort: (() => void) | undefined;
+    const aborted = new Promise<void>((resolve) => {
+      resolveAbort = resolve;
+    });
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      sessionStore: store,
+      streams: [
+        async function* (options): AsyncGenerator<StreamChunk, void, void> {
+          observedSignal = options.signal;
+          yield { delta: 'first', type: 'text-delta' };
+          await new Promise<void>((_, reject) => {
+            options.signal?.addEventListener(
+              'abort',
+              () => {
+                resolveAbort?.();
+                reject(options.signal?.reason ?? new Error('aborted'));
+              },
+              { once: true },
+            );
+          });
+        },
+      ],
+    });
+    const api = createSessionApi({
+      client,
+      sessionStore: store,
+    });
+
+    await api.handle(
+      jsonRequest('https://example.test/sessions', 'POST', {
+        sessionId: 'abort-stream-session',
+      }),
+    );
+
+    const abortController = new AbortController();
+    const response = await api.handle(
+      new Request('https://example.test/sessions/abort-stream-session/message?stream=true', {
+        body: JSON.stringify({ content: 'Stream this', stream: true }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+        signal: abortController.signal,
+      }),
+    );
+
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+    await reader?.read();
+    await reader?.read();
+    abortController.abort(new Error('client disconnected'));
+    await aborted;
+    await reader?.cancel();
+
+    expect(observedSignal?.aborted).toBe(true);
   });
 
   it('redacts tool result messages in JSON projections unless explicitly exposed', async () => {
@@ -1001,7 +1123,7 @@ describe('SessionApi', () => {
     const createdRecord = await store.get(created.session.id);
 
     expect(createResponse.status).toBe(201);
-    expect(createdRecord?.snapshot.system).toBe('System from messages');
+    expect(createdRecord?.snapshot.system).toBe('Default system');
     expect(createdRecord?.snapshot.maxTokens).toBe(55);
     expect(createdRecord?.snapshot.maxToolRounds).toBe(4);
     expect(createdRecord?.snapshot.providerOptions).toEqual({

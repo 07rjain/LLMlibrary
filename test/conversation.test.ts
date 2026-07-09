@@ -11,6 +11,7 @@ import type {
   CanonicalMessage,
   CanonicalResponse,
   CanonicalTool,
+  CanonicalToolSchema,
   JsonObject,
   JsonValue,
   ResponseFormat,
@@ -1154,6 +1155,238 @@ describe('Conversation', () => {
     );
   });
 
+  it('rejects prototype-sensitive tool argument keys in strict mode', async () => {
+    const execute = vi.fn(async () => ({ ok: true }));
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockResolvedValueOnce({
+        content: [],
+        finishReason: 'tool_call',
+        model: 'gpt-4o',
+        provider: 'openai',
+        raw: {},
+        text: '',
+        toolCalls: [
+          {
+            args: JSON.parse('{"__proto__":{"polluted":true},"city":"Berlin"}') as JsonObject,
+            id: 'tool_proto',
+            name: 'lookup_weather',
+          },
+          {
+            args: { city: 'Berlin', constructor: {} },
+            id: 'tool_constructor',
+            name: 'lookup_weather',
+          },
+        ],
+        usage: usage(4, 1, 0.01),
+      })
+      .mockResolvedValueOnce({
+        content: [{ text: 'Rejected.', type: 'text' }],
+        finishReason: 'stop',
+        model: 'gpt-4o',
+        provider: 'openai',
+        raw: {},
+        text: 'Rejected.',
+        toolCalls: [],
+        usage: usage(2, 1, 0.01),
+      });
+    const conversation = new Conversation(
+      {
+        complete,
+        stream: vi.fn(),
+      },
+      {
+        tools: [
+          {
+            description: 'Lookup weather',
+            execute,
+            name: 'lookup_weather',
+            parameters: {
+              properties: {
+                city: { type: 'string' },
+              },
+              required: ['city'],
+              type: 'object',
+            },
+          },
+        ],
+      },
+    );
+
+    await conversation.send('Reject prototype keys');
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                result: {
+                  error: expect.objectContaining({
+                    message: 'arguments.__proto__ is not allowed.',
+                  }),
+                },
+                toolCallId: 'tool_proto',
+              }),
+              expect.objectContaining({
+                result: {
+                  error: expect.objectContaining({
+                    message: 'arguments.constructor is not allowed.',
+                  }),
+                },
+                toolCallId: 'tool_constructor',
+              }),
+            ]),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it('requires own tool argument properties in strict mode', async () => {
+    const execute = vi.fn(async () => ({ ok: true }));
+    const inheritedArgs = Object.create({ city: 'Berlin' }) as JsonObject;
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockResolvedValueOnce({
+        content: [],
+        finishReason: 'tool_call',
+        model: 'gpt-4o',
+        provider: 'openai',
+        raw: {},
+        text: '',
+        toolCalls: [{ args: inheritedArgs, id: 'tool_inherited', name: 'lookup_weather' }],
+        usage: usage(4, 1, 0.01),
+      })
+      .mockResolvedValueOnce({
+        content: [{ text: 'Rejected.', type: 'text' }],
+        finishReason: 'stop',
+        model: 'gpt-4o',
+        provider: 'openai',
+        raw: {},
+        text: 'Rejected.',
+        toolCalls: [],
+        usage: usage(2, 1, 0.01),
+      });
+    const conversation = new Conversation(
+      {
+        complete,
+        stream: vi.fn(),
+      },
+      {
+        tools: [
+          {
+            description: 'Lookup weather',
+            execute,
+            name: 'lookup_weather',
+            parameters: {
+              properties: {
+                city: { type: 'string' },
+              },
+              required: ['city'],
+              type: 'object',
+            },
+          },
+        ],
+      },
+    );
+
+    await conversation.send('Reject inherited args');
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                result: {
+                  error: expect.objectContaining({
+                    message: 'arguments.city is required.',
+                  }),
+                },
+                toolCallId: 'tool_inherited',
+              }),
+            ]),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it('rejects malformed tool schemas instead of accepting unsupported schema types', async () => {
+    const execute = vi.fn(async () => ({ ok: true }));
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockResolvedValueOnce({
+        content: [],
+        finishReason: 'tool_call',
+        model: 'gpt-4o',
+        provider: 'openai',
+        raw: {},
+        text: '',
+        toolCalls: [{ args: { value: 'x' }, id: 'tool_schema', name: 'schema_tool' }],
+        usage: usage(4, 1, 0.01),
+      })
+      .mockResolvedValueOnce({
+        content: [{ text: 'Rejected.', type: 'text' }],
+        finishReason: 'stop',
+        model: 'gpt-4o',
+        provider: 'openai',
+        raw: {},
+        text: 'Rejected.',
+        toolCalls: [],
+        usage: usage(2, 1, 0.01),
+      });
+    const conversation = new Conversation(
+      {
+        complete,
+        stream: vi.fn(),
+      },
+      {
+        tools: [
+          {
+            description: 'Malformed schema tool',
+            execute,
+            name: 'schema_tool',
+            parameters: {
+              properties: {
+                value: {} as CanonicalToolSchema,
+              },
+              type: 'object',
+            },
+          },
+        ],
+      },
+    );
+
+    await conversation.send('Reject malformed schema');
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                result: {
+                  error: expect.objectContaining({
+                    message: 'arguments.value has an unsupported schema type.',
+                  }),
+                },
+                toolCallId: 'tool_schema',
+              }),
+            ]),
+          }),
+        ]),
+      }),
+    );
+  });
+
   it('passes the remaining session budget into each provider round', async () => {
     const execute = vi.fn(async () => ({ forecast: 'Berlin: sunny' }));
     const complete = vi
@@ -1458,6 +1691,124 @@ describe('Conversation', () => {
       maxToolRounds: 3,
       toolExecutionTimeoutMs: 500,
     });
+  });
+
+  it('prefers trusted restore options over stored conversation policy', () => {
+    const client: ConversationClient = {
+      complete: vi.fn(),
+      stream: vi.fn(),
+    };
+    const snapshot: ConversationSnapshot = {
+      budgetUsd: 999,
+      createdAt: '2026-04-15T10:00:00.000Z',
+      maxContextTokens: 999_999,
+      maxTokens: 999_999,
+      maxToolRounds: 99,
+      messages: [{ content: 'Stored user turn', role: 'user' }],
+      model: 'stored-model',
+      provider: 'openai',
+      providerOptions: {
+        openai: {
+          promptCaching: {
+            key: 'stored-cache-key',
+            retention: '24h',
+          },
+        },
+      },
+      responseFormat: { type: 'json_object' },
+      sessionId: 'stored-policy-session',
+      system: 'Stored system',
+      tenantId: 'stored-tenant',
+      toolChoice: { type: 'none' },
+      toolExecutionTimeoutMs: 250_000,
+      toolValidation: 'permissive',
+      totalCachedTokens: 0,
+      totalCostUSD: 1,
+      totalInputTokens: 10,
+      totalOutputTokens: 5,
+      updatedAt: '2026-04-15T10:00:00.000Z',
+    };
+
+    const restored = Conversation.restore(client, snapshot, {
+      budgetUsd: 1,
+      maxContextTokens: 2048,
+      maxTokens: 256,
+      maxToolRounds: 2,
+      model: 'trusted-model',
+      provider: 'google',
+      providerOptions: {
+        google: {
+          thinking: {
+            level: 'minimal',
+          },
+        },
+      },
+      responseFormat: {
+        name: 'trusted_response',
+        schema: {
+          properties: {
+            answer: { type: 'string' },
+          },
+          type: 'object',
+        },
+        type: 'json_schema',
+      },
+      system: 'Trusted system',
+      tenantId: 'trusted-tenant',
+      toolChoice: { type: 'auto' },
+      toolExecutionTimeoutMs: 1_000,
+      toolValidation: 'strict',
+    });
+
+    expect(restored.serialise()).toMatchObject({
+      budgetUsd: 1,
+      maxContextTokens: 2048,
+      maxTokens: 256,
+      maxToolRounds: 2,
+      model: 'trusted-model',
+      provider: 'google',
+      sessionId: 'stored-policy-session',
+      system: 'Trusted system',
+      tenantId: 'trusted-tenant',
+      toolChoice: { type: 'auto' },
+      toolExecutionTimeoutMs: 1_000,
+      totalCostUSD: 1,
+    });
+    expect(restored.serialise().toolValidation).toBeUndefined();
+    expect(restored.history).toEqual([{ content: 'Stored user turn', role: 'user' }]);
+  });
+
+  it('rejects non-finite or excessive tool loop limits', () => {
+    const client: ConversationClient = {
+      complete: vi.fn(),
+      stream: vi.fn(),
+    };
+    const snapshot: ConversationSnapshot = {
+      createdAt: '2026-04-15T10:00:00.000Z',
+      messages: [],
+      sessionId: 'stored-limit-session',
+      totalCachedTokens: 0,
+      totalCostUSD: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      updatedAt: '2026-04-15T10:00:00.000Z',
+    };
+
+    expect(() => new Conversation(client, { maxToolRounds: Number.POSITIVE_INFINITY })).toThrow(
+      'maxToolRounds must be an integer between 0 and 100.',
+    );
+    expect(() => new Conversation(client, { maxToolRounds: 101 })).toThrow(
+      'maxToolRounds must be an integer between 0 and 100.',
+    );
+    expect(() => new Conversation(client, { toolExecutionTimeoutMs: Number.POSITIVE_INFINITY })).toThrow(
+      'toolExecutionTimeoutMs must be a finite number between 1 and 300000.',
+    );
+    expect(() =>
+      Conversation.restore(client, { ...snapshot, maxToolRounds: Number.POSITIVE_INFINITY }),
+    ).toThrow('maxToolRounds must be an integer between 0 and 100.');
+    expect(() =>
+      Conversation.restore(client, { ...snapshot, toolExecutionTimeoutMs: Number.POSITIVE_INFINITY }),
+    ).toThrow('toolExecutionTimeoutMs must be a finite number between 1 and 300000.');
   });
 
   it('exports markdown transcripts with session metadata and structured parts', async () => {

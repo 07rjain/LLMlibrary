@@ -314,10 +314,13 @@ export class SessionApi {
     const body = await parseJsonBody<SessionCreateRequest>(request);
     const history = normalizeHistoryInput(body.messages ?? [], body.system);
     const tenantId = this.resolveTenantId(requestContext, body.tenantId);
+    const conversationOptions = this.buildConversationOptions(body, tenantId);
     const conversation = await this.client.conversation({
-      ...this.buildConversationOptions(body, tenantId),
+      ...conversationOptions,
       messages: history.messages,
-      ...(history.system !== undefined ? { system: history.system } : {}),
+      ...(history.system !== undefined && this.allowedClientOverrides.has('system')
+        ? { system: history.system }
+        : {}),
       ...(body.sessionId !== undefined ? { sessionId: body.sessionId } : {}),
     });
     const snapshot = conversation.serialise();
@@ -352,7 +355,7 @@ export class SessionApi {
     const shouldStream = body.stream ?? url.searchParams.get('stream') === 'true';
 
     if (shouldStream) {
-      return this.streamSessionMessage(conversation, sessionId, tenantId, body.content);
+      return this.streamSessionMessage(conversation, sessionId, tenantId, body.content, request.signal);
     }
 
     const response = await conversation.send(body.content);
@@ -674,15 +677,35 @@ export class SessionApi {
     sessionId: string,
     tenantId: string | undefined,
     content: CanonicalMessage['content'],
+    requestSignal: AbortSignal | undefined,
   ): Promise<Response> {
     const encoder = new TextEncoder();
+    const abortController = new AbortController();
+    let stream: ReturnType<typeof conversation.sendStream> | undefined;
+    let removeRequestAbortListener: (() => void) | undefined;
+
+    if (requestSignal) {
+      if (requestSignal.aborted) {
+        abortController.abort(requestSignal.reason);
+      } else {
+        const onAbort = () => {
+          abortController.abort(requestSignal.reason);
+          stream?.cancel(requestSignal.reason);
+        };
+        requestSignal.addEventListener('abort', onAbort, { once: true });
+        removeRequestAbortListener = () => {
+          requestSignal.removeEventListener('abort', onAbort);
+        };
+      }
+    }
 
     const body = new ReadableStream<Uint8Array>({
       start: async (controller) => {
         try {
           controller.enqueue(encoder.encode(formatSseEvent('session.message.started', { sessionId })));
 
-          for await (const chunk of conversation.sendStream(content)) {
+          stream = conversation.sendStream(content, { signal: abortController.signal });
+          for await (const chunk of stream) {
             if (chunk.type === 'text-delta') {
               controller.enqueue(
                 encoder.encode(formatSseEvent('response.text.delta', { delta: chunk.delta })),
@@ -751,12 +774,24 @@ export class SessionApi {
             );
           }
         } catch (error) {
-          controller.enqueue(
-            encoder.encode(formatSseEvent('response.error', serializeStreamError(error))),
-          );
+          if (!abortController.signal.aborted) {
+            controller.enqueue(
+              encoder.encode(formatSseEvent('response.error', serializeStreamError(error))),
+            );
+          }
         } finally {
-          controller.close();
+          removeRequestAbortListener?.();
+          try {
+            controller.close();
+          } catch {
+            // The stream may already be closed when the client disconnects.
+          }
         }
+      },
+      cancel: (reason) => {
+        abortController.abort(reason);
+        stream?.cancel(reason);
+        removeRequestAbortListener?.();
       },
     });
 
@@ -1023,28 +1058,20 @@ function normalizeHistoryInput(
   messages: CanonicalMessage[];
   system?: string;
 } {
-  if (messages.length === 0) {
-    return {
-      messages: [],
-      ...(system !== undefined ? { system } : {}),
-    };
-  }
-
-  const [firstMessage, ...rest] = messages;
-  if (
-    firstMessage?.role === 'system' &&
-    typeof firstMessage.content === 'string' &&
-    system === undefined
-  ) {
-    return {
-      messages: rest.map(cloneMessage),
-      system: firstMessage.content,
-    };
-  }
+  const firstMessage = messages[0];
+  const leadingSystem =
+    firstMessage?.role === 'system' && typeof firstMessage.content === 'string'
+      ? firstMessage.content
+      : undefined;
+  const nonSystemMessages = messages.filter((message) => message.role !== 'system');
 
   return {
-    messages: messages.map(cloneMessage),
-    ...(system !== undefined ? { system } : {}),
+    messages: nonSystemMessages.map(cloneMessage),
+    ...(system !== undefined
+      ? { system }
+      : leadingSystem !== undefined
+        ? { system: leadingSystem }
+        : {}),
   };
 }
 

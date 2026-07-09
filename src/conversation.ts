@@ -30,6 +30,9 @@ import type {
 const DEFAULT_MAX_TOOL_ROUNDS = 5;
 const DEFAULT_TOOL_EXECUTION_TIMEOUT_MS = 30_000;
 const DEFAULT_TOOL_VALIDATION: ToolValidationMode = 'strict';
+const MAX_TOOL_EXECUTION_TIMEOUT_MS = 300_000;
+const MAX_TOOL_ROUNDS = 100;
+const FORBIDDEN_TOOL_ARGUMENT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 export type ToolValidationMode = 'permissive' | 'strict';
 
@@ -170,7 +173,7 @@ export class Conversation {
     this.contextManager = options.contextManager;
     this.budgetUsd = options.budgetUsd;
     this.createdAt = new Date().toISOString();
-    this.maxToolRounds = options.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
+    this.maxToolRounds = normalizeMaxToolRounds(options.maxToolRounds);
     this.maxContextTokens = options.maxContextTokens;
     this.maxTokens = options.maxTokens;
     this.messages = cloneValue(options.messages ?? []);
@@ -184,8 +187,9 @@ export class Conversation {
     this.store = options.store;
     this.system = options.system;
     this.tenantId = options.tenantId;
-    this.toolExecutionTimeoutMs =
-      options.toolExecutionTimeoutMs ?? DEFAULT_TOOL_EXECUTION_TIMEOUT_MS;
+    this.toolExecutionTimeoutMs = normalizeToolExecutionTimeoutMs(
+      options.toolExecutionTimeoutMs,
+    );
     this.toolValidation = options.toolValidation ?? DEFAULT_TOOL_VALIDATION;
     this.toolChoice = options.toolChoice;
     this.tools = options.tools ? cloneTools(options.tools) : undefined;
@@ -348,30 +352,64 @@ export class Conversation {
     options: Omit<ConversationOptions, 'messages'> = {},
   ): Conversation {
     const conversation = new Conversation(client, {
-      ...options,
-      ...(snapshot.budgetUsd !== undefined ? { budgetUsd: snapshot.budgetUsd } : {}),
+      ...(options.budgetExceededAction !== undefined
+        ? { budgetExceededAction: options.budgetExceededAction }
+        : {}),
+      ...(options.budgetUsd !== undefined
+        ? { budgetUsd: options.budgetUsd }
+        : snapshot.budgetUsd !== undefined
+          ? { budgetUsd: snapshot.budgetUsd }
+          : {}),
+      ...(options.contextManager !== undefined ? { contextManager: options.contextManager } : {}),
       ...(options.maxToolRounds !== undefined
         ? { maxToolRounds: options.maxToolRounds }
         : snapshot.maxToolRounds !== undefined
           ? { maxToolRounds: snapshot.maxToolRounds }
           : {}),
-      ...(snapshot.maxContextTokens !== undefined
-        ? { maxContextTokens: snapshot.maxContextTokens }
-        : {}),
-      ...(snapshot.maxTokens !== undefined ? { maxTokens: snapshot.maxTokens } : {}),
+      ...(options.maxContextTokens !== undefined
+        ? { maxContextTokens: options.maxContextTokens }
+        : snapshot.maxContextTokens !== undefined
+          ? { maxContextTokens: snapshot.maxContextTokens }
+          : {}),
+      ...(options.maxTokens !== undefined
+        ? { maxTokens: options.maxTokens }
+        : snapshot.maxTokens !== undefined
+          ? { maxTokens: snapshot.maxTokens }
+          : {}),
       messages: snapshot.messages,
-      ...(snapshot.model !== undefined ? { model: snapshot.model } : {}),
-      ...(snapshot.provider !== undefined ? { provider: snapshot.provider } : {}),
-      ...(snapshot.providerOptions !== undefined
-        ? { providerOptions: snapshot.providerOptions }
-        : {}),
-      ...(snapshot.responseFormat !== undefined
-        ? { responseFormat: snapshot.responseFormat }
-        : {}),
+      ...(options.model !== undefined
+        ? { model: options.model }
+        : snapshot.model !== undefined
+          ? { model: snapshot.model }
+          : {}),
+      ...(options.onWarning !== undefined ? { onWarning: options.onWarning } : {}),
+      ...(options.provider !== undefined
+        ? { provider: options.provider }
+        : snapshot.provider !== undefined
+          ? { provider: snapshot.provider }
+          : {}),
+      ...(options.providerOptions !== undefined
+        ? { providerOptions: options.providerOptions }
+        : snapshot.providerOptions !== undefined
+          ? { providerOptions: snapshot.providerOptions }
+          : {}),
+      ...(options.responseFormat !== undefined
+        ? { responseFormat: options.responseFormat }
+        : snapshot.responseFormat !== undefined
+          ? { responseFormat: snapshot.responseFormat }
+          : {}),
       sessionId: snapshot.sessionId,
       ...(options.store !== undefined ? { store: options.store } : {}),
-      ...(snapshot.system !== undefined ? { system: snapshot.system } : {}),
-      ...(snapshot.tenantId !== undefined ? { tenantId: snapshot.tenantId } : {}),
+      ...(options.system !== undefined
+        ? { system: options.system }
+        : snapshot.system !== undefined
+          ? { system: snapshot.system }
+          : {}),
+      ...(options.tenantId !== undefined
+        ? { tenantId: options.tenantId }
+        : snapshot.tenantId !== undefined
+          ? { tenantId: snapshot.tenantId }
+          : {}),
       ...(options.toolExecutionTimeoutMs !== undefined
         ? { toolExecutionTimeoutMs: options.toolExecutionTimeoutMs }
         : snapshot.toolExecutionTimeoutMs !== undefined
@@ -382,7 +420,11 @@ export class Conversation {
         : snapshot.toolValidation !== undefined
           ? { toolValidation: snapshot.toolValidation }
           : {}),
-      ...(snapshot.toolChoice !== undefined ? { toolChoice: snapshot.toolChoice } : {}),
+      ...(options.toolChoice !== undefined
+        ? { toolChoice: options.toolChoice }
+        : snapshot.toolChoice !== undefined
+          ? { toolChoice: snapshot.toolChoice }
+          : {}),
       ...(options.tools !== undefined
         ? { tools: options.tools }
         : snapshot.tools !== undefined
@@ -1228,6 +1270,8 @@ function validateToolSchemaValue(
         throw new Error(`${path} must be a string.`);
       }
       return;
+    default:
+      throw new Error(`${path} has an unsupported schema type.`);
   }
 }
 
@@ -1241,23 +1285,55 @@ function validateToolObjectValue(
   }
 
   for (const key of schema.required ?? []) {
-    if (!(key in value)) {
+    if (!Object.hasOwn(value, key)) {
       throw new Error(`${path}.${key} is required.`);
     }
   }
 
   const properties = schema.properties ?? {};
   for (const [key, item] of Object.entries(value)) {
-    const propertySchema = properties[key];
-    if (!propertySchema) {
+    if (FORBIDDEN_TOOL_ARGUMENT_KEYS.has(key)) {
+      throw new Error(`${path}.${key} is not allowed.`);
+    }
+
+    if (!Object.hasOwn(properties, key)) {
       if (schema.additionalProperties === true) {
         continue;
       }
       throw new Error(`${path}.${key} is not allowed.`);
     }
 
+    const propertySchema = properties[key];
+    if (propertySchema === undefined) {
+      throw new Error(`${path}.${key} has an invalid schema.`);
+    }
+
     validateToolSchemaValue(item, propertySchema, `${path}.${key}`);
   }
+}
+
+function normalizeMaxToolRounds(value: number | undefined): number {
+  const resolved = value ?? DEFAULT_MAX_TOOL_ROUNDS;
+  if (!Number.isInteger(resolved) || resolved < 0 || resolved > MAX_TOOL_ROUNDS) {
+    throw new Error(`maxToolRounds must be an integer between 0 and ${MAX_TOOL_ROUNDS}.`);
+  }
+
+  return resolved;
+}
+
+function normalizeToolExecutionTimeoutMs(value: number | undefined): number {
+  const resolved = value ?? DEFAULT_TOOL_EXECUTION_TIMEOUT_MS;
+  if (
+    !Number.isFinite(resolved) ||
+    resolved <= 0 ||
+    resolved > MAX_TOOL_EXECUTION_TIMEOUT_MS
+  ) {
+    throw new Error(
+      `toolExecutionTimeoutMs must be a finite number between 1 and ${MAX_TOOL_EXECUTION_TIMEOUT_MS}.`,
+    );
+  }
+
+  return resolved;
 }
 
 function jsonPrimitiveEquals(expected: JsonPrimitive, actual: JsonValue): boolean {
