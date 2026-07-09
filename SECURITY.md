@@ -191,3 +191,18 @@ Before exposing this library in a production service:
 - Enforce request size, rate, and concurrency limits
 - Propagate `AbortSignal` to provider, retrieval, and tool work
 - Keep dependencies and provider model pricing metadata current
+
+## Security Scan Archives
+
+Repository security audits and sealed evidence live under `security_scan/`.
+
+- Human findings report: `security_scan/cursor_security_scan_report.md`
+- Archive index: `security_scan/archives/README.md`
+- Latest full evidence release:
+  https://github.com/07rjain/LLMlibrary/releases/tag/security-scan-20260709
+- Tarball:
+  https://github.com/07rjain/LLMlibrary/releases/download/security-scan-20260709/ee9e5c6_20260709T114052Z.tar.gz
+- SHA-256:
+  `9a3649f1f4be3751fde5ef3affa80248e0e02d97b31d897d2c4d275eac510233`
+
+Agent guidance also points here from `CLAUDE.md` and `AGENTS.md`.

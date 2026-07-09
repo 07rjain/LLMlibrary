@@ -204,3 +204,30 @@ This library is the LLM engine for a multi-tenant SaaS platform (**[PRODUCT NAME
 **Widget delivery:** Shadow DOM script tag (default) or iframe. The public API key in the embed code is scoped to a single `bot_id` + `tenant_id` and can only invoke chat endpoints.
 
 Full PRD: `chatbot_widget_PRD.md` | Research report: `chatbot_widget_report.md` | Session API contract: `SESSION_API.md`
+
+---
+
+## Security
+
+Policy and integrator checklist: **`SECURITY.md`**.
+
+### Security scan reports (agents)
+
+When auditing, verifying, or regressing security work, start here:
+
+| Artifact | Path / URL |
+|---|---|
+| Human findings report (Cursor, 2026-07-09) | `security_scan/cursor_security_scan_report.md` |
+| Codex-style projected report | `security_scan/codex_security_scan_20260709_report.md` |
+| Prior Codex report (2026-06-30) | `security_scan/codex_security_scan_20260630_report.md` |
+| Verification notes | `security_scan/security_audit_final_verification_20260707.md` |
+| Archive index | `security_scan/archives/README.md` |
+| Full scan evidence (GitHub Release) | https://github.com/07rjain/LLMlibrary/releases/tag/security-scan-20260709 |
+| Tarball download | https://github.com/07rjain/LLMlibrary/releases/download/security-scan-20260709/ee9e5c6_20260709T114052Z.tar.gz |
+| In-repo tarball + checksum | `security_scan/archives/ee9e5c6_20260709T114052Z.tar.gz` (+ `.sha256`) |
+
+**Scan ID:** `ee9e5c6_20260709T114052Z` · **SHA-256:** `9a3649f1f4be3751fde5ef3affa80248e0e02d97b31d897d2c4d275eac510233`
+
+Do **not** commit unpacked `security_scan/<scan_id>/` working trees (gitignored). Prefer the markdown reports for day-to-day work; unpack the Release/tarball only when you need ledgers, PoCs, or sealed JSON.
+
+July 2026 reportable findings (system-prompt override, restore policy trust, tool-arg prototype bypass, SSE abort, tool-limit clamps) were fixed on `security_audit`; use the Cursor report + `test/session-api.test.ts` / `test/conversation.test.ts` for regression.
