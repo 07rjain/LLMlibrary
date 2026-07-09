@@ -287,6 +287,51 @@ describe('agent file helpers', () => {
         });
     });
 });
+describe('loadSkill path containment', () => {
+    let workspace;
+    beforeEach(async () => {
+        workspace = await mkdtemp(join(tmpdir(), 'load-skill-'));
+        await mkdir(join(workspace, '.git'));
+    });
+    afterEach(async () => {
+        await rm(workspace, { force: true, recursive: true });
+    });
+    it('rejects a string path without a trusted root', async () => {
+        const skillsRoot = join(workspace, '.agents', 'skills', 'demo');
+        await mkdir(skillsRoot, { recursive: true });
+        await writeSkill(skillsRoot, 'demo', 'Demo skill.');
+        await expect(loadSkill(join(skillsRoot, 'SKILL.md'))).rejects.toThrow(AgentFilesError);
+    });
+    it('loads a string path that stays inside the trusted root', async () => {
+        const root = join(workspace, '.agents', 'skills');
+        const skillDir = join(root, 'demo');
+        await mkdir(skillDir, { recursive: true });
+        await writeSkill(skillDir, 'demo', 'Demo skill.', 'Body here.');
+        const skill = await loadSkill('demo/SKILL.md', { root });
+        expect(skill.name).toBe('demo');
+        expect(skill.body).toContain('Body here.');
+    });
+    it('rejects a traversal path that escapes the trusted root', async () => {
+        const root = join(workspace, '.agents', 'skills');
+        await mkdir(root, { recursive: true });
+        await writeFile(join(workspace, 'secret.md'), '---\nname: x\ndescription: y\n---\nsecret');
+        await expect(loadSkill('../../secret.md', { root })).rejects.toThrow(/outside root/);
+    });
+    it('rejects an absolute path outside the trusted root', async () => {
+        const root = join(workspace, '.agents', 'skills');
+        await mkdir(root, { recursive: true });
+        await expect(loadSkill('/etc/passwd', { root })).rejects.toThrow(/outside root/);
+    });
+    it('still accepts manifests from discoverSkills without a root', async () => {
+        const agentDir = join(workspace, 'agent');
+        const skillDir = join(agentDir, '.agents', 'skills', 'demo');
+        await mkdir(skillDir, { recursive: true });
+        await writeSkill(skillDir, 'demo', 'Demo skill.', 'Manifest body.');
+        const [manifest] = await discoverSkills({ cwd: agentDir });
+        const skill = await loadSkill(manifest);
+        expect(skill.body).toContain('Manifest body.');
+    });
+});
 const runLiveAgentSmoke = process.env.LIVE_TESTS === '1' && process.env.OPENAI_API_KEY ? it : it.skip;
 describe('agent file helpers live smoke', () => {
     let workspace;

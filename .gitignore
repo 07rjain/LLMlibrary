@@ -11,3 +11,8 @@ docs/.vitepress/cache
 docs/.vitepress/dist
 test/live-real/artifacts/*.json
 .DS_Store
+
+# Security scan working trees (keep archives/ + markdown reports)
+security_scan/.active_scan_path
+security_scan/ee9e5c6_*/
+security_scan/*_*T*Z/

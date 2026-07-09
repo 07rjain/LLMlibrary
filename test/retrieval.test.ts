@@ -1308,3 +1308,75 @@ describe('retrieval helpers', () => {
     }
   });
 });
+
+describe('in-memory knowledge store tenant isolation', () => {
+  it('rejects a knowledge space upsert that reassigns an existing id to another tenant', async () => {
+    const store = createInMemoryKnowledgeStore();
+    await store.upsertKnowledgeSpace({
+      botId: 'bot-1',
+      id: 'space-1',
+      name: 'Tenant 1 KB',
+      tenantId: 'tenant-1',
+    });
+
+    await expect(
+      store.upsertKnowledgeSpace({
+        botId: 'bot-evil',
+        id: 'space-1',
+        name: 'Hijacked KB',
+        tenantId: 'tenant-2',
+      }),
+    ).rejects.toThrow(/different tenant/);
+
+    // Same-tenant update is still allowed.
+    const updated = await store.upsertKnowledgeSpace({
+      botId: 'bot-1',
+      id: 'space-1',
+      name: 'Tenant 1 KB v2',
+      tenantId: 'tenant-1',
+    });
+    expect(updated.name).toBe('Tenant 1 KB v2');
+    expect(updated.tenantId).toBe('tenant-1');
+  });
+
+  it('rejects a source upsert that crosses tenant or bot ownership', async () => {
+    const store = createInMemoryKnowledgeStore();
+    const base = {
+      botId: 'bot-1',
+      id: 'source-1',
+      knowledgeSpaceId: 'space-1',
+      name: 'Refund Policy',
+      sourceType: 'pdf' as const,
+      status: 'ready' as const,
+      tenantId: 'tenant-1',
+    };
+    await store.upsertKnowledgeSource(base);
+
+    await expect(
+      store.upsertKnowledgeSource({ ...base, tenantId: 'tenant-2' }),
+    ).rejects.toThrow(/different tenant/);
+    await expect(
+      store.upsertKnowledgeSource({ ...base, botId: 'bot-2' }),
+    ).rejects.toThrow(/different bot/);
+  });
+
+  it('rejects a chunk upsert that crosses tenant ownership', async () => {
+    const store = createInMemoryKnowledgeStore();
+    const base = {
+      botId: 'bot-1',
+      chunkIndex: 0,
+      embedding: [0.98, 0.02],
+      embeddingProfileId: 'profile-1',
+      id: 'chunk-1',
+      knowledgeSpaceId: 'space-1',
+      sourceId: 'source-1',
+      tenantId: 'tenant-1',
+      text: 'Refunds are available for 30 days.',
+    };
+    await store.upsertKnowledgeChunk(base);
+
+    await expect(
+      store.upsertKnowledgeChunk({ ...base, tenantId: 'tenant-2' }),
+    ).rejects.toThrow(LLMError);
+  });
+});

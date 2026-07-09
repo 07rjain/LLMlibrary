@@ -16,10 +16,12 @@ const REDACTION_MARKER = '[REDACTED]';
  * ```
  */
 export class SessionApi {
+    allowedClientOverrides;
     basePath;
     client;
     contextManager;
     conversationDefaults;
+    exposeToolResults;
     middleware;
     sessionStore;
     tenantResolution;
@@ -30,10 +32,12 @@ export class SessionApi {
         if (!sessionStore) {
             throw new ProviderCapabilityError('SessionApi requires a session store. Configure sessionStore on LLMClient or pass sessionStore directly.');
         }
+        this.allowedClientOverrides = resolveClientOverridePolicy(options.allowClientOverrides);
         this.basePath = normalizeBasePath(options.basePath ?? '/sessions');
         this.client = options.client;
         this.contextManager = options.contextManager;
         this.conversationDefaults = { ...(options.conversationDefaults ?? {}) };
+        this.exposeToolResults = options.exposeToolResults ?? false;
         this.middleware = [...(options.middleware ?? [])];
         this.sessionStore = sessionStore;
         this.tenantResolution = options.tenantResolution ?? 'trusted-context';
@@ -116,10 +120,13 @@ export class SessionApi {
         const body = await parseJsonBody(request);
         const history = normalizeHistoryInput(body.messages ?? [], body.system);
         const tenantId = this.resolveTenantId(requestContext, body.tenantId);
+        const conversationOptions = this.buildConversationOptions(body, tenantId);
         const conversation = await this.client.conversation({
-            ...this.buildConversationOptions(body, tenantId),
+            ...conversationOptions,
             messages: history.messages,
-            ...(history.system !== undefined ? { system: history.system } : {}),
+            ...(history.system !== undefined && this.allowedClientOverrides.has('system')
+                ? { system: history.system }
+                : {}),
             ...(body.sessionId !== undefined ? { sessionId: body.sessionId } : {}),
         });
         const snapshot = conversation.serialise();
@@ -143,7 +150,7 @@ export class SessionApi {
         });
         const shouldStream = body.stream ?? url.searchParams.get('stream') === 'true';
         if (shouldStream) {
-            return this.streamSessionMessage(conversation, sessionId, tenantId, body.content);
+            return this.streamSessionMessage(conversation, sessionId, tenantId, body.content, request.signal);
         }
         const response = await conversation.send(body.content);
         const record = await this.requireSession(sessionId, tenantId);
@@ -164,7 +171,7 @@ export class SessionApi {
     async handleGetSessionMessages(sessionId, url, requestContext) {
         const tenantId = this.resolveTenantId(requestContext, url.searchParams.get('tenantId') ?? undefined);
         const record = await this.requireSession(sessionId, tenantId);
-        const history = snapshotToMessages(record.snapshot);
+        const history = projectMessagesForClient(snapshotToMessages(record.snapshot), this.exposeToolResults);
         const page = paginateItems(history, parseCursor(url.searchParams.get('cursor')), parseLimit(url.searchParams.get('limit'), 50));
         return jsonResponse({
             messages: page,
@@ -310,7 +317,7 @@ export class SessionApi {
             ...(record.snapshot.system !== undefined ? { system: record.snapshot.system } : {}),
         };
         if (include.has('messages')) {
-            view.messages = snapshotToMessages(record.snapshot);
+            view.messages = projectMessagesForClient(snapshotToMessages(record.snapshot), this.exposeToolResults);
         }
         if (include.has('cost')) {
             view.totals = {
@@ -327,69 +334,66 @@ export class SessionApi {
         return view;
     }
     buildConversationOptions(config, tenantId) {
+        // Start from the trusted server policy, then layer only the client-supplied
+        // fields the server has explicitly allowlisted. Untrusted request-body
+        // fields never silently override server policy (spend caps, tool validation,
+        // model/provider/system, etc.).
+        const merged = { ...this.conversationDefaults };
+        for (const field of CONVERSATION_CONFIG_FIELDS) {
+            if (config[field] !== undefined && this.allowedClientOverrides.has(field)) {
+                assignConfigField(merged, config, field);
+            }
+        }
         return {
-            ...(this.conversationDefaults.budgetUsd !== undefined
-                ? { budgetUsd: this.conversationDefaults.budgetUsd }
+            ...(merged.budgetUsd !== undefined ? { budgetUsd: merged.budgetUsd } : {}),
+            ...(merged.maxContextTokens !== undefined
+                ? { maxContextTokens: merged.maxContextTokens }
                 : {}),
-            ...(this.conversationDefaults.maxContextTokens !== undefined
-                ? { maxContextTokens: this.conversationDefaults.maxContextTokens }
+            ...(merged.maxTokens !== undefined ? { maxTokens: merged.maxTokens } : {}),
+            ...(merged.maxToolRounds !== undefined ? { maxToolRounds: merged.maxToolRounds } : {}),
+            ...(merged.model !== undefined ? { model: merged.model } : {}),
+            ...(merged.provider !== undefined ? { provider: merged.provider } : {}),
+            ...(merged.providerOptions !== undefined
+                ? { providerOptions: merged.providerOptions }
                 : {}),
-            ...(this.conversationDefaults.maxTokens !== undefined
-                ? { maxTokens: this.conversationDefaults.maxTokens }
+            ...(merged.responseFormat !== undefined ? { responseFormat: merged.responseFormat } : {}),
+            ...(merged.system !== undefined ? { system: merged.system } : {}),
+            ...(merged.toolChoice !== undefined ? { toolChoice: merged.toolChoice } : {}),
+            ...(merged.toolExecutionTimeoutMs !== undefined
+                ? { toolExecutionTimeoutMs: merged.toolExecutionTimeoutMs }
                 : {}),
-            ...(this.conversationDefaults.maxToolRounds !== undefined
-                ? { maxToolRounds: this.conversationDefaults.maxToolRounds }
-                : {}),
-            ...(this.conversationDefaults.model !== undefined
-                ? { model: this.conversationDefaults.model }
-                : {}),
-            ...(this.conversationDefaults.provider !== undefined
-                ? { provider: this.conversationDefaults.provider }
-                : {}),
-            ...(this.conversationDefaults.providerOptions !== undefined
-                ? { providerOptions: this.conversationDefaults.providerOptions }
-                : {}),
-            ...(this.conversationDefaults.responseFormat !== undefined
-                ? { responseFormat: this.conversationDefaults.responseFormat }
-                : {}),
-            ...(this.conversationDefaults.system !== undefined
-                ? { system: this.conversationDefaults.system }
-                : {}),
-            ...(this.conversationDefaults.toolChoice !== undefined
-                ? { toolChoice: this.conversationDefaults.toolChoice }
-                : {}),
-            ...(this.conversationDefaults.toolExecutionTimeoutMs !== undefined
-                ? { toolExecutionTimeoutMs: this.conversationDefaults.toolExecutionTimeoutMs }
-                : {}),
-            ...(this.conversationDefaults.toolValidation !== undefined
-                ? { toolValidation: this.conversationDefaults.toolValidation }
-                : {}),
+            ...(merged.toolValidation !== undefined ? { toolValidation: merged.toolValidation } : {}),
             ...(this.contextManager !== undefined ? { contextManager: this.contextManager } : {}),
             ...(tenantId !== undefined ? { tenantId } : {}),
             ...(this.tools !== undefined ? { tools: this.tools } : {}),
-            ...(config.budgetUsd !== undefined ? { budgetUsd: config.budgetUsd } : {}),
-            ...(config.maxContextTokens !== undefined ? { maxContextTokens: config.maxContextTokens } : {}),
-            ...(config.maxTokens !== undefined ? { maxTokens: config.maxTokens } : {}),
-            ...(config.maxToolRounds !== undefined ? { maxToolRounds: config.maxToolRounds } : {}),
-            ...(config.model !== undefined ? { model: config.model } : {}),
-            ...(config.provider !== undefined ? { provider: config.provider } : {}),
-            ...(config.providerOptions !== undefined ? { providerOptions: config.providerOptions } : {}),
-            ...(config.responseFormat !== undefined ? { responseFormat: config.responseFormat } : {}),
-            ...(config.system !== undefined ? { system: config.system } : {}),
-            ...(config.toolChoice !== undefined ? { toolChoice: config.toolChoice } : {}),
-            ...(config.toolExecutionTimeoutMs !== undefined
-                ? { toolExecutionTimeoutMs: config.toolExecutionTimeoutMs }
-                : {}),
-            ...(config.toolValidation !== undefined ? { toolValidation: config.toolValidation } : {}),
         };
     }
-    async streamSessionMessage(conversation, sessionId, tenantId, content) {
+    async streamSessionMessage(conversation, sessionId, tenantId, content, requestSignal) {
         const encoder = new TextEncoder();
+        const abortController = new AbortController();
+        let stream;
+        let removeRequestAbortListener;
+        if (requestSignal) {
+            if (requestSignal.aborted) {
+                abortController.abort(requestSignal.reason);
+            }
+            else {
+                const onAbort = () => {
+                    abortController.abort(requestSignal.reason);
+                    stream?.cancel(requestSignal.reason);
+                };
+                requestSignal.addEventListener('abort', onAbort, { once: true });
+                removeRequestAbortListener = () => {
+                    requestSignal.removeEventListener('abort', onAbort);
+                };
+            }
+        }
         const body = new ReadableStream({
             start: async (controller) => {
                 try {
                     controller.enqueue(encoder.encode(formatSseEvent('session.message.started', { sessionId })));
-                    for await (const chunk of conversation.sendStream(content)) {
+                    stream = conversation.sendStream(content, { signal: abortController.signal });
+                    for await (const chunk of stream) {
                         if (chunk.type === 'text-delta') {
                             controller.enqueue(encoder.encode(formatSseEvent('response.text.delta', { delta: chunk.delta })));
                             continue;
@@ -409,10 +413,13 @@ export class SessionApi {
                             continue;
                         }
                         if (chunk.type === 'tool-call-result') {
+                            const resultPayload = this.exposeToolResults
+                                ? { result: chunk.result }
+                                : { redacted: true, result: TOOL_RESULT_REDACTION };
                             controller.enqueue(encoder.encode(formatSseEvent('response.tool_call.result', {
                                 id: chunk.id,
                                 name: chunk.name,
-                                result: chunk.result,
+                                ...resultPayload,
                             })));
                             continue;
                         }
@@ -429,11 +436,24 @@ export class SessionApi {
                     }
                 }
                 catch (error) {
-                    controller.enqueue(encoder.encode(formatSseEvent('response.error', serializeStreamError(error))));
+                    if (!abortController.signal.aborted) {
+                        controller.enqueue(encoder.encode(formatSseEvent('response.error', serializeStreamError(error))));
+                    }
                 }
                 finally {
-                    controller.close();
+                    removeRequestAbortListener?.();
+                    try {
+                        controller.close();
+                    }
+                    catch {
+                        // The stream may already be closed when the client disconnects.
+                    }
                 }
+            },
+            cancel: (reason) => {
+                abortController.abort(reason);
+                stream?.cancel(reason);
+                removeRequestAbortListener?.();
             },
         });
         return new Response(body, {
@@ -623,24 +643,18 @@ function paginateItems(items, cursor, limit) {
     };
 }
 function normalizeHistoryInput(messages, system) {
-    if (messages.length === 0) {
-        return {
-            messages: [],
-            ...(system !== undefined ? { system } : {}),
-        };
-    }
-    const [firstMessage, ...rest] = messages;
-    if (firstMessage?.role === 'system' &&
-        typeof firstMessage.content === 'string' &&
-        system === undefined) {
-        return {
-            messages: rest.map(cloneMessage),
-            system: firstMessage.content,
-        };
-    }
+    const firstMessage = messages[0];
+    const leadingSystem = firstMessage?.role === 'system' && typeof firstMessage.content === 'string'
+        ? firstMessage.content
+        : undefined;
+    const nonSystemMessages = messages.filter((message) => message.role !== 'system');
     return {
-        messages: messages.map(cloneMessage),
-        ...(system !== undefined ? { system } : {}),
+        messages: nonSystemMessages.map(cloneMessage),
+        ...(system !== undefined
+            ? { system }
+            : leadingSystem !== undefined
+                ? { system: leadingSystem }
+                : {}),
     };
 }
 function snapshotToMessages(snapshot) {
@@ -665,6 +679,62 @@ function cloneSnapshot(snapshot) {
 }
 function cloneMessage(message) {
     return JSON.parse(JSON.stringify(message));
+}
+/** Every policy field a request body may carry, used to drive the allowlist. */
+const CONVERSATION_CONFIG_FIELDS = [
+    'budgetUsd',
+    'maxContextTokens',
+    'maxTokens',
+    'maxToolRounds',
+    'model',
+    'provider',
+    'providerOptions',
+    'responseFormat',
+    'system',
+    'toolChoice',
+    'toolExecutionTimeoutMs',
+    'toolValidation',
+];
+function assignConfigField(target, source, field) {
+    // Narrow, type-safe copy of a single known field between configs.
+    target[field] = source[field];
+}
+function resolveClientOverridePolicy(policy) {
+    if (policy === true) {
+        return new Set(CONVERSATION_CONFIG_FIELDS);
+    }
+    if (Array.isArray(policy)) {
+        return new Set(policy);
+    }
+    return new Set();
+}
+const TOOL_RESULT_REDACTION = '[tool result withheld]';
+/**
+ * Redact `tool_result` parts from a message before it reaches a public client.
+ * Tool results carry raw database/RAG output that should stay server-internal;
+ * the part is kept (so tool-call/result pairing is visible) but its payload is
+ * replaced with a placeholder. Returns the message unchanged when it has no
+ * tool results, avoiding needless allocation.
+ */
+function redactToolResults(message) {
+    if (typeof message.content === 'string') {
+        return message;
+    }
+    if (!message.content.some((part) => part.type === 'tool_result')) {
+        return message;
+    }
+    return {
+        ...message,
+        content: message.content.map((part) => part.type === 'tool_result'
+            ? { ...part, redacted: true, result: TOOL_RESULT_REDACTION }
+            : part),
+    };
+}
+function projectMessagesForClient(messages, exposeToolResults) {
+    if (exposeToolResults) {
+        return messages;
+    }
+    return messages.map(redactToolResults);
 }
 function createSessionId() {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {

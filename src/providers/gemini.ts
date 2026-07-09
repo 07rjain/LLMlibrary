@@ -1293,8 +1293,24 @@ function normalizeGeminiModelId(model: string): string {
   return model.startsWith('models/') ? model.slice('models/'.length) : model;
 }
 
+// Gemini cache resource IDs are opaque tokens; the API returns names shaped as
+// `cachedContents/<id>`. Only accept that exact grammar so a caller-supplied
+// name cannot inject path separators, `..`, or query characters into the
+// authenticated request URL.
+const GEMINI_CACHE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
 function normalizeGeminiCachedContentName(name: string): string {
-  return name.startsWith('cachedContents/') ? name : `cachedContents/${name}`;
+  const id = name.startsWith('cachedContents/')
+    ? name.slice('cachedContents/'.length)
+    : name;
+  if (!GEMINI_CACHE_ID_PATTERN.test(id)) {
+    throw new Error(
+      `Invalid Gemini cache name "${name}". Expected "cachedContents/<id>" where id matches ${String(
+        GEMINI_CACHE_ID_PATTERN,
+      )}.`,
+    );
+  }
+  return `cachedContents/${encodeURIComponent(id)}`;
 }
 
 function translateGeminiSchema(schema: CanonicalToolSchema): GeminiToolSchema {

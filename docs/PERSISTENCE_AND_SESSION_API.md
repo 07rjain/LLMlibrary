@@ -159,6 +159,9 @@ const client = LLMClient.fromEnv({
 const sessionApi = createSessionApi({
   client,
   sessionStore,
+  conversationDefaults: {
+    system: 'Be concise.',
+  },
 });
 
 const response = await sessionApi.handle(
@@ -167,11 +170,16 @@ const response = await sessionApi.handle(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       sessionId: 'support-123',
-      system: 'Be concise.',
     }),
   }),
 );
 ```
+
+For public or multi-tenant routes, keep conversation policy in server-side
+`conversationDefaults`. Request body fields such as `system`, `model`,
+`provider`, `providerOptions`, `responseFormat`, `budgetUsd`, `toolValidation`,
+`maxToolRounds`, and `toolExecutionTimeoutMs` are ignored unless the Session API
+is configured with an explicit `allowClientOverrides` allowlist.
 
 ## Session API Endpoints
 

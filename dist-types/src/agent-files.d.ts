@@ -28,6 +28,13 @@ export interface DiscoverSkillsOptions {
 }
 export interface LoadSkillOptions {
     maxBytes?: number;
+    /**
+     * Trusted root that a string `skillOrPath` must resolve inside. Required when
+     * loading by raw path so untrusted input cannot escape the skills directory.
+     * Ignored when a manifest returned by {@link discoverSkills} is passed, since
+     * those paths are already validated against their root.
+     */
+    root?: string;
 }
 export interface AgentSkill extends AgentSkillManifest {
     body: string;

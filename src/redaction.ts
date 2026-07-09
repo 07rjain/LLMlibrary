@@ -33,23 +33,40 @@ function sanitizeValue(value: unknown): unknown {
   return value;
 }
 
+// Exact-match keys that are too short or generic to safely match as substrings
+// (e.g. "dsn" must not redact "dsnRegion"; "cookie" is a whole-key concept).
+const EXACT_SENSITIVE_KEYS = new Set([
+  'authorization',
+  'cookie',
+  'databaseurl',
+  'dsn',
+  'xapikey',
+]);
+
+// Sensitive tokens matched anywhere in the normalized key so that provider- or
+// context-prefixed variants (openaiApiKey, gemini_api_key, dbPassword,
+// serviceAccountCredentials, pgConnectionString) are also redacted.
+const SENSITIVE_KEY_SUBSTRINGS = [
+  'apikey',
+  'secret',
+  'password',
+  'passwd',
+  'credential',
+  'connectionstring',
+  'privatekey',
+];
+
 function isSensitiveKey(key: string): boolean {
   const normalized = key.replaceAll(/[^a-z0-9]/gi, '').toLowerCase();
-  return (
-    normalized === 'apikey' ||
-    normalized === 'authorization' ||
-    normalized === 'connectionstring' ||
-    normalized === 'cookie' ||
-    normalized === 'databaseurl' ||
-    normalized === 'dsn' ||
-    normalized === 'password' ||
-    normalized === 'secret' ||
-    normalized === 'token' ||
-    normalized === 'accesstoken' ||
-    normalized === 'refreshtoken' ||
-    normalized === 'idtoken' ||
-    normalized === 'xapikey'
-  );
+  if (EXACT_SENSITIVE_KEYS.has(normalized)) {
+    return true;
+  }
+  if (SENSITIVE_KEY_SUBSTRINGS.some((token) => normalized.includes(token))) {
+    return true;
+  }
+  // Match the singular "...token" suffix (accessToken, refreshToken, authToken)
+  // without redacting plural usage-metric fields like inputTokens / maxTokens.
+  return normalized === 'token' || normalized.endsWith('token');
 }
 
 function sanitizeString(value: string): string {

@@ -45,6 +45,13 @@ export interface DiscoverSkillsOptions {
 
 export interface LoadSkillOptions {
   maxBytes?: number;
+  /**
+   * Trusted root that a string `skillOrPath` must resolve inside. Required when
+   * loading by raw path so untrusted input cannot escape the skills directory.
+   * Ignored when a manifest returned by {@link discoverSkills} is passed, since
+   * those paths are already validated against their root.
+   */
+  root?: string;
 }
 
 export interface AgentSkill extends AgentSkillManifest {
@@ -136,7 +143,20 @@ export async function loadSkill(
   skillOrPath: AgentSkillManifest | string,
   options: LoadSkillOptions = {},
 ): Promise<AgentSkill> {
-  const skillPath = typeof skillOrPath === 'string' ? resolve(skillOrPath) : skillOrPath.path;
+  let skillPath: string;
+  if (typeof skillOrPath === 'string') {
+    if (options.root === undefined) {
+      throw new AgentFilesError(
+        'loadSkill() requires a trusted "root" option when given a string path. ' +
+          'Pass a manifest from discoverSkills() or set options.root.',
+      );
+    }
+    const root = resolve(options.root);
+    skillPath = resolve(root, skillOrPath);
+    assertPathWithinRoot(skillPath, root);
+  } else {
+    skillPath = skillOrPath.path;
+  }
   const content = await readUtf8FileWithLimit(
     skillPath,
     options.maxBytes ?? DEFAULT_SKILL_MAX_BYTES,
@@ -220,6 +240,18 @@ function assertWithinRoot(cwd: string, root: string): void {
   }
   if (relativePath === '..' || relativePath.startsWith('../') || relativePath.startsWith('..\\')) {
     throw new AgentFilesError(`cwd "${cwd}" is outside root "${root}".`);
+  }
+}
+
+function assertPathWithinRoot(target: string, root: string): void {
+  const relativePath = relative(root, target);
+  if (
+    relativePath === '..' ||
+    relativePath.startsWith('../') ||
+    relativePath.startsWith('..\\') ||
+    resolve(root, relativePath) !== target
+  ) {
+    throw new AgentFilesError(`Skill path "${target}" is outside root "${root}".`);
   }
 }
 

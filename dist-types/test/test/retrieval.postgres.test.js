@@ -14,10 +14,13 @@ import { createPgvectorHnswIndexSql, createPostgresKnowledgeStore, PostgresKnowl
 class MockPgPool {
     queries = [];
     responder;
-    constructor(responder = () => ({
-        rowCount: 0,
-        rows: [],
-    })) {
+    constructor(responder = (text) => 
+    // Knowledge upserts now return the affected row id (their DO UPDATE is
+    // guarded by a same-tenant WHERE clause); a successful upsert yields one
+    // row. Default to that so ownership assertions pass for normal writes.
+    /INSERT INTO[\s\S]*RETURNING id/.test(text)
+        ? { rowCount: 1, rows: [{ id: 'row-1' }] }
+        : { rowCount: 0, rows: [] }) {
         this.responder = responder;
     }
     async query(text, values) {
@@ -108,6 +111,29 @@ describe('PostgresKnowledgeStore', () => {
             url: 'https://example.test/refunds.pdf',
         });
         expect(chunk.scopeType).toBe('bot');
+        // Every knowledge upsert must guard its DO UPDATE against cross-tenant/bot
+        // ownership takeover.
+        const upsertQueries = pool.queries.filter((query) => /INSERT INTO "public"."knowledge_(spaces|sources|chunks)"/.test(query.text));
+        expect(upsertQueries.length).toBeGreaterThanOrEqual(3);
+        for (const query of upsertQueries) {
+            expect(query.text).toMatch(/\.tenant_id = EXCLUDED\.tenant_id/);
+            expect(query.text).toMatch(/\.bot_id = EXCLUDED\.bot_id/);
+            expect(query.text).toContain('RETURNING id');
+        }
+    });
+    it('rejects a knowledge upsert whose id belongs to another tenant', async () => {
+        // Simulate the guarded DO UPDATE matching no row (existing row owned by a
+        // different tenant), which Postgres reports as zero affected rows.
+        const pool = new MockPgPool((text) => /INSERT INTO "public"."knowledge_spaces"[\s\S]*RETURNING id/.test(text)
+            ? { rowCount: 0, rows: [] }
+            : { rowCount: 1, rows: [{ id: 'row-1' }] });
+        const store = createPostgresKnowledgeStore({ pool });
+        await expect(store.upsertKnowledgeSpace({
+            botId: 'bot-evil',
+            id: 'space-1',
+            name: 'Hijacked KB',
+            tenantId: 'tenant-2',
+        })).rejects.toThrow(/different tenant or bot/);
     });
     it('activates and resolves the active embedding profile for a knowledge space', async () => {
         const profileRow = {
