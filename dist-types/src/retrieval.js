@@ -423,22 +423,16 @@ function assertKnowledgeRecordOwnership(kind, id, existing, incoming) {
         return;
     }
     if (existing.tenantId !== incoming.tenantId) {
-        throw new LLMError(`Cannot upsert ${kind} "${id}": it belongs to a different tenant. ` +
-            'Knowledge record ids are tenant-scoped; use a new id.');
+        throw new LLMError(`Cannot upsert ${kind} "${id}": different tenant; use a new id.`);
     }
     if (existing.botId !== undefined && existing.botId !== incoming.botId) {
-        throw new LLMError(`Cannot upsert ${kind} "${id}": it belongs to a different bot within the tenant.`);
+        throw new LLMError(`Cannot upsert ${kind} "${id}": different bot.`);
     }
 }
 function assertUpsertOwnershipResult(kind, id, result) {
-    // The upsert's DO UPDATE ... WHERE tenant/bot match returns the row only when
-    // the insert happened or the existing row is owned by the same tenant+bot.
-    // Zero rows means a row with this id exists but belongs to someone else, so
-    // the conflict was skipped rather than silently reassigning ownership.
     const affected = result.rowCount ?? result.rows.length;
     if (affected === 0) {
-        throw new LLMError(`Cannot upsert ${kind} "${id}": it belongs to a different tenant or bot. ` +
-            'Knowledge record ids are tenant-scoped; use a new id.');
+        throw new LLMError(`Cannot upsert ${kind} "${id}": different tenant or bot; use a new id.`);
     }
 }
 function buildInMemoryRetrievalResult(chunk, source, score) {
@@ -925,7 +919,7 @@ export class InMemoryKnowledgeStore {
     async upsertKnowledgeChunk(record) {
         assertQueryEmbedding(record.embedding);
         const existing = this.chunks.get(record.id);
-        assertKnowledgeRecordOwnership('knowledge chunk', record.id, existing, record);
+        assertKnowledgeRecordOwnership('chunk', record.id, existing, record);
         const timestamp = this.now().toISOString();
         const normalized = {
             ...record,
@@ -938,7 +932,7 @@ export class InMemoryKnowledgeStore {
     }
     async upsertKnowledgeSource(record) {
         const existing = this.sources.get(record.id);
-        assertKnowledgeRecordOwnership('knowledge source', record.id, existing, record);
+        assertKnowledgeRecordOwnership('source', record.id, existing, record);
         const timestamp = this.now().toISOString();
         const normalized = {
             ...record,
@@ -952,7 +946,7 @@ export class InMemoryKnowledgeStore {
     }
     async upsertKnowledgeSpace(record) {
         const existing = this.spaces.get(record.id);
-        assertKnowledgeRecordOwnership('knowledge space', record.id, existing, record);
+        assertKnowledgeRecordOwnership('space', record.id, existing, record);
         const timestamp = this.now().toISOString();
         const normalized = {
             ...record,
@@ -1343,7 +1337,7 @@ export class PostgresKnowledgeStore {
        WHERE ${tableName}.tenant_id = EXCLUDED.tenant_id
          AND ${tableName}.bot_id = EXCLUDED.bot_id
        RETURNING id`, values);
-        assertUpsertOwnershipResult('knowledge chunk', record.id, result);
+        assertUpsertOwnershipResult('chunk', record.id, result);
         return {
             ...record,
             createdAt,
@@ -1417,7 +1411,7 @@ export class PostgresKnowledgeStore {
        WHERE ${tableName}.tenant_id = EXCLUDED.tenant_id
          AND ${tableName}.bot_id = EXCLUDED.bot_id
        RETURNING id`, values);
-        assertUpsertOwnershipResult('knowledge source', record.id, result);
+        assertUpsertOwnershipResult('source', record.id, result);
         return {
             ...record,
             createdAt,
@@ -1468,7 +1462,7 @@ export class PostgresKnowledgeStore {
        WHERE ${tableName}.tenant_id = EXCLUDED.tenant_id
          AND ${tableName}.bot_id = EXCLUDED.bot_id
        RETURNING id`, values);
-        assertUpsertOwnershipResult('knowledge space', record.id, result);
+        assertUpsertOwnershipResult('space', record.id, result);
         return {
             ...record,
             createdAt,
