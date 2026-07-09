@@ -261,7 +261,24 @@ Clamp `maxToolRounds` and `toolExecutionTimeoutMs` to finite positive ranges; re
 | Artifact | Path |
 | --- | --- |
 | This report | `security_scan/cursor_security_scan_report.md` |
-| Canonical scan bundle | `security_scan/ee9e5c6_20260709T114052Z/` |
 | Projected Codex-style report | `security_scan/codex_security_scan_20260709_report.md` |
 | Prior audit (2026-06-30) | `security_scan/codex_security_scan_20260630_report.md` |
 | Prior verification (2026-07-07) | `security_scan/security_audit_final_verification_20260707.md` |
+
+### Full scan archive (machine-readable evidence)
+
+| Field | Value |
+| --- | --- |
+| Scan ID | `ee9e5c6_20260709T114052Z` |
+| Scanned revision | `ee9e5c66733f4adcb8cda517d9517a49e91c1428` |
+| Fix commit | `98799ff` (and later commits on `security_audit`) |
+| GitHub Release | https://github.com/07rjain/LLMlibrary/releases/tag/security-scan-20260709 |
+| Download | https://github.com/07rjain/LLMlibrary/releases/download/security-scan-20260709/ee9e5c6_20260709T114052Z.tar.gz |
+| In-repo copy | `security_scan/archives/ee9e5c6_20260709T114052Z.tar.gz` |
+| SHA-256 | `9a3649f1f4be3751fde5ef3affa80248e0e02d97b31d897d2c4d275eac510233` |
+
+```bash
+# Verify and unpack
+shasum -a 256 -c security_scan/archives/ee9e5c6_20260709T114052Z.tar.gz.sha256
+tar -xzf security_scan/archives/ee9e5c6_20260709T114052Z.tar.gz -C /tmp
+```
