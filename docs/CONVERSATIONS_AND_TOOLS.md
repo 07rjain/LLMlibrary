@@ -47,6 +47,13 @@ console.log(conversation.toMessages());
 
 If no stored session exists, the library creates a new conversation with that id.
 
+When a stored snapshot is restored, the saved message history and usage totals
+are reused, but current caller options should be treated as the trusted runtime
+policy. Pass the current `system`, tenant, model/provider, budget, tool
+validation, tool limits, response format, and registered tools when those values
+must be enforced for a request. Do not import or trust client-controlled
+snapshots as authoritative policy.
+
 ## Inspect And Export State
 
 The `Conversation` instance exposes several useful methods:
@@ -147,11 +154,18 @@ Useful conversation options:
 - `toolChoice`
   Control whether the model may call tools, must call a specific tool, or must not call any
 - `maxToolRounds`
-  Guard against runaway tool loops
+  Guard against runaway tool loops. Values must be finite integers between `0`
+  and `100`.
 - `toolExecutionTimeoutMs`
-  Per-tool timeout for `execute()`. The callback receives `context.signal`; long-running tools should pass it to fetch, database, or queue clients and stop when it aborts.
+  Per-tool timeout for `execute()`. Values must be finite positive numbers up
+  to `300000`. The callback receives `context.signal`; long-running tools
+  should pass it to fetch, database, or queue clients and stop when it aborts.
 - `toolValidation`
-  Defaults to `strict`, which validates model-provided tool arguments against `parameters` before `execute()` runs. Use `permissive` only for legacy callbacks that validate arguments themselves.
+  Defaults to `strict`, which validates model-provided tool arguments against
+  `parameters` before `execute()` runs. Strict mode requires own object
+  properties, rejects prototype-sensitive argument keys, and rejects unsupported
+  schema types. Use `permissive` only for legacy callbacks that validate
+  arguments themselves.
 
 Force a specific tool:
 

@@ -303,16 +303,26 @@ const client = LLMClient.fromEnv({
 const sessionApi = createSessionApi({
   client,
   sessionStore: store,
+  conversationDefaults: {
+    system: 'Be concise.',
+  },
 });
 
 const response = await sessionApi.handle(
   new Request('https://example.test/sessions', {
-    body: JSON.stringify({ sessionId: 'demo-session', system: 'Be concise.' }),
+    body: JSON.stringify({ sessionId: 'demo-session' }),
     headers: { 'content-type': 'application/json' },
     method: 'POST',
   }),
 );
 ```
+
+Session API conversation policy is deny-by-default for client request bodies.
+Fields such as `system`, `model`, `provider`, `providerOptions`,
+`responseFormat`, `budgetUsd`, `toolValidation`, `maxToolRounds`, and
+`toolExecutionTimeoutMs` should be set through server-side
+`conversationDefaults`. Allow request-body overrides only for trusted internal
+callers with `allowClientOverrides`.
 
 Supported endpoints include:
 

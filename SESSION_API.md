@@ -27,6 +27,10 @@ const client = LLMClient.fromEnv({
 const sessionApi = createSessionApi({
   client,
   sessionStore,
+  conversationDefaults: {
+    model: 'gpt-4o',
+    system: 'Be concise.',
+  },
 });
 ```
 
@@ -34,6 +38,7 @@ const sessionApi = createSessionApi({
 
 - A session store is required. If the client was created with a store, `SessionApi` can reuse it.
 - `contextManager` and executable `tools` are server-side configuration. They are passed back into restored conversations on each request because executable tools are not serializable inside session snapshots.
+- Conversation policy fields are server-controlled by default. Request body fields such as `system`, `model`, `provider`, `providerOptions`, `responseFormat`, `budgetUsd`, `toolValidation`, `maxToolRounds`, and `toolExecutionTimeoutMs` are ignored unless `allowClientOverrides` explicitly allows them.
 - `middleware` can resolve tenant identity or reject requests early.
 - `withRequestContext(context, execute)` is the hook for RLS-style request scoping. Use it to set request-local DB session variables before store/client work runs.
 
@@ -48,13 +53,16 @@ Example body:
 ```json
 {
   "sessionId": "support-123",
-  "system": "Be concise.",
   "messages": [
     { "role": "user", "content": "Initial history item" }
-  ],
-  "model": "gpt-4o"
+  ]
 }
 ```
+
+`system` and other policy fields should normally be supplied through
+`conversationDefaults` on the server. If a trusted internal caller must set one
+of those fields in the request body, configure `allowClientOverrides` with a
+field allowlist, for example `{ allowClientOverrides: ['system'] }`.
 
 Returns `201` with:
 
