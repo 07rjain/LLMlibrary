@@ -715,12 +715,15 @@ export class SessionApi {
             }
 
             if (chunk.type === 'tool-call-result') {
+              const resultPayload = this.exposeToolResults
+                ? { result: chunk.result }
+                : { redacted: true, result: TOOL_RESULT_REDACTION };
               controller.enqueue(
                 encoder.encode(
                   formatSseEvent('response.tool_call.result', {
                     id: chunk.id,
                     name: chunk.name,
-                    result: chunk.result,
+                    ...resultPayload,
                   }),
                 ),
               );

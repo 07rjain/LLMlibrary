@@ -13,12 +13,38 @@ export interface SessionApiRequestContext {
 }
 /** Middleware hook for auth, tenancy, and request enrichment. */
 export type SessionApiMiddleware = (request: Request, context: SessionApiRequestContext) => MaybePromise<Partial<SessionApiRequestContext> | Response | void>;
+/** Policy fields a public request body may carry. */
+export type SessionConversationConfigField = keyof SessionConversationConfig;
+/**
+ * Which conversation-policy fields a browser-facing request body is allowed to
+ * override. Defaults to denying all overrides so untrusted callers cannot
+ * downgrade `toolValidation`, raise spend/tool limits, or swap the model,
+ * provider, or system prompt away from the trusted `conversationDefaults`.
+ *
+ * - `false` / omitted: ignore every policy field from the request body.
+ * - `true`: allow all fields (legacy behavior — only for fully trusted callers).
+ * - array: allow only the listed fields.
+ */
+export type ClientOverridePolicy = boolean | SessionConversationConfigField[];
 /** Configuration for `SessionApi` and `createSessionApi()`. */
 export interface SessionApiOptions {
+    /**
+     * Allowlist controlling which policy fields an untrusted request body may set.
+     * @default false (deny all client overrides)
+     */
+    allowClientOverrides?: ClientOverridePolicy;
     basePath?: string;
     client: LLMClient;
     conversationDefaults?: SessionConversationConfig;
     contextManager?: ContextManager;
+    /**
+     * When true, raw `tool_result` content parts are included verbatim in public
+     * session projections and SSE streams. Defaults to false: tool results are
+     * treated as server-internal and redacted before reaching clients, so raw
+     * database/RAG rows are not exposed before assistant-level filtering.
+     * @default false
+     */
+    exposeToolResults?: boolean;
     middleware?: SessionApiMiddleware[];
     sessionStore?: SessionStore<ConversationSnapshot>;
     tenantResolution?: TenantResolutionMode;
@@ -104,10 +130,12 @@ export interface SessionView {
  * ```
  */
 export declare class SessionApi {
+    private readonly allowedClientOverrides;
     private readonly basePath;
     private readonly client;
     private readonly contextManager;
     private readonly conversationDefaults;
+    private readonly exposeToolResults;
     private readonly middleware;
     private readonly sessionStore;
     private readonly tenantResolution;
