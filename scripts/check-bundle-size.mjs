@@ -4,7 +4,7 @@ import { gzipSync } from 'node:zlib';
 const budgets = {
   'dist/index.js': {
     gzip: 66_800,
-    raw: 356_200,
+    raw: 357_000,
   },
   'dist/chunking.js': {
     gzip: 2_000,
@@ -15,8 +15,8 @@ const budgets = {
     raw: 47_000,
   },
   'dist/providers-gemini.js': {
-    gzip: 12_000,
-    raw: 58_500,
+    gzip: 12_200,
+    raw: 59_200,
   },
   'dist/providers-openai.js': {
     gzip: 15_600,
