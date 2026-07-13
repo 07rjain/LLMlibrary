@@ -118,6 +118,53 @@ describe('OpenAI adapter', () => {
     ]);
   });
 
+  it('replays assistant text history as output_text for Responses', () => {
+    const stringRequest = translateOpenAIRequest({
+      messages: [
+        { content: 'Hello', role: 'user' },
+        { content: 'Hi there', role: 'assistant' },
+        { content: 'Continue', role: 'user' },
+      ],
+      model: 'gpt-4o',
+    });
+
+    expect(stringRequest.input).toEqual([
+      {
+        content: [{ text: 'Hello', type: 'input_text' }],
+        role: 'user',
+        type: 'message',
+      },
+      {
+        content: [{ text: 'Hi there', type: 'output_text' }],
+        role: 'assistant',
+        type: 'message',
+      },
+      {
+        content: [{ text: 'Continue', type: 'input_text' }],
+        role: 'user',
+        type: 'message',
+      },
+    ]);
+
+    const partRequest = translateOpenAIRequest({
+      messages: [
+        {
+          content: [{ text: 'Structured assistant text', type: 'text' }],
+          role: 'assistant',
+        },
+      ],
+      model: 'gpt-4o',
+    });
+
+    expect(partRequest.input).toEqual([
+      {
+        content: [{ text: 'Structured assistant text', type: 'output_text' }],
+        role: 'assistant',
+        type: 'message',
+      },
+    ]);
+  });
+
   it('maps responseFormat to OpenAI Responses text.format', () => {
     expect(
       translateOpenAIRequest({

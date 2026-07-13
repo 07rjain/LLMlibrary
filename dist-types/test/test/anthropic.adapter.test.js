@@ -111,6 +111,7 @@ describe('Anthropic adapter', () => {
             output_config: {
                 format: {
                     schema: {
+                        additionalProperties: false,
                         properties: {
                             answer: { type: 'string' },
                         },

@@ -52,13 +52,21 @@ interface OpenAIInputTextPart {
   type: 'input_text';
 }
 
+interface OpenAIOutputTextInputPart {
+  text: string;
+  type: 'output_text';
+}
+
 interface OpenAIInputImagePart {
   detail?: 'auto' | 'high' | 'low';
   image_url: string;
   type: 'input_image';
 }
 
-type OpenAIInputContentPart = OpenAIInputImagePart | OpenAIInputTextPart;
+type OpenAIInputContentPart =
+  | OpenAIInputImagePart
+  | OpenAIInputTextPart
+  | OpenAIOutputTextInputPart;
 
 interface OpenAIMessageInput {
   content: OpenAIInputContentPart[];
@@ -1679,7 +1687,7 @@ function translateOpenAIAssistantMessage(message: CanonicalMessage): OpenAIInput
         content: [
           {
             text: message.content,
-            type: 'input_text',
+            type: 'output_text',
           },
         ],
         role: 'assistant',
@@ -1707,7 +1715,7 @@ function translateOpenAIAssistantMessage(message: CanonicalMessage): OpenAIInput
       case 'text':
         textParts.push({
           text: part.text,
-          type: 'input_text',
+          type: 'output_text',
         });
         break;
       case 'tool_call':

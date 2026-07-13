@@ -1025,7 +1025,7 @@ function translateOpenAIAssistantMessage(message) {
                 content: [
                     {
                         text: message.content,
-                        type: 'input_text',
+                        type: 'output_text',
                     },
                 ],
                 role: 'assistant',
@@ -1048,7 +1048,7 @@ function translateOpenAIAssistantMessage(message) {
             case 'text':
                 textParts.push({
                     text: part.text,
-                    type: 'input_text',
+                    type: 'output_text',
                 });
                 break;
             case 'tool_call':

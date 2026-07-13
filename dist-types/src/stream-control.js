@@ -32,7 +32,11 @@ export function createCancelableStream(iterate, upstreamSignal) {
             if (!iterator) {
                 iterator = (async function* () {
                     try {
-                        yield* iterate(controller.signal);
+                        for await (const chunk of iterate(controller.signal)) {
+                            throwIfAborted(controller.signal);
+                            yield chunk;
+                            throwIfAborted(controller.signal);
+                        }
                     }
                     finally {
                         close();

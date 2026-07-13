@@ -43,7 +43,11 @@ export function createCancelableStream<TChunk>(
       if (!iterator) {
         iterator = (async function* (): AsyncGenerator<TChunk, void, void> {
           try {
-            yield* iterate(controller.signal);
+            for await (const chunk of iterate(controller.signal)) {
+              throwIfAborted(controller.signal);
+              yield chunk;
+              throwIfAborted(controller.signal);
+            }
           } finally {
             close();
           }

@@ -95,8 +95,10 @@ Provider behavior:
   library rejects the request before dispatch when it is missing. For
   `json_schema`, OpenAI strict schemas are normalized before dispatch so object
   properties are required and `additionalProperties: false` is applied.
-- Gemini uses `generationConfig.responseFormat.text.mimeType =
-  'application/json'` and passes `schema` for `json_schema`.
+- Gemini uses `generationConfig.responseMimeType = 'application/json'` plus
+  `responseSchema` for most generateContent models. `gemini-3.5-*` uses the
+  newer `generationConfig.responseFormat.text.mimeType = 'APPLICATION_JSON'`
+  envelope.
 - Anthropic supports `json_schema` through `output_config.format`. Anthropic
   `json_object` without a schema is intentionally unsupported in v1; use
   `json_schema` instead.
