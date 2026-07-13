@@ -59,24 +59,40 @@ export function buildOpenAITextFormat(responseFormat, options) {
         },
     };
 }
-export function buildGeminiResponseFormat(responseFormat) {
+export function buildGeminiResponseFormat(responseFormat, model) {
     if (!responseFormat || responseFormat.type === 'text') {
         return undefined;
     }
     if (responseFormat.type === 'json_object') {
+        if (usesGeminiResponseFormatEnvelope(model)) {
+            return {
+                responseFormat: {
+                    text: {
+                        mimeType: 'APPLICATION_JSON',
+                    },
+                },
+            };
+        }
         return {
-            text: {
-                mimeType: 'application/json',
+            responseMimeType: 'application/json',
+        };
+    }
+    const responseSchema = normalizeStructuredSchema(responseFormat.schema, 'google', {
+        root: true,
+    });
+    if (usesGeminiResponseFormatEnvelope(model)) {
+        return {
+            responseFormat: {
+                text: {
+                    mimeType: 'APPLICATION_JSON',
+                    schema: responseSchema,
+                },
             },
         };
     }
     return {
-        text: {
-            mimeType: 'application/json',
-            schema: normalizeStructuredSchema(responseFormat.schema, 'google', {
-                root: true,
-            }),
-        },
+        responseMimeType: 'application/json',
+        responseSchema,
     };
 }
 export function buildAnthropicOutputConfig(responseFormat) {
@@ -92,6 +108,7 @@ export function buildAnthropicOutputConfig(responseFormat) {
         format: {
             schema: normalizeStructuredSchema(responseFormat.schema, 'anthropic', {
                 root: true,
+                strict: true,
             }),
             type: 'json_schema',
         },
@@ -211,7 +228,7 @@ function normalizeSchemaNode(schema, provider, context) {
     }
     const normalized = {};
     if (type !== undefined) {
-        normalized.type = type;
+        normalized.type = provider === 'google' ? type.toUpperCase() : type;
     }
     if (schema.description !== undefined) {
         normalized.description = schema.description;
@@ -249,7 +266,8 @@ function normalizeSchemaNode(schema, provider, context) {
         normalized.required = schema.required;
     }
     if (isObjectSchemaType(type, schema.properties)) {
-        if (provider === 'openai' && context.strict) {
+        if ((provider === 'openai' || provider === 'anthropic') &&
+            context.strict) {
             normalized.additionalProperties = false;
         }
         else if (typeof schema.additionalProperties === 'boolean') {
@@ -289,4 +307,8 @@ function normalizeSchemaType(type, path) {
 }
 function isObjectSchemaType(type, properties) {
     return type === 'object' || properties !== undefined;
+}
+export function usesGeminiResponseFormatEnvelope(model) {
+    const normalized = model?.startsWith('models/') ? model.slice('models/'.length) : model;
+    return normalized?.startsWith('gemini-3.5-') ?? false;
 }

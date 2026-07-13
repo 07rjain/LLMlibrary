@@ -6,11 +6,12 @@ export declare function buildOpenAITextFormat(responseFormat: ResponseFormat | u
     messages: CanonicalMessage[];
     system?: string;
 }): Record<string, unknown> | undefined;
-export declare function buildGeminiResponseFormat(responseFormat: ResponseFormat | undefined): Record<string, unknown> | undefined;
+export declare function buildGeminiResponseFormat(responseFormat: ResponseFormat | undefined, model?: string): Record<string, unknown> | undefined;
 export declare function buildAnthropicOutputConfig(responseFormat: ResponseFormat | undefined): Record<string, unknown> | undefined;
 export declare function parseStructuredOutput(response: CanonicalResponse, responseFormat: ResponseFormat | undefined): CanonicalResponse;
 export declare function normalizeStructuredSchema(schema: CanonicalJsonSchema, provider: CanonicalProvider, options?: {
     root?: boolean;
     strict?: boolean;
 }): Record<string, unknown>;
+export declare function usesGeminiResponseFormatEnvelope(model: string | undefined): boolean;
 //# sourceMappingURL=structured-output.d.ts.map

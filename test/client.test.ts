@@ -2088,6 +2088,78 @@ describe('LLMClient', () => {
     expect(fetchImplementation).not.toHaveBeenCalled();
   });
 
+  it('stops yielding already-buffered provider stream chunks after cancel()', async () => {
+    const encoder = new TextEncoder();
+    const fetchImplementation = vi.fn(async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (const event of [
+              {
+                content_index: 0,
+                delta: 'first',
+                item_id: 'msg_1',
+                output_index: 0,
+                sequence_number: 1,
+                type: 'response.output_text.delta',
+              },
+              {
+                content_index: 0,
+                delta: 'second',
+                item_id: 'msg_1',
+                output_index: 0,
+                sequence_number: 2,
+                type: 'response.output_text.delta',
+              },
+              {
+                response: {
+                  id: 'resp_1',
+                  model: 'gpt-4o',
+                  object: 'response',
+                  output: [],
+                  status: 'completed',
+                  usage: {
+                    input_tokens: 5,
+                    output_tokens: 3,
+                  },
+                },
+                sequence_number: 3,
+                type: 'response.completed',
+              },
+            ]) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+            }
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        }),
+        {
+          headers: { 'content-type': 'text/event-stream' },
+          status: 200,
+        },
+      ),
+    );
+    const client = new LLMClient({
+      defaultModel: 'gpt-4o',
+      fetchImplementation,
+      openaiApiKey: 'openai-key',
+    });
+
+    const stream = client.stream({
+      messages: [{ content: 'Cancel after one chunk', role: 'user' }],
+    });
+    const iterator = stream[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { delta: 'first', type: 'text-delta' },
+    });
+
+    stream.cancel(new Error('manual cancel'));
+
+    await expect(iterator.next()).rejects.toThrow('manual cancel');
+  });
+
   it('delegates getUsage() to the configured usage logger', async () => {
     const summary: UsageSummary = {
       breakdown: [
@@ -2305,6 +2377,13 @@ describe('LLMClient', () => {
       (item) => (item as { role?: string }).role === 'user',
     );
     expect(secondInputMessages.length).toBeGreaterThan(firstInputMessages.length);
+
+    const replayedAssistantMessage = secondInput.find(
+      (item) => (item as { role?: string }).role === 'assistant',
+    ) as { content?: unknown[] } | undefined;
+    expect(replayedAssistantMessage?.content).toEqual([
+      { text: 'First reply', type: 'output_text' },
+    ]);
   });
 
   it('keeps model registry state isolated across client instances', () => {

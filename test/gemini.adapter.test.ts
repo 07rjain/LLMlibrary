@@ -160,7 +160,7 @@ describe('Gemini adapter', () => {
     ]);
   });
 
-  it('maps responseFormat to Gemini generationConfig.responseFormat', () => {
+  it('maps responseFormat to Gemini generationConfig response schema fields', () => {
     expect(
       translateGeminiRequest({
         messages: [{ content: 'Return an object.', role: 'user' }],
@@ -169,11 +169,7 @@ describe('Gemini adapter', () => {
       }),
     ).toMatchObject({
       generationConfig: {
-        responseFormat: {
-          text: {
-            mimeType: 'application/json',
-          },
-        },
+        responseMimeType: 'application/json',
       },
     });
 
@@ -194,20 +190,69 @@ describe('Gemini adapter', () => {
       }),
     ).toMatchObject({
       generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          properties: {
+            answer: { type: 'STRING' },
+          },
+          required: ['answer'],
+          type: 'OBJECT',
+        },
+      },
+    });
+  });
+
+  it('uses Gemini 3.5 responseFormat envelope with enum mime type', () => {
+    expect(
+      translateGeminiRequest({
+        maxTokens: 96,
+        messages: [{ content: 'Return the answer.', role: 'user' }],
+        model: 'gemini-3.5-flash',
+        responseFormat: {
+          schema: {
+            properties: {
+              answer: { type: 'string' },
+            },
+            required: ['answer'],
+            type: 'object',
+          },
+          type: 'json_schema',
+        },
+      }),
+    ).toMatchObject({
+      generationConfig: {
         responseFormat: {
           text: {
-            mimeType: 'application/json',
+            mimeType: 'APPLICATION_JSON',
             schema: {
               properties: {
-                answer: { type: 'string' },
+                answer: { type: 'STRING' },
               },
               required: ['answer'],
-              type: 'object',
+              type: 'OBJECT',
             },
           },
         },
       },
     });
+    expect(
+      (
+        translateGeminiRequest({
+          maxTokens: 96,
+          messages: [{ content: 'Return the answer.', role: 'user' }],
+          model: 'gemini-3.5-flash',
+          responseFormat: {
+            schema: {
+              properties: {
+                answer: { type: 'string' },
+              },
+              type: 'object',
+            },
+            type: 'json_schema',
+          },
+        }).generationConfig as Record<string, unknown>
+      ).maxOutputTokens,
+    ).toBeUndefined();
   });
 
   it('maps Gemini tool choice aliases and schema bundles', () => {

@@ -3,7 +3,7 @@ import { ModelRegistry } from '../models/registry.js';
 import { geminiUsageToCanonical, usageWithCost } from '../utils/cost.js';
 import { parseSSE } from '../utils/parse-sse.js';
 import { withRetry } from '../utils/retry.js';
-import { buildGeminiResponseFormat } from '../structured-output.js';
+import { buildGeminiResponseFormat, usesGeminiResponseFormatEnvelope, } from '../structured-output.js';
 export class GeminiAdapter {
     apiKey;
     baseUrl;
@@ -240,7 +240,12 @@ export function translateGeminiRequest(options) {
         body.systemInstruction = systemInstruction;
     }
     const generationConfig = {};
-    if (options.maxTokens !== undefined) {
+    const usesResponseFormatEnvelope = options.responseFormat !== undefined &&
+        options.responseFormat.type !== 'text' &&
+        usesGeminiResponseFormatEnvelope(options.model);
+    // Gemini 3.5 generateContent currently accepts responseFormat envelopes but
+    // can ignore the schema when maxOutputTokens is present.
+    if (options.maxTokens !== undefined && !usesResponseFormatEnvelope) {
         generationConfig.maxOutputTokens = options.maxTokens;
     }
     if (options.temperature !== undefined) {
@@ -249,9 +254,9 @@ export function translateGeminiRequest(options) {
     if (googleOptions?.thinking) {
         generationConfig.thinkingConfig = translateGeminiThinkingConfig(googleOptions.thinking);
     }
-    const responseFormat = buildGeminiResponseFormat(options.responseFormat);
+    const responseFormat = buildGeminiResponseFormat(options.responseFormat, options.model);
     if (responseFormat !== undefined) {
-        generationConfig.responseFormat = responseFormat;
+        Object.assign(generationConfig, responseFormat);
     }
     if (Object.keys(generationConfig).length > 0) {
         body.generationConfig = generationConfig;

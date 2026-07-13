@@ -12,6 +12,8 @@ export default tseslint.config(
       'dist-types/**',
       'docs/.vitepress/**',
       'docs/api/**',
+      'security_scan/ee9e5c6_*/**',
+      'security_scan/*_*T*Z/**',
     ],
   },
   js.configs.recommended,
