@@ -30,6 +30,11 @@
       "import": "./dist/client.js",
       "require": "./dist/client.cjs"
     },
+    "./chatbot": {
+      "types": "./dist/chatbot.d.ts",
+      "import": "./dist/chatbot.js",
+      "require": "./dist/chatbot.cjs"
+    },
     "./chunking": {
       "types": "./dist/chunking.d.ts",
       "import": "./dist/chunking.js",
@@ -44,6 +49,11 @@
       "types": "./dist/models.d.ts",
       "import": "./dist/models.js",
       "require": "./dist/models.cjs"
+    },
+    "./pii": {
+      "types": "./dist/pii.d.ts",
+      "import": "./dist/pii.js",
+      "require": "./dist/pii.cjs"
     },
     "./providers/anthropic": {
       "types": "./dist/providers-anthropic.d.ts",

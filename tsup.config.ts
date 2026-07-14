@@ -5,11 +5,13 @@ export default defineConfig({
   dts: true,
   entry: {
     'agent-files': 'src/agent-files.ts',
+    chatbot: 'src/chatbot.ts',
     client: 'src/client.ts',
     chunking: 'src/chunking.ts',
     index: 'src/index.ts',
     errors: 'src/errors.ts',
     models: 'src/models/index.ts',
+    pii: 'src/pii.ts',
     'providers-anthropic': 'src/providers/anthropic.ts',
     'providers-gemini': 'src/providers/gemini.ts',
     'providers-openai': 'src/providers/openai.ts',

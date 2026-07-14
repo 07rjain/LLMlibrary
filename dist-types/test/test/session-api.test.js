@@ -351,6 +351,44 @@ describe('SessionApi', () => {
         await reader?.cancel();
         expect(observedSignal?.aborted).toBe(true);
     });
+    it('aborts non-streamed session work when the request signal is aborted', async () => {
+        const store = new InMemorySessionStore();
+        let observedSignal;
+        let resolveObserved;
+        const observed = new Promise((resolve) => {
+            resolveObserved = resolve;
+        });
+        const client = LLMClient.mock({
+            defaultModel: 'mock-model',
+            defaultProvider: 'mock',
+            responses: [
+                async (options) => {
+                    observedSignal = options.signal;
+                    resolveObserved?.();
+                    await new Promise((_, reject) => {
+                        options.signal?.addEventListener('abort', () => reject(options.signal?.reason ?? new Error('aborted')), { once: true });
+                    });
+                    return mockResponse('unreachable', 0);
+                },
+            ],
+            sessionStore: store,
+        });
+        const api = createSessionApi({ client, sessionStore: store });
+        await api.handle(jsonRequest('https://example.test/sessions', 'POST', {
+            sessionId: 'abort-complete-session',
+        }));
+        const abortController = new AbortController();
+        const responsePromise = api.handle(new Request('https://example.test/sessions/abort-complete-session/message', {
+            body: JSON.stringify({ content: 'Complete this' }),
+            headers: { 'content-type': 'application/json' },
+            method: 'POST',
+            signal: abortController.signal,
+        }));
+        await observed;
+        abortController.abort(new Error('client disconnected'));
+        await responsePromise;
+        expect(observedSignal?.aborted).toBe(true);
+    });
     it('redacts tool result messages in JSON projections unless explicitly exposed', async () => {
         const usage = {
             cachedTokens: 0,

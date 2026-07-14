@@ -358,7 +358,7 @@ export class SessionApi {
       return this.streamSessionMessage(conversation, sessionId, tenantId, body.content, request.signal);
     }
 
-    const response = await conversation.send(body.content);
+    const response = await conversation.send(body.content, { signal: request.signal });
     const record = await this.requireSession(sessionId, tenantId);
     const include = parseInclude(url.searchParams, ['cost', 'messages']);
 

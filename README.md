@@ -22,6 +22,8 @@ Provider-agnostic TypeScript client for Anthropic, OpenAI, and Google Gemini wit
 - Google Embedding 2 support through `client.embed()`
 - OpenAI batch speech support through `client.speak()` and `client.transcribe()`
 - Optional retrieval helpers via `unified-llm-client/retrieval`
+- Fail-closed RAG orchestration via `unified-llm-client/chatbot`
+- Best-effort transcript PII redaction via `unified-llm-client/pii`
 - Budget breach policies: `throw`, `warn`, or `skip`
 - Usage aggregation export as JSON or CSV
 - Edge-safe core imports with Node-only Postgres features loaded lazily
@@ -135,6 +137,40 @@ OpenAI and Gemini support `json_object` and `json_schema`. Anthropic supports
 `json_schema`; schema-less `json_object` is rejected so callers do not depend on
 undocumented behavior. See [Completions And Streaming](./docs/COMPLETIONS_AND_STREAMING.md#json-and-structured-output)
 for provider caveats and the portable schema subset.
+
+## Chatbot Helpers
+
+`retrieveAndComplete()` keeps retrieval explicit while adding secure defaults for
+tenant/bot/knowledge-space scoping, delimited untrusted context, structured
+citations, and unsupported-answer fallbacks.
+
+```ts
+import { retrieveAndComplete } from 'unified-llm-client/chatbot';
+
+const answer = await retrieveAndComplete({
+  client,
+  question: 'What is the refund window?',
+  retrieval: {
+    filter: {
+      botId: 'support-bot',
+      embeddingProfileId: 'embedding-v1',
+      knowledgeSpaceId: 'help-center',
+      tenantId: authenticatedTenantId,
+    },
+    topK: 4,
+  },
+  retriever,
+});
+
+console.log(answer.text, answer.citations);
+```
+
+Use `redactPII()` or `redactPIIFromMessages()` before optional transcript
+analytics or logging. These helpers cover common email, phone, and payment-card
+patterns; they are not a replacement for a compliance DLP service.
+
+See [Chatbot Production Helpers](./docs/CHATBOT_PRODUCTION_HELPERS.md) for the
+grounding contract, PII behavior, and public gateway checklist.
 
 ## Conversations
 
