@@ -8,11 +8,12 @@ If you are opening the repository for the first time, read the pages below in or
 2. [Completions And Streaming](./COMPLETIONS_AND_STREAMING.md)
 3. [Conversations And Tools](./CONVERSATIONS_AND_TOOLS.md)
 4. [Agent Instructions And Skills](./AGENT_INSTRUCTIONS_AND_SKILLS.md)
-5. [Persistence And Session API](./PERSISTENCE_AND_SESSION_API.md)
-6. [Speech](./SPEECH.md)
-7. [Session API Reference](./SESSION_API_REFERENCE.md)
-8. [Production Setup](./PRODUCTION_SETUP.md)
-9. [Production Guide](./PRODUCTION_GUIDE.md)
+5. [Chatbot Production Helpers](./CHATBOT_PRODUCTION_HELPERS.md)
+6. [Persistence And Session API](./PERSISTENCE_AND_SESSION_API.md)
+7. [Speech](./SPEECH.md)
+8. [Session API Reference](./SESSION_API_REFERENCE.md)
+9. [Production Setup](./PRODUCTION_SETUP.md)
+10. [Production Guide](./PRODUCTION_GUIDE.md)
 
 ## What This Library Gives You
 
@@ -29,6 +30,8 @@ If you are opening the repository for the first time, read the pages below in or
 - Google Embedding 2 support through `client.embed()`
 - OpenAI batch speech support through `client.speak()` and `client.transcribe()`
 - Optional retrieval helpers through `unified-llm-client/retrieval`
+- Fail-closed RAG orchestration through `unified-llm-client/chatbot`
+- Best-effort transcript PII redaction through `unified-llm-client/pii`
 - Reusable chunking helpers through `unified-llm-client/chunking`
 - Node-only agent instruction and skill loading through `unified-llm-client/agent-files`
 
@@ -44,6 +47,8 @@ If you are opening the repository for the first time, read the pages below in or
   Read [Agent Instructions And Skills](./AGENT_INSTRUCTIONS_AND_SKILLS.md)
 - "I need saved history or HTTP endpoints"
   Read [Persistence And Session API](./PERSISTENCE_AND_SESSION_API.md)
+- "I need grounded chatbot answers, citations, or transcript redaction"
+  Read [Chatbot Production Helpers](./CHATBOT_PRODUCTION_HELPERS.md)
 - "I need routing, budgets, testing, or rollout guidance"
   Read [Production Guide](./PRODUCTION_GUIDE.md)
 - "I need production env setup, Postgres wiring, or embedding storage details"
@@ -67,6 +72,7 @@ If you are opening the repository for the first time, read the pages below in or
 - Production setup guide: [PRODUCTION_SETUP.md](./PRODUCTION_SETUP.md)
 - Speech guide: [SPEECH.md](./SPEECH.md)
 - Agent instructions and skills guide: [AGENT_INSTRUCTIONS_AND_SKILLS.md](./AGENT_INSTRUCTIONS_AND_SKILLS.md)
+- Chatbot production helpers: [CHATBOT_PRODUCTION_HELPERS.md](./CHATBOT_PRODUCTION_HELPERS.md)
 - Speech API research report: [SPEECH_API_RESEARCH_REPORT.md](./SPEECH_API_RESEARCH_REPORT.md)
 
 ## Current Provider Notes
@@ -80,7 +86,7 @@ If you are opening the repository for the first time, read the pages below in or
 - `client.models.listRemote({ provider })` fetches the provider's live model list without changing the local routing registry.
 - `client.embed()` is now available for Google Embedding 2.
 - OpenAI batch speech is available through `client.speak()` and `client.transcribe()`. Speech usage is tracked separately through `client.getSpeechUsage()` and `client.exportSpeechUsage()`.
-- Retrieval remains explicit app orchestration; the helper module gives you `createDenseRetriever()`, `createHybridRetriever()`, and `formatRetrievedContext()` without changing `complete()` or `conversation()`.
+- Retrieval remains explicit; use `retrieveAndComplete()` when you want the optional fail-closed generation step without changing `complete()` or `conversation()`.
 - The external follow-up review has been cross-checked in [EMBEDDINGS_REVIEW_CROSSCHECK.md](./EMBEDDINGS_REVIEW_CROSSCHECK.md); the highest-confidence follow-ups are lightweight stores, chunking helpers, and Gemini text batching.
 - The detailed follow-up implementation plan is in [EMBEDDINGS_FOLLOW_UP_FIX_PLAN.md](./EMBEDDINGS_FOLLOW_UP_FIX_PLAN.md), including exact fix order and file-level implementation guidance.
 - The active implementation tracker is stored in the repository root as `prompt_caching_todo.md`.
