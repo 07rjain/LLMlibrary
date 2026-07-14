@@ -66,6 +66,12 @@ completion request for usage attribution, and rejects conflicting request values
 For user-private knowledge, add `scopeType` and `scopeUserId` to
 `requiredScopeFields`.
 
+`retrieveAndComplete()` validates and propagates scope; it does not itself
+enforce row-level or network-level isolation. The retriever/store must apply the
+filter at its data boundary, backed by appropriate database authorization, RLS,
+or service policies. Do not use a production retriever that ignores the supplied
+filter.
+
 When retrieval returns nothing, the helper returns `status: 'no_results'` and
 does not call the model. When the model omits citations or cites an ordinal that
 was not supplied, it returns `status: 'ungrounded'` and the configured fallback

@@ -144,6 +144,10 @@ for provider caveats and the portable schema subset.
 tenant/bot/knowledge-space scoping, delimited untrusted context, structured
 citations, and unsupported-answer fallbacks.
 
+The helper requires and propagates trusted scope, but the retriever/store and
+its database or network policies must enforce tenant isolation at the data
+boundary.
+
 ```ts
 import { retrieveAndComplete } from 'unified-llm-client/chatbot';
 
