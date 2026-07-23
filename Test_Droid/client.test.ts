@@ -258,7 +258,9 @@ describe('LLMClient - Core Functionality', () => {
         chunks.push(chunk);
       }
 
-      expect(chunks[0]).toEqual({ delta: 'Hi', type: 'text-delta' });
+      expect(chunks.find((chunk) => chunk.type === 'text-delta')).toEqual(
+        expect.objectContaining({ delta: 'Hi', version: 2 }),
+      );
       expect(chunks.at(-1)).toEqual(expect.objectContaining({ finishReason: 'stop', type: 'done' }));
     });
 
@@ -297,7 +299,9 @@ describe('LLMClient - Core Functionality', () => {
         chunks.push(chunk);
       }
 
-      expect(chunks[0]).toEqual({ delta: 'Hello from Gemini', type: 'text-delta' });
+      expect(chunks.find((chunk) => chunk.type === 'text-delta')).toEqual(
+        expect.objectContaining({ delta: 'Hello from Gemini', version: 2 }),
+      );
       expect(chunks.at(-1)).toEqual(expect.objectContaining({ finishReason: 'stop', type: 'done' }));
     });
   });
