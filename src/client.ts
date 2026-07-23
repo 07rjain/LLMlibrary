@@ -106,6 +106,7 @@ export interface LLMRequestOptions {
   provider?: CanonicalProvider;
   providerOptions?: ProviderOptions;
   responseFormat?: ResponseFormat;
+  requestId?: string;
   sessionId?: string;
   signal?: AbortSignal;
   system?: string;
@@ -1228,6 +1229,15 @@ export class LLMClient {
     startedAt: number,
   ): AsyncGenerator<StreamChunk, void, void> {
     const attemptedRoutes: string[] = [];
+    let sequence = 0;
+
+    const decorate = (chunk: StreamChunk): StreamChunk => ({
+      ...chunk,
+      ...(options.requestId !== undefined ? { requestId: options.requestId } : {}),
+      sequence: ++sequence,
+      timestamp: new Date().toISOString(),
+      version: 2,
+    });
 
     for (const [index, attempt] of plan.attempts.entries()) {
       attemptedRoutes.push(attempt.decision);
@@ -1240,7 +1250,7 @@ export class LLMClient {
             budgetDecision.error,
             attempt.request,
           );
-          yield { delta: skipped.text, type: 'text-delta' };
+          yield decorate({ delta: skipped.text, type: 'text-delta' });
           await this.logUsageEvent(
             buildUsageEvent({
               durationMs: Date.now() - startedAt,
@@ -1254,16 +1264,29 @@ export class LLMClient {
                 : {}),
             }),
           );
-          yield {
+          yield decorate({
             finishReason: skipped.finishReason,
             type: 'done',
             usage: skipped.usage,
-          };
+          });
           return;
         }
 
+        yield decorate({
+          model: attempt.request.model,
+          provider: attempt.request.provider,
+          type: 'response-start',
+        });
+
         for await (const chunk of this.dispatchStream(attempt.request)) {
-          emittedUserVisibleChunk = true;
+          if (
+            chunk.type === 'text-delta' ||
+            chunk.type === 'tool-call-start' ||
+            chunk.type === 'tool-call-delta' ||
+            chunk.type === 'tool-call-result'
+          ) {
+            emittedUserVisibleChunk = true;
+          }
 
           if (chunk.type === 'done') {
             await this.logUsageEvent(
@@ -1279,9 +1302,10 @@ export class LLMClient {
                   : {}),
               }),
             );
+            yield decorate({ type: 'usage-update', usage: chunk.usage });
           }
 
-          yield chunk;
+          yield decorate(chunk);
         }
 
         return;
@@ -1293,6 +1317,12 @@ export class LLMClient {
         ) {
           throw error;
         }
+
+        yield decorate({
+          attempt: index + 1,
+          ...(error instanceof Error ? { error } : {}),
+          type: 'retry',
+        });
       }
     }
   }

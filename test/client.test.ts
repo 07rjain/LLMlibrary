@@ -1032,7 +1032,9 @@ describe('LLMClient', () => {
       chunks.push(chunk);
     }
 
-    expect(chunks[0]).toEqual({ delta: 'Hi', type: 'text-delta' });
+    expect(chunks.find((chunk) => chunk.type === 'text-delta')).toEqual(
+      expect.objectContaining({ delta: 'Hi', version: 2 }),
+    );
     expect(chunks.at(-1)).toEqual(
       expect.objectContaining({
         finishReason: 'stop',
@@ -1088,7 +1090,9 @@ describe('LLMClient', () => {
       chunks.push(chunk);
     }
 
-    expect(chunks[0]).toEqual({ delta: 'Hello from Gemini', type: 'text-delta' });
+    expect(chunks.find((chunk) => chunk.type === 'text-delta')).toEqual(
+      expect.objectContaining({ delta: 'Hello from Gemini', version: 2 }),
+    );
     expect(chunks.at(-1)).toEqual(
       expect.objectContaining({
         finishReason: 'stop',
@@ -1737,7 +1741,9 @@ describe('LLMClient', () => {
       chunks.push(chunk);
     }
 
-    expect(chunks[0]).toEqual({ delta: 'Fallback stream', type: 'text-delta' });
+    expect(chunks.find((chunk) => chunk.type === 'text-delta')).toEqual(
+      expect.objectContaining({ delta: 'Fallback stream', version: 2 }),
+    );
     expect(chunks.at(-1)).toEqual(
       expect.objectContaining({
         finishReason: 'stop',
@@ -1817,7 +1823,9 @@ describe('LLMClient', () => {
         }
       })(),
     ).rejects.toThrow('stream exploded');
-    expect(chunks).toContainEqual({ delta: 'partial', type: 'text-delta' });
+    expect(chunks).toContainEqual(
+      expect.objectContaining({ delta: 'partial', type: 'text-delta', version: 2 }),
+    );
     expect(fetchImplementation).toHaveBeenCalledTimes(1);
   });
 
@@ -2167,7 +2175,12 @@ describe('LLMClient', () => {
 
     await expect(iterator.next()).resolves.toEqual({
       done: false,
-      value: { delta: 'first', type: 'text-delta' },
+      value: expect.objectContaining({ type: 'response-start', version: 2 }),
+    });
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: expect.objectContaining({ delta: 'first', type: 'text-delta', version: 2 }),
     });
 
     stream.cancel(new Error('manual cancel'));

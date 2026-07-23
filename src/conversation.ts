@@ -666,6 +666,11 @@ export class Conversation {
           continue;
         }
 
+        if (chunk.type !== 'done') {
+          yield chunk;
+          continue;
+        }
+
         finishReason = chunk.finishReason;
         usage = chunk.usage;
       }

@@ -762,6 +762,10 @@ export class SessionApi {
               continue;
             }
 
+            if (chunk.type !== 'done') {
+              continue;
+            }
+
             const record = await this.requireSession(sessionId, tenantId);
             controller.enqueue(
               encoder.encode(
