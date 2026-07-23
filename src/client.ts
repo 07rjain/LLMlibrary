@@ -62,6 +62,7 @@ import type {
   TranscriptionResponse,
   UsageEvent,
   UsageMetrics,
+  JsonValue,
 } from './types.js';
 import type {
   UsageExportFormat,
@@ -100,7 +101,7 @@ export interface LLMRequestOptions {
   botId?: string;
   budgetExceededAction?: BudgetExceededAction;
   budgetUsd?: number;
-  metadata?: Record<string, import('./types.js').JsonValue>;
+  metadata?: Record<string, JsonValue>;
   maxTokens?: number;
   messages: CanonicalMessage[];
   model?: string;
