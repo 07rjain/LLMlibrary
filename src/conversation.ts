@@ -123,6 +123,12 @@ export interface ConversationOptions {
   tools?: CanonicalTool[];
   toolCallDispatcher?: ToolCallDispatcher;
   onWarning?: (message: string) => void;
+  onCompaction?: (event: {
+    afterCount: number;
+    beforeCount: number;
+    removedCount: number;
+    toolRound: number;
+  }) => void;
 }
 
 /**
@@ -163,6 +169,7 @@ export class Conversation {
   private readonly tools: CanonicalTool[] | undefined;
   private readonly toolCallDispatcher: ToolCallDispatcher | undefined;
   private readonly onWarning: (message: string) => void;
+  private readonly onCompaction: ConversationOptions['onCompaction'];
   private totalCachedTokens = 0;
   private totalCostUSD = 0;
   private totalInputTokens = 0;
@@ -198,6 +205,7 @@ export class Conversation {
     this.tools = options.tools ? cloneTools(options.tools) : undefined;
     this.toolCallDispatcher = options.toolCallDispatcher;
     this.onWarning = options.onWarning ?? ((message) => console.warn(message));
+    this.onCompaction = options.onCompaction;
     this.updatedAt = this.createdAt;
   }
 
@@ -457,16 +465,43 @@ export class Conversation {
 
   private async prepareMessages(userMessage: CanonicalMessage): Promise<CanonicalMessage[]> {
     const nextMessages = [...this.messages, userMessage];
+    return this.prepareModelStepMessages(nextMessages, 0);
+  }
+
+  private async prepareModelStepMessages(
+    messages: CanonicalMessage[],
+    toolRound: number,
+  ): Promise<CanonicalMessage[]> {
     if (!this.contextManager) {
-      return nextMessages;
+      return messages;
     }
 
-    const context = this.buildContextManagerContext();
-    if (!(await this.contextManager.shouldTrim(nextMessages, context))) {
-      return nextMessages;
+    const context = {
+      ...this.buildContextManagerContext(),
+      estimatedToolSchemaTokens: this.tools
+        ? Math.ceil(JSON.stringify(this.tools).length / 4)
+        : 0,
+      requestId: `${this.sessionId}:${toolRound}`,
+      toolRound,
+      ...(this.maxContextTokens !== undefined
+        ? { contextWindow: this.maxContextTokens }
+        : {}),
+      ...(this.maxTokens !== undefined ? { reservedOutputTokens: this.maxTokens } : {}),
+    };
+    if (!(await this.contextManager.shouldTrim(messages, context))) {
+      return messages;
     }
 
-    return this.contextManager.trim(nextMessages, context);
+    const trimmed = await this.contextManager.trim(messages, context);
+    if (trimmed.length !== messages.length) {
+      this.onCompaction?.({
+        afterCount: trimmed.length,
+        beforeCount: messages.length,
+        removedCount: messages.length - trimmed.length,
+        toolRound,
+      });
+    }
+    return trimmed;
   }
 
   private async runCompleteToolLoop(
@@ -487,6 +522,9 @@ export class Conversation {
 
     while (true) {
       throwIfAborted(signal);
+      if (toolRounds > 0) {
+        workingMessages = await this.prepareModelStepMessages(workingMessages, toolRounds);
+      }
       const remainingBudget = this.resolveRemainingBudgetDecision(aggregateUsage.costUSD);
       if (remainingBudget.action === 'skip') {
         const response = buildBudgetSkipResponse(remainingBudget.error, model, provider);
@@ -584,6 +622,10 @@ export class Conversation {
         toolRounds,
         remainingBudget.budgetUsd,
       );
+      if (toolRounds > 0) {
+        workingMessages = await this.prepareModelStepMessages(workingMessages, toolRounds);
+      }
+      requestOptions.messages = workingMessages;
       model = requestOptions.model ?? model;
       provider = requestOptions.provider ?? provider;
       const pendingToolCalls = new Map<string, { args?: JsonObject; name: string }>();
