@@ -6,10 +6,15 @@ type MaybePromise<TValue> = Promise<TValue> | TValue;
 
 /** Metadata passed to context trimming strategies before a model call. */
 export interface ContextManagerContext {
+  contextWindow?: number;
+  estimatedToolSchemaTokens?: number;
   maxContextTokens?: number;
   model?: string;
   provider?: CanonicalProvider;
+  requestId?: string;
+  reservedOutputTokens?: number;
   system?: string;
+  toolRound?: number;
 }
 
 /** Contract for pluggable context trimming strategies. */
