@@ -461,16 +461,7 @@ export class Conversation {
 
   private async prepareMessages(userMessage: CanonicalMessage): Promise<CanonicalMessage[]> {
     const nextMessages = [...this.messages, userMessage];
-    if (!this.contextManager) {
-      return nextMessages;
-    }
-
-    const context = this.buildContextManagerContext();
-    if (!(await this.contextManager.shouldTrim(nextMessages, context))) {
-      return nextMessages;
-    }
-
-    return this.contextManager.trim(nextMessages, context);
+    return this.prepareModelStepMessages(nextMessages, 0);
   }
 
   private async prepareModelStepMessages(
