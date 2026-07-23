@@ -530,8 +530,10 @@ export interface UsageEvent extends UsageMetrics {
   botId?: string;
   durationMs: number;
   finishReason: CanonicalFinishReason;
+  metadata?: Record<string, JsonValue>;
   model: string;
   provider: CanonicalProvider;
+  requestId?: string;
   routingDecision?: string;
   sessionId?: string;
   tenantId?: string;

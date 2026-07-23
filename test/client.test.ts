@@ -2399,6 +2399,42 @@ describe('LLMClient', () => {
     expect(first.models.get('gpt-4o').inputPrice).toBe(99);
     expect(second.models.get('gpt-4o').inputPrice).not.toBe(99);
   });
+
+  it('propagates request IDs and metadata to usage events', async () => {
+    const usageLogger = { log: vi.fn(async () => undefined) };
+    const fetchImplementation = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          content: [{ text: 'ok', type: 'text' }],
+          id: 'msg_1',
+          model: 'claude-sonnet-4-6',
+          role: 'assistant',
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        { headers: { 'content-type': 'application/json' }, status: 200 },
+      ),
+    );
+    const client = new LLMClient({
+      anthropicApiKey: 'anthropic-key',
+      defaultModel: 'claude-sonnet-4-6',
+      fetchImplementation,
+      usageLogger,
+    });
+
+    await client.complete({
+      messages: [{ content: 'hello', role: 'user' }],
+      metadata: { purpose: 'test' },
+      requestId: 'req-123',
+    });
+
+    expect(usageLogger.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: { purpose: 'test' },
+        requestId: 'req-123',
+      }),
+    );
+  });
 });
 
 class MockPool {

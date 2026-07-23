@@ -100,12 +100,14 @@ export interface LLMRequestOptions {
   botId?: string;
   budgetExceededAction?: BudgetExceededAction;
   budgetUsd?: number;
+  metadata?: Record<string, import('./types.js').JsonValue>;
   maxTokens?: number;
   messages: CanonicalMessage[];
   model?: string;
   provider?: CanonicalProvider;
   providerOptions?: ProviderOptions;
   responseFormat?: ResponseFormat;
+  requestId?: string;
   sessionId?: string;
   signal?: AbortSignal;
   system?: string;
@@ -1632,6 +1634,8 @@ function buildUsageEvent(input: {
     provider: input.provider,
     timestamp: new Date().toISOString(),
     ...(input.options.botId !== undefined ? { botId: input.options.botId } : {}),
+    ...(input.options.metadata !== undefined ? { metadata: input.options.metadata } : {}),
+    ...(input.options.requestId !== undefined ? { requestId: input.options.requestId } : {}),
     ...(input.routingDecision ? { routingDecision: input.routingDecision } : {}),
     ...(input.options.sessionId !== undefined ? { sessionId: input.options.sessionId } : {}),
     ...(input.options.tenantId !== undefined ? { tenantId: input.options.tenantId } : {}),
