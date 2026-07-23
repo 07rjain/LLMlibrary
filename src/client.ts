@@ -115,6 +115,17 @@ export interface LLMRequestOptions {
   tools?: CanonicalTool[];
 }
 
+/** Provider-neutral estimate returned before a completion request is sent. */
+export interface RequestCostEstimate {
+  estimatedCostUSD: number;
+  inputTokens: number;
+  maxOutputTokens: number;
+  model: string;
+  priceVersion: string;
+  provider: CanonicalProvider;
+  reasoningTokens: number;
+}
+
 /** Configuration for `LLMClient.mock()` test instances. */
 export interface MockLLMClientOptions
   extends Omit<
@@ -369,6 +380,36 @@ export class LLMClient {
     }
 
     throw new ProviderCapabilityError('No model route attempts were available.');
+  }
+
+  /** Estimates completion cost using the same preflight calculation as budgets. */
+  estimateRequest(options: LLMRequestOptions): RequestCostEstimate {
+    const resolved = this.resolveRequest(options);
+    const estimatedMessages = resolved.system
+      ? [{ content: resolved.system, role: 'system' as const }, ...resolved.messages]
+      : resolved.messages;
+    const inputTokens = estimateMessageTokens(estimatedMessages);
+    const maxOutputTokens = resolved.maxTokens;
+    const reasoningTokens = estimateBillableReasoningTokens(resolved);
+    const estimatedCostUSD = calcCostUSD(
+      {
+        ...(reasoningTokens > 0 ? { billableReasoningTokens: reasoningTokens } : {}),
+        inputTokens,
+        model: resolved.model,
+        outputTokens: maxOutputTokens,
+      },
+      this.modelRegistry,
+    );
+
+    return {
+      estimatedCostUSD,
+      inputTokens,
+      maxOutputTokens,
+      model: resolved.model,
+      priceVersion: this.modelRegistry.get(resolved.model).lastUpdated,
+      provider: resolved.provider,
+      reasoningTokens,
+    };
   }
 
   /** Executes a single non-streaming embedding request. */
@@ -943,23 +984,11 @@ export class LLMClient {
       return null;
     }
 
-    const estimatedMessages = options.system
-      ? [{ content: options.system, role: 'system' as const }, ...options.messages]
-      : options.messages;
-    const estimatedInputTokens = estimateMessageTokens(estimatedMessages);
-    const estimatedOutputTokens = options.maxTokens;
-    const estimatedReasoningTokens = estimateBillableReasoningTokens(options);
-    const estimatedCostUSD = calcCostUSD(
-      {
-        ...(estimatedReasoningTokens > 0
-          ? { billableReasoningTokens: estimatedReasoningTokens }
-          : {}),
-        inputTokens: estimatedInputTokens,
-        model: options.model,
-        outputTokens: estimatedOutputTokens,
-      },
-      this.modelRegistry,
-    );
+    const estimate = this.estimateRequest(options);
+    const estimatedInputTokens = estimate.inputTokens;
+    const estimatedOutputTokens = estimate.maxOutputTokens;
+    const estimatedReasoningTokens = estimate.reasoningTokens;
+    const estimatedCostUSD = estimate.estimatedCostUSD;
 
     if (estimatedCostUSD <= options.budgetUsd) {
       return null;

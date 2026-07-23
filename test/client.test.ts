@@ -51,6 +51,21 @@ describe('LLMClient', () => {
     expect(client.models.get('gpt-4o').inputPrice).toBe(3.5);
   });
 
+  it('quotes completion cost without sending a request', () => {
+    const client = new LLMClient({ defaultModel: 'gpt-4o' });
+    const estimate = client.estimateRequest({
+      maxTokens: 100,
+      messages: [{ content: 'Hello', role: 'user' }],
+    });
+
+    expect(estimate.model).toBe('gpt-4o');
+    expect(estimate.provider).toBe('openai');
+    expect(estimate.inputTokens).toBeGreaterThan(0);
+    expect(estimate.maxOutputTokens).toBe(100);
+    expect(estimate.priceVersion).toBe(client.models.get('gpt-4o').lastUpdated);
+    expect(estimate.estimatedCostUSD).toBeGreaterThan(0);
+  });
+
   it('proxies model registry methods', () => {
     const client = new LLMClient();
     client.models.register({
