@@ -68,7 +68,6 @@ describe('Usage logging', () => {
       ...buildUsageEvent(),
       model: 'gpt-4o',
       sessionId: 'session-1',
-      // @ts-expect-error test redaction of unexpected fields
       metadata: { authorization: 'Bearer sk-secret-value' },
     });
 
