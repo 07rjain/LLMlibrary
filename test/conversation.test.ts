@@ -20,6 +20,57 @@ import type {
 } from '../src/types.js';
 
 describe('Conversation', () => {
+  it('routes tool calls through an external dispatcher', async () => {
+    const dispatcher = vi.fn(async () => ({ answer: 42 }));
+    const responses: CanonicalResponse[] = [
+        {
+          content: [],
+          finishReason: 'tool_call',
+          model: 'mock-model',
+          provider: 'mock',
+          raw: {},
+          text: '',
+          toolCalls: [{ args: { value: 7 }, id: 'call-1', name: 'answer' }],
+          usage: { cachedTokens: 0, cost: '$0.00', costUSD: 0, inputTokens: 1, outputTokens: 1 },
+        },
+        {
+          content: [{ text: 'done', type: 'text' }],
+          finishReason: 'stop',
+          model: 'mock-model',
+          provider: 'mock',
+          raw: {},
+          text: 'done',
+          toolCalls: [],
+          usage: { cachedTokens: 0, cost: '$0.00', costUSD: 0, inputTokens: 1, outputTokens: 1 },
+        },
+    ];
+    const client: ConversationClient = {
+      complete: vi.fn(async () => responses.shift() as CanonicalResponse),
+      stream: vi.fn(),
+    };
+    const conversation = new Conversation(client, {
+      sessionId: 'dispatcher-session',
+      toolCallDispatcher: { execute: dispatcher },
+      tools: [
+        {
+          description: 'Answer',
+          name: 'answer',
+          parameters: { properties: { value: { type: 'number' } }, type: 'object' },
+        },
+      ],
+    });
+
+    await conversation.send('Call answer.');
+
+    expect(dispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        call: { args: { value: 7 }, id: 'call-1', name: 'answer' },
+        model: 'mock-model',
+        provider: 'mock',
+        sessionId: 'dispatcher-session',
+      }),
+    );
+  });
   it('generates a session id when one is not supplied', () => {
     const conversation = new Conversation(
       {

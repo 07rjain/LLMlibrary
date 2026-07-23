@@ -24,6 +24,7 @@ import type {
   ProviderOptions,
   ResponseFormat,
   StreamChunk,
+  ToolCallDispatcher,
   UsageMetrics,
 } from './types.js';
 
@@ -120,6 +121,7 @@ export interface ConversationOptions {
   toolValidation?: ToolValidationMode;
   toolChoice?: CanonicalToolChoice;
   tools?: CanonicalTool[];
+  toolCallDispatcher?: ToolCallDispatcher;
   onWarning?: (message: string) => void;
 }
 
@@ -159,6 +161,7 @@ export class Conversation {
   private readonly toolValidation: ToolValidationMode;
   private readonly toolChoice: CanonicalToolChoice | undefined;
   private readonly tools: CanonicalTool[] | undefined;
+  private readonly toolCallDispatcher: ToolCallDispatcher | undefined;
   private readonly onWarning: (message: string) => void;
   private totalCachedTokens = 0;
   private totalCostUSD = 0;
@@ -193,6 +196,7 @@ export class Conversation {
     this.toolValidation = options.toolValidation ?? DEFAULT_TOOL_VALIDATION;
     this.toolChoice = options.toolChoice;
     this.tools = options.tools ? cloneTools(options.tools) : undefined;
+    this.toolCallDispatcher = options.toolCallDispatcher;
     this.onWarning = options.onWarning ?? ((message) => console.warn(message));
     this.updatedAt = this.createdAt;
   }
@@ -664,7 +668,10 @@ export class Conversation {
     return (
       finishReason === 'tool_call' &&
       toolCalls.length > 0 &&
-      Boolean(this.tools?.some((tool) => typeof tool.execute === 'function'))
+      Boolean(
+        this.toolCallDispatcher ||
+          this.tools?.some((tool) => typeof tool.execute === 'function'),
+      )
     );
   }
 
@@ -709,30 +716,44 @@ export class Conversation {
     signal: AbortSignal | undefined,
   ): Promise<Extract<CanonicalPart, { type: 'tool_result' }>> {
     const tool = this.tools?.find((candidate) => candidate.name === toolCall.name);
-    if (!tool?.execute) {
+    if (!tool?.execute && !this.toolCallDispatcher) {
       return buildToolErrorPart(
         toolCall,
         new Error(`No executable tool registered for "${toolCall.name}".`),
       );
     }
-    const execute = tool.execute;
+    const execute = tool?.execute;
 
     try {
       throwIfAborted(signal);
-      if (this.toolValidation === 'strict') {
+      if (this.toolValidation === 'strict' && tool) {
         validateToolArguments(toolCall.args, tool.parameters);
       }
       const result = await executeToolWithGuards(
-        (toolSignal) =>
-          Promise.resolve(
-            execute(toolCall.args, {
+        (toolSignal) => {
+          if (this.toolCallDispatcher) {
+            if (!model || !provider) {
+              throw new Error('Tool dispatcher requires resolved model and provider.');
+            }
+            return this.toolCallDispatcher.execute({
+              call: toolCall,
+              model,
+              provider,
+              sessionId: this.sessionId,
+              signal: toolSignal,
+            });
+          }
+
+          return Promise.resolve(
+            execute!(toolCall.args, {
               ...(model !== undefined ? { model } : {}),
               ...(provider !== undefined ? { provider } : {}),
               signal: toolSignal,
               sessionId: this.sessionId,
               ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
             }),
-          ),
+          );
+        },
         this.toolExecutionTimeoutMs,
         signal,
       );
