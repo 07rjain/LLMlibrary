@@ -115,6 +115,7 @@
     "test": "vitest run --coverage",
     "test:embeddings:live": "node ./test/embeddings_test/run-live.mjs",
     "test:live": "LIVE_TESTS=1 vitest run test/live.e2e.test.ts test/embeddings_test/embeddings.live.test.ts test/prompt_caching_test/prompt-caching.live.test.ts",
+    "test:conformance:live": "LIVE_CONFORMANCE=1 vitest run test/live-conformance.test.ts",
     "test:real": "LIVE_REAL_TESTS=1 vitest run test/live-real",
     "test:real:providers": "LIVE_REAL_TESTS=1 vitest run test/live-real/providers.test.ts",
     "test:real:sessions": "LIVE_REAL_TESTS=1 vitest run test/live-real/sessions-tools.test.ts",
