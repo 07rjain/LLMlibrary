@@ -260,6 +260,18 @@ export interface CanonicalToolCall {
   result?: JsonValue;
 }
 
+/** Allows an integration to own tool execution outside the conversation runtime. */
+export interface ToolCallDispatcher {
+  execute(input: {
+    call: CanonicalToolCall;
+    metadata?: Record<string, JsonValue>;
+    model: string;
+    provider: CanonicalProvider;
+    sessionId: string;
+    signal: AbortSignal;
+  }): Promise<JsonValue>;
+}
+
 export type BudgetExceededAction = 'skip' | 'throw' | 'warn';
 
 export interface CancelableStream<TChunk> extends AsyncIterable<TChunk> {
