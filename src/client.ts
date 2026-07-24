@@ -1450,17 +1450,32 @@ class MockLLMClient extends LLMClient {
       ): AsyncGenerator<StreamChunk, void, void> {
         const resolved = this.resolveMockRequest(options);
         const next = this.streamQueue.shift();
+        let sequence = 0;
+        const decorate = (chunk: StreamChunk): StreamChunk => ({
+          ...chunk,
+          ...(options.requestId !== undefined ? { requestId: options.requestId } : {}),
+          sequence: ++sequence,
+          timestamp: new Date().toISOString(),
+          version: 2,
+        });
+
+        yield decorate({
+          model: resolved.model,
+          provider: resolved.provider,
+          type: 'response-start',
+        });
 
         if (!next) {
           const response = buildMockResponse(extractLastUserText(resolved.messages), resolved);
           if (response.text.length > 0) {
-            yield { delta: response.text, type: 'text-delta' };
+            yield decorate({ delta: response.text, type: 'text-delta' });
           }
-          yield {
+          yield decorate({ type: 'usage-update', usage: response.usage });
+          yield decorate({
             finishReason: response.finishReason,
             type: 'done',
             usage: response.usage,
-          };
+          });
           return;
         }
 
@@ -1468,13 +1483,19 @@ class MockLLMClient extends LLMClient {
 
         if (isAsyncIterable(stream)) {
           for await (const chunk of stream) {
-            yield chunk;
+            if (chunk.type === 'done') {
+              yield decorate({ type: 'usage-update', usage: chunk.usage });
+            }
+            yield decorate(chunk);
           }
           return;
         }
 
         for (const chunk of stream) {
-          yield chunk;
+          if (chunk.type === 'done') {
+            yield decorate({ type: 'usage-update', usage: chunk.usage });
+          }
+          yield decorate(chunk);
         }
       }.bind(this),
       options.signal,

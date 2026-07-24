@@ -20,6 +20,7 @@ import type {
   CanonicalToolChoice,
   ProviderOptions,
   ResponseFormat,
+  StreamChunk,
 } from './types.js';
 import type { UsageSummary } from './usage.js';
 
@@ -708,7 +709,12 @@ export class SessionApi {
           for await (const chunk of stream) {
             if (chunk.type === 'text-delta') {
               controller.enqueue(
-                encoder.encode(formatSseEvent('response.text.delta', { delta: chunk.delta })),
+                encoder.encode(
+                  formatSseEvent(
+                    'response.text.delta',
+                    streamEventData(chunk, { delta: chunk.delta }),
+                  ),
+                ),
               );
               continue;
             }
@@ -719,6 +725,7 @@ export class SessionApi {
                   formatSseEvent('response.tool_call.start', {
                     id: chunk.id,
                     name: chunk.name,
+                    ...streamEventData(chunk),
                   }),
                 ),
               );
@@ -731,6 +738,7 @@ export class SessionApi {
                   formatSseEvent('response.tool_call.delta', {
                     argsDelta: chunk.argsDelta,
                     id: chunk.id,
+                    ...streamEventData(chunk),
                   }),
                 ),
               );
@@ -747,6 +755,7 @@ export class SessionApi {
                     id: chunk.id,
                     name: chunk.name,
                     ...resultPayload,
+                    ...streamEventData(chunk),
                   }),
                 ),
               );
@@ -756,7 +765,96 @@ export class SessionApi {
             if (chunk.type === 'error') {
               controller.enqueue(
                 encoder.encode(
-                  formatSseEvent('response.error', serializeStreamError(chunk.error)),
+                  formatSseEvent(
+                    'response.error',
+                    streamEventData(chunk, { ...serializeStreamError(chunk.error) }),
+                  ),
+                ),
+              );
+              continue;
+            }
+
+            if (chunk.type === 'response-start') {
+              controller.enqueue(
+                encoder.encode(
+                  formatSseEvent(
+                    'response.started',
+                    streamEventData(chunk, {
+                      model: chunk.model,
+                      provider: chunk.provider,
+                    }),
+                  ),
+                ),
+              );
+              continue;
+            }
+
+            if (chunk.type === 'usage-update') {
+              controller.enqueue(
+                encoder.encode(
+                  formatSseEvent(
+                    'response.usage.updated',
+                    streamEventData(chunk, { usage: chunk.usage }),
+                  ),
+                ),
+              );
+              continue;
+            }
+
+            if (chunk.type === 'retry') {
+              controller.enqueue(
+                encoder.encode(
+                  formatSseEvent(
+                    'response.retry',
+                    streamEventData(chunk, {
+                      attempt: chunk.attempt,
+                      ...(chunk.error
+                        ? { error: serializeStreamError(chunk.error) }
+                        : {}),
+                    }),
+                  ),
+                ),
+              );
+              continue;
+            }
+
+            if (chunk.type === 'reasoning-start') {
+              controller.enqueue(
+                encoder.encode(
+                  formatSseEvent('response.reasoning.started', streamEventData(chunk)),
+                ),
+              );
+              continue;
+            }
+
+            if (chunk.type === 'reasoning-delta') {
+              controller.enqueue(
+                encoder.encode(
+                  formatSseEvent(
+                    'response.reasoning.delta',
+                    streamEventData(chunk, { delta: chunk.delta }),
+                  ),
+                ),
+              );
+              continue;
+            }
+
+            if (chunk.type === 'reasoning-end') {
+              controller.enqueue(
+                encoder.encode(
+                  formatSseEvent('response.reasoning.completed', streamEventData(chunk)),
+                ),
+              );
+              continue;
+            }
+
+            if (chunk.type === 'response-status') {
+              controller.enqueue(
+                encoder.encode(
+                  formatSseEvent(
+                    'response.status',
+                    streamEventData(chunk, { status: chunk.status }),
+                  ),
                 ),
               );
               continue;
@@ -773,6 +871,7 @@ export class SessionApi {
                   finishReason: chunk.finishReason,
                   session: await this.buildSessionView(record, new Set(['cost', 'messages'])),
                   usage: chunk.usage,
+                  ...streamEventData(chunk),
                 }),
               ),
             );
@@ -1207,6 +1306,19 @@ function stripSystemFromSnapshot(snapshot: ConversationSnapshot): ConversationSn
 
 function serializeStreamError(error: Error | unknown): PublicSessionApiError {
   return serializePublicError(error);
+}
+
+function streamEventData(
+  chunk: StreamChunk,
+  data: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    ...data,
+    ...(chunk.requestId !== undefined ? { requestId: chunk.requestId } : {}),
+    ...(chunk.sequence !== undefined ? { sequence: chunk.sequence } : {}),
+    ...(chunk.timestamp !== undefined ? { timestamp: chunk.timestamp } : {}),
+    ...(chunk.version !== undefined ? { version: chunk.version } : {}),
+  };
 }
 
 interface PublicSessionApiError {

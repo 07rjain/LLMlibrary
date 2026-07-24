@@ -116,6 +116,7 @@ export interface ConversationOptions {
   sessionId?: string;
   store?: SessionStore<ConversationSnapshot>;
   system?: string;
+  toolCallDispatcherMetadata?: Record<string, JsonValue>;
   tenantId?: string;
   toolExecutionTimeoutMs?: number;
   toolValidation?: ToolValidationMode;
@@ -162,6 +163,9 @@ export class Conversation {
   private readonly sessionId: string;
   private readonly store: SessionStore<ConversationSnapshot> | undefined;
   private system: string | undefined;
+  private readonly toolCallDispatcherMetadata:
+    | Record<string, JsonValue>
+    | undefined;
   private readonly tenantId: string | undefined;
   private readonly toolExecutionTimeoutMs: number;
   private readonly toolValidation: ToolValidationMode;
@@ -196,6 +200,9 @@ export class Conversation {
     this.sessionId = options.sessionId ?? generateSessionId();
     this.store = options.store;
     this.system = options.system;
+    this.toolCallDispatcherMetadata = options.toolCallDispatcherMetadata
+      ? cloneValue(options.toolCallDispatcherMetadata)
+      : undefined;
     this.tenantId = options.tenantId;
     this.toolExecutionTimeoutMs = normalizeToolExecutionTimeoutMs(
       options.toolExecutionTimeoutMs,
@@ -254,7 +261,7 @@ export class Conversation {
   /** Streams a user turn and commits state when the final `done` chunk arrives. */
   sendStream(
     input: CanonicalMessage['content'],
-    options: { signal?: AbortSignal } = {},
+    options: { requestId?: string; signal?: AbortSignal } = {},
   ): CancelableStream<StreamChunk> {
     return createCancelableStream(
       async function* (
@@ -262,7 +269,7 @@ export class Conversation {
         signal: AbortSignal,
       ): AsyncGenerator<StreamChunk, void, void> {
         const nextMessages = await this.prepareMessages(buildUserMessage(input));
-        const result = yield* this.runStreamToolLoop(nextMessages, signal);
+        const result = yield* this.runStreamToolLoop(nextMessages, signal, options.requestId);
         await this.finalizeExecution(result);
       }.bind(this),
       options.signal,
@@ -579,6 +586,7 @@ export class Conversation {
   private async *runStreamToolLoop(
     initialMessages: CanonicalMessage[],
     signal: AbortSignal | undefined,
+    requestId: string | undefined,
   ): AsyncGenerator<
     StreamChunk,
     {
@@ -594,6 +602,15 @@ export class Conversation {
     let model = this.model;
     let provider = this.provider;
     let toolRounds = 0;
+    let sequence = 0;
+
+    const decorate = (chunk: StreamChunk): StreamChunk => ({
+      ...chunk,
+      ...(requestId !== undefined ? { requestId } : {}),
+      sequence: ++sequence,
+      timestamp: new Date().toISOString(),
+      version: 2,
+    });
 
     while (true) {
       throwIfAborted(signal);
@@ -602,12 +619,12 @@ export class Conversation {
         const response = buildBudgetSkipResponse(remainingBudget.error, model, provider);
         aggregateUsage = accumulateUsage(aggregateUsage, response.usage);
         workingMessages = [...workingMessages, buildAssistantMessage(response)];
-        yield { delta: response.text, type: 'text-delta' };
-        yield {
+        yield decorate({ delta: response.text, type: 'text-delta' });
+        yield decorate({
           finishReason: response.finishReason,
           type: 'done',
           usage: aggregateUsage,
-        };
+        });
         return {
           messages: workingMessages,
           model: response.model,
@@ -621,6 +638,7 @@ export class Conversation {
         signal,
         toolRounds,
         remainingBudget.budgetUsd,
+        requestId,
       );
       if (toolRounds > 0) {
         workingMessages = await this.prepareModelStepMessages(workingMessages, toolRounds);
@@ -636,13 +654,13 @@ export class Conversation {
       for await (const chunk of this.client.stream(requestOptions)) {
         if (chunk.type === 'text-delta') {
           text += chunk.delta;
-          yield chunk;
+          yield decorate(chunk);
           continue;
         }
 
         if (chunk.type === 'tool-call-start') {
           pendingToolCalls.set(chunk.id, { name: chunk.name });
-          yield chunk;
+          yield decorate(chunk);
           continue;
         }
 
@@ -652,22 +670,22 @@ export class Conversation {
             args: isPlainJsonObject(chunk.result) ? chunk.result : { result: chunk.result },
             name: current?.name ?? chunk.name,
           });
-          yield chunk;
+          yield decorate(chunk);
           continue;
         }
 
         if (chunk.type === 'tool-call-delta') {
-          yield chunk;
+          yield decorate(chunk);
           continue;
         }
 
         if (chunk.type === 'error') {
-          yield chunk;
+          yield decorate(chunk);
           continue;
         }
 
         if (chunk.type !== 'done') {
-          yield chunk;
+          yield decorate(chunk);
           continue;
         }
 
@@ -687,11 +705,11 @@ export class Conversation {
 
       const toolCalls = buildToolCallsFromPendingToolCalls(pendingToolCalls);
       if (!this.shouldContinueToolLoop(finishReason, toolCalls)) {
-        yield {
+        yield decorate({
           finishReason,
           type: 'done',
           usage: aggregateUsage,
-        };
+        });
         return {
           messages: workingMessages,
           usage: aggregateUsage,
@@ -775,6 +793,8 @@ export class Conversation {
       throwIfAborted(signal);
       if (this.toolValidation === 'strict' && tool) {
         validateToolArguments(toolCall.args, tool.parameters);
+      } else if (this.toolValidation === 'strict' && this.toolCallDispatcher && !tool) {
+        throw new Error(`No tool schema registered for "${toolCall.name}".`);
       }
       const result = await executeToolWithGuards(
         (toolSignal) => {
@@ -788,6 +808,9 @@ export class Conversation {
               provider,
               sessionId: this.sessionId,
               signal: toolSignal,
+              ...(this.toolCallDispatcherMetadata !== undefined
+                ? { metadata: cloneValue(this.toolCallDispatcherMetadata) }
+                : {}),
             });
           }
 
@@ -869,6 +892,7 @@ export class Conversation {
     signal: AbortSignal | undefined,
     toolRound: number = 0,
     budgetUsd: number | undefined = undefined,
+    requestId: string | undefined = undefined,
   ): {
     budgetExceededAction?: BudgetExceededAction;
     budgetUsd?: number;
@@ -878,6 +902,7 @@ export class Conversation {
     provider?: CanonicalProvider;
     providerOptions?: ProviderOptions;
     responseFormat?: ResponseFormat;
+    requestId?: string;
     sessionId?: string;
     signal?: AbortSignal;
     system?: string;
@@ -896,6 +921,7 @@ export class Conversation {
       ...(this.provider !== undefined ? { provider: this.provider } : {}),
       ...(this.providerOptions !== undefined ? { providerOptions: this.providerOptions } : {}),
       ...(this.responseFormat !== undefined ? { responseFormat: this.responseFormat } : {}),
+      ...(requestId !== undefined ? { requestId } : {}),
       sessionId: this.sessionId,
       ...(signal !== undefined ? { signal } : {}),
       ...(this.system !== undefined ? { system: this.system } : {}),

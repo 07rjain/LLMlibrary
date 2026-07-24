@@ -1468,15 +1468,22 @@ describe('LLMClient', () => {
     const chunks = [];
     for await (const chunk of client.stream({
       messages: [{ content: 'Stream', role: 'user' }],
+      requestId: 'mock-request',
     })) {
       chunks.push(chunk);
     }
 
     expect(response.text).toBe('Mock queue');
-    expect(chunks).toEqual([
-      { delta: 'Mock stream', type: 'text-delta' },
-      expect.objectContaining({ finishReason: 'stop', type: 'done' }),
+    expect(chunks.map((chunk) => chunk.type)).toEqual([
+      'response-start',
+      'text-delta',
+      'usage-update',
+      'done',
     ]);
+    expect(chunks.map((chunk) => chunk.sequence)).toEqual([1, 2, 3, 4]);
+    expect(chunks.every((chunk) => chunk.version === 2)).toBe(true);
+    expect(chunks.every((chunk) => chunk.requestId === 'mock-request')).toBe(true);
+    expect(chunks.every((chunk) => typeof chunk.timestamp === 'string')).toBe(true);
   });
 
   it('parses structured output responses through LLMClient.mock()', async () => {

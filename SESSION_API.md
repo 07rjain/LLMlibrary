@@ -158,14 +158,21 @@ Supported query parameters:
 `POST /sessions/{id}/message?stream=true` emits canonical SSE events:
 
 - `session.message.started`
+- `response.started`
 - `response.text.delta`
 - `response.tool_call.start`
 - `response.tool_call.delta`
 - `response.tool_call.result`
+- `response.reasoning.started`
+- `response.reasoning.delta`
+- `response.reasoning.completed`
+- `response.usage.updated`
+- `response.retry`
+- `response.status`
 - `response.completed`
 - `response.error`
 
-This is intentionally stable and provider-agnostic. It exposes canonical library events rather than raw Anthropic/OpenAI/Gemini transport frames.
+This is intentionally stable and provider-agnostic. It exposes canonical library events rather than raw Anthropic/OpenAI/Gemini transport frames. Canonical stream metadata (`version`, `sequence`, `timestamp`, and `requestId` when present) is included in response event payloads.
 
 ## Tenant Auth And RLS Context
 

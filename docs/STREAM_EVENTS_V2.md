@@ -2,6 +2,8 @@
 
 `LLMClient.stream()` emits provider-neutral stream events with `version: 2`, a monotonic `sequence`, and an emission timestamp. When a request supplies `requestId`, the same identifier is copied to each event.
 
+`Conversation.sendStream()` preserves the same contract across automatic tool-loop follow-ups. Pass `requestId` in the `sendStream()` options when the complete conversation stream needs request correlation.
+
 The v2 lifecycle includes `response-start`, `usage-update`, and `retry` events in addition to existing text, tool-call, error, and done events. Reasoning and response-status event types are reserved for providers that expose those signals. Consumers should branch on `chunk.type` and treat only `done` as terminal.
 
 ```ts

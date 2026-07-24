@@ -96,12 +96,12 @@ export class SlidingWindowStrategy implements ContextManager {
       this.exceedsMessageLimit(working) ||
       (maxTokens !== undefined && this.estimateTokens(working, context.system) > maxTokens)
     ) {
-      const removableIndex = findOldestRemovableMessageIndex(working);
-      if (removableIndex === -1) {
+      const removableGroup = findOldestRemovableMessageGroup(working);
+      if (!removableGroup) {
         break;
       }
 
-      working.splice(removableIndex, 1);
+      working.splice(removableGroup[0]!, removableGroup.length);
     }
 
     if (working.length !== beforeCount) {
@@ -176,14 +176,15 @@ export class SummarisationStrategy implements ContextManager {
       return [...messages];
     }
 
-    const removableIndexes = findRemovableMessageIndexes(messages);
-    const summaryTargetCount = removableIndexes.length - this.keepLastMessages;
+    const removableGroups = findRemovableMessageGroups(messages);
+    const summaryTargetCount = removableGroups.length - this.keepLastMessages;
 
     if (summaryTargetCount < 2) {
       return this.baseStrategy.trim(messages, context);
     }
 
-    const indexesToSummarize = removableIndexes.slice(0, summaryTargetCount);
+    const groupsToSummarize = removableGroups.slice(0, summaryTargetCount);
+    const indexesToSummarize = groupsToSummarize.flat();
     const messagesToSummarize = indexesToSummarize.map((index) => cloneMessage(messages[index]!));
     const summary = (await this.summarizer(messagesToSummarize, context)).trim();
 
@@ -191,11 +192,15 @@ export class SummarisationStrategy implements ContextManager {
       return this.baseStrategy.trim(messages, context);
     }
 
-    const trimmed = [...messages];
+    const selected = new Set(indexesToSummarize);
     const firstIndex = indexesToSummarize[0]!;
+    const insertionIndex = messages
+      .slice(0, firstIndex)
+      .filter((_, index) => !selected.has(index)).length;
+    const trimmed = messages.filter((_, index) => !selected.has(index));
     trimmed.splice(
-      firstIndex,
-      indexesToSummarize.length,
+      insertionIndex,
+      0,
       buildSummaryMessage(summary, messagesToSummarize, this.summaryMetadata),
     );
 
@@ -207,17 +212,17 @@ export class SummarisationStrategy implements ContextManager {
   }
 }
 
-function findOldestRemovableMessageIndex(messages: CanonicalMessage[]): number {
-  const removableIndexes = findRemovableMessageIndexes(messages);
-  return removableIndexes[0] ?? -1;
+function findOldestRemovableMessageGroup(messages: CanonicalMessage[]): number[] | undefined {
+  return findRemovableMessageGroups(messages)[0];
 }
 
-function findRemovableMessageIndexes(messages: CanonicalMessage[]): number[] {
+function findRemovableMessageGroups(messages: CanonicalMessage[]): number[][] {
   const latestUserIndex = findLatestUserIndex(messages);
-  const removableIndexes: number[] = [];
+  const removableGroups: number[][] = [];
 
   for (let index = 0; index < messages.length; index += 1) {
-    if (messages[index]?.pinned) {
+    const message = messages[index];
+    if (!message || message.pinned) {
       continue;
     }
 
@@ -225,10 +230,42 @@ function findRemovableMessageIndexes(messages: CanonicalMessage[]): number[] {
       continue;
     }
 
-    removableIndexes.push(index);
+    const next = messages[index + 1];
+    if (
+      hasToolCallPart(message) &&
+      next &&
+      next.role === 'user' &&
+      hasToolResultPart(next) &&
+      !next.pinned
+    ) {
+      if (index + 1 === latestUserIndex) {
+        continue;
+      }
+      removableGroups.push([index, index + 1]);
+      index += 1;
+      continue;
+    }
+
+    if (hasToolCallPart(message) || hasToolResultPart(message)) {
+      continue;
+    }
+
+    removableGroups.push([index]);
   }
 
-  return removableIndexes;
+  return removableGroups;
+}
+
+function hasToolCallPart(message: CanonicalMessage): boolean {
+  return Array.isArray(message.content)
+    ? message.content.some((part) => part.type === 'tool_call')
+    : false;
+}
+
+function hasToolResultPart(message: CanonicalMessage): boolean {
+  return Array.isArray(message.content)
+    ? message.content.some((part) => part.type === 'tool_result')
+    : false;
 }
 
 function findLatestUserIndex(messages: CanonicalMessage[]): number {

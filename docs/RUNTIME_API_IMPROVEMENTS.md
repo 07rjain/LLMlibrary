@@ -1,19 +1,18 @@
 # Runtime API Improvements
 
-This page documents the six focused runtime improvements being delivered as independent pull requests. They are generic LLMlibrary APIs and are intentionally reviewable and releasable separately.
+This page documents the focused runtime improvements currently included in main. They are generic LLMlibrary APIs and are intentionally reviewable and releasable separately. Request-level metadata from PR #12 is intentionally excluded.
 
-## 1. Request Metadata And Request IDs
+## 1. Request IDs
 
 Completion and streaming requests accept:
 
 ```ts
 {
   requestId?: string;
-  metadata?: Record<string, JsonValue>;
 }
 ```
 
-The values are provider-neutral and are copied into `UsageEvent` records. Use them to correlate usage, warnings, failures, retries, and product-level requests without adding provider-specific fields.
+The request ID is copied to v2 stream events. Request-level metadata and UsageEvent propagation remain outside this release; PR #12 is intentionally excluded.
 
 ## 2. Request Cost Quotes
 
@@ -34,6 +33,7 @@ The returned `RequestCostEstimate` includes input tokens, maximum output tokens,
 
 ```ts
 const conversation = await client.conversation({
+  toolCallDispatcherMetadata: { integration: 'support-runtime' },
   toolCallDispatcher: {
     execute: async ({ call, model, provider, sessionId, signal }) => {
       return executeApplicationTool(call, { model, provider, sessionId, signal });
@@ -80,17 +80,17 @@ pnpm test:conformance:live
 
 The gate checks canonical completion, streaming, usage and cost reporting, and tool-call normalization for OpenAI, Anthropic, and Google. It is disabled during ordinary local unit runs because it makes real provider requests.
 
-The current live baseline passes OpenAI and Anthropic. Gemini currently reports two known conformance failures: streaming may return no text, and forced tool calls may finish with `length` instead of `tool_call`. These failures remain visible so release validation cannot silently claim full provider parity.
+The conformance gate uses provider-appropriate output budgets so Gemini thinking tokens do not consume the entire response allowance. Failures remain strict and visible so release validation cannot silently claim provider parity.
 
 ## Pull Requests
 
 The implementation is split into focused pull requests:
 
-- Metadata and request IDs
+- Request IDs and stream correlation
 - Request cost quotes
 - External tool dispatch
 - Per-step context policy
 - Versioned stream events
 - Live provider conformance
 
-Each implementation includes its own tests and API documentation. This page is the consolidated reference for the complete six-feature set.
+Each implementation includes focused tests and API documentation.

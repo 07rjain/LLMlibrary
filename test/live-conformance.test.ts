@@ -29,7 +29,7 @@ conformanceDescribe('live provider conformance', () => {
       requireLiveEnv(provider.env);
       const client = liveClient();
       const completion = await client.complete({
-        maxTokens: 32,
+        maxTokens: 64,
         messages: [{ content: `Reply with ${provider.name.toUpperCase()}_CONFORMANCE_OK.`, role: 'user' }],
         model: provider.model,
         provider: provider.name,
@@ -40,7 +40,7 @@ conformanceDescribe('live provider conformance', () => {
 
       const stream = await collectStream(
         client.stream({
-          maxTokens: 32,
+          maxTokens: 64,
           messages: [{ content: `Reply with ${provider.name.toUpperCase()}_STREAM_OK.`, role: 'user' }],
           model: provider.model,
           provider: provider.name,
@@ -56,7 +56,7 @@ conformanceDescribe('live provider conformance', () => {
       requireLiveEnv(provider.env);
       const client = liveClient();
       const response = await client.complete({
-        maxTokens: 64,
+        maxTokens: 256,
         messages: [{ content: 'Use get_weather for Paris. Do not answer from memory.', role: 'user' }],
         model: provider.model,
         provider: provider.name,

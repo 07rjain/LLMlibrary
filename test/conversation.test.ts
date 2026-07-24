@@ -50,6 +50,7 @@ describe('Conversation', () => {
     };
     const conversation = new Conversation(client, {
       sessionId: 'dispatcher-session',
+      toolCallDispatcherMetadata: { source: 'dispatcher-test' },
       toolCallDispatcher: { execute: dispatcher },
       tools: [
         {
@@ -68,7 +69,52 @@ describe('Conversation', () => {
         model: 'mock-model',
         provider: 'mock',
         sessionId: 'dispatcher-session',
+        metadata: { source: 'dispatcher-test' },
       }),
+    );
+  });
+
+  it('does not dispatch unregistered tool calls in strict validation mode', async () => {
+    const dispatcher = vi.fn(async () => ({ answer: 42 }));
+    const responses: CanonicalResponse[] = [
+      {
+        content: [],
+        finishReason: 'tool_call',
+        model: 'mock-model',
+        provider: 'mock',
+        raw: {},
+        text: '',
+        toolCalls: [{ args: { value: 7 }, id: 'call-1', name: 'unregistered' }],
+        usage: { cachedTokens: 0, cost: '$0.00', costUSD: 0, inputTokens: 1, outputTokens: 1 },
+      },
+      {
+        content: [{ text: 'done', type: 'text' }],
+        finishReason: 'stop',
+        model: 'mock-model',
+        provider: 'mock',
+        raw: {},
+        text: 'done',
+        toolCalls: [],
+        usage: { cachedTokens: 0, cost: '$0.00', costUSD: 0, inputTokens: 1, outputTokens: 1 },
+      },
+    ];
+    const conversation = new Conversation(
+      {
+        complete: vi.fn(async () => responses.shift() as CanonicalResponse),
+        stream: vi.fn(),
+      },
+      {
+        sessionId: 'strict-dispatcher-session',
+        toolCallDispatcher: { execute: dispatcher },
+        toolValidation: 'strict',
+      },
+    );
+
+    await conversation.send('Call the unregistered tool.');
+
+    expect(dispatcher).not.toHaveBeenCalled();
+    expect(JSON.stringify(conversation.history)).toContain(
+      'No tool schema registered for \\"unregistered\\".',
     );
   });
   it('generates a session id when one is not supplied', () => {
@@ -300,9 +346,9 @@ describe('Conversation', () => {
     }
 
     expect(chunks).toEqual([
-      { delta: 'Hello ', type: 'text-delta' },
-      { delta: 'world', type: 'text-delta' },
-      expect.objectContaining({ finishReason: 'stop', type: 'done' }),
+      expect.objectContaining({ delta: 'Hello ', type: 'text-delta', version: 2 }),
+      expect.objectContaining({ delta: 'world', type: 'text-delta', version: 2 }),
+      expect.objectContaining({ finishReason: 'stop', type: 'done', version: 2 }),
     ]);
     expect(conversation.history).toEqual([
       { content: 'Hi', role: 'user' },
@@ -733,16 +779,26 @@ describe('Conversation', () => {
     }
 
     expect(chunks).toEqual([
-      { delta: 'Checking ', type: 'text-delta' },
-      { id: 'tool_1', name: 'lookup_weather', type: 'tool-call-start' },
-      {
+      expect.objectContaining({ delta: 'Checking ', type: 'text-delta', version: 2 }),
+      expect.objectContaining({
+        id: 'tool_1',
+        name: 'lookup_weather',
+        type: 'tool-call-start',
+        version: 2,
+      }),
+      expect.objectContaining({
         id: 'tool_1',
         name: 'lookup_weather',
         result: { city: 'Berlin' },
         type: 'tool-call-result',
-      },
-      { delta: 'Sunny in Berlin.', type: 'text-delta' },
-      {
+        version: 2,
+      }),
+      expect.objectContaining({
+        delta: 'Sunny in Berlin.',
+        type: 'text-delta',
+        version: 2,
+      }),
+      expect.objectContaining({
         finishReason: 'stop',
         type: 'done',
         usage: {
@@ -752,7 +808,8 @@ describe('Conversation', () => {
           inputTokens: 11,
           outputTokens: 5,
         },
-      },
+        version: 2,
+      }),
     ]);
     expect(stream).toHaveBeenCalledTimes(2);
     expect(conversation.history).toEqual([
@@ -2244,11 +2301,12 @@ describe('Conversation', () => {
         type: 'error',
       }),
     );
-    expect(chunks[1]).toEqual({
+    expect(chunks[1]).toEqual(expect.objectContaining({
       argsDelta: '{"value":"Ber',
       id: 'tool_1',
       type: 'tool-call-delta',
-    });
+      version: 2,
+    }));
     expect(execute).toHaveBeenCalledWith(
       { result: 'Berlin' },
       expect.objectContaining({
@@ -2446,7 +2504,156 @@ describe('Conversation', () => {
   });
 });
 
+describe('Conversation stream event contract', () => {
+  it('keeps v2 metadata monotonic across automatic tool-loop rounds', async () => {
+    const usage = {
+      cachedTokens: 0,
+      cost: '$0.00',
+      costUSD: 0,
+      inputTokens: 1,
+      outputTokens: 1,
+    };
+    const stream = vi
+      .fn<ConversationClient['stream']>()
+      .mockImplementationOnce(async function* (): AsyncGenerator<StreamChunk, void, void> {
+        yield {
+          model: 'mock-model',
+          provider: 'mock',
+          sequence: 1,
+          timestamp: '2020-01-01T00:00:00.000Z',
+          type: 'response-start',
+          version: 2,
+        };
+        yield {
+          id: 'call-1',
+          name: 'weather',
+          sequence: 2,
+          timestamp: '2020-01-01T00:00:00.001Z',
+          type: 'tool-call-start',
+          version: 2,
+        };
+        yield {
+          id: 'call-1',
+          name: 'weather',
+          result: { city: 'Paris' },
+          sequence: 3,
+          timestamp: '2020-01-01T00:00:00.002Z',
+          type: 'tool-call-result',
+          version: 2,
+        };
+        yield {
+          finishReason: 'tool_call',
+          sequence: 4,
+          timestamp: '2020-01-01T00:00:00.003Z',
+          type: 'done',
+          usage,
+          version: 2,
+        };
+      })
+      .mockImplementationOnce(async function* (): AsyncGenerator<StreamChunk, void, void> {
+        yield {
+          model: 'mock-model',
+          provider: 'mock',
+          sequence: 1,
+          timestamp: '2020-01-01T00:00:01.000Z',
+          type: 'response-start',
+          version: 2,
+        };
+        yield {
+          delta: 'done',
+          sequence: 2,
+          timestamp: '2020-01-01T00:00:01.001Z',
+          type: 'text-delta',
+          version: 2,
+        };
+        yield {
+          finishReason: 'stop',
+          sequence: 3,
+          timestamp: '2020-01-01T00:00:01.002Z',
+          type: 'done',
+          usage,
+          version: 2,
+        };
+      });
+    const conversation = new Conversation(
+      { complete: vi.fn(), stream },
+      {
+        model: 'mock-model',
+        provider: 'mock',
+        tools: [
+          {
+            description: 'Get weather',
+            execute: async () => ({ temperature: 20 }),
+            name: 'weather',
+            parameters: {
+              properties: { city: { type: 'string' } },
+              required: ['city'],
+              type: 'object',
+            },
+          },
+        ],
+      },
+    );
+
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of conversation.sendStream('weather', {
+      requestId: 'conversation-request',
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.map((chunk) => chunk.sequence)).toEqual(
+      chunks.map((_, index) => index + 1),
+    );
+    expect(chunks.every((chunk) => chunk.version === 2)).toBe(true);
+    expect(chunks.every((chunk) => chunk.requestId === 'conversation-request')).toBe(true);
+    expect(chunks.every((chunk) => typeof chunk.timestamp === 'string')).toBe(true);
+    expect(chunks.filter((chunk) => chunk.type === 'done')).toHaveLength(1);
+    expect(chunks.at(-1)).toEqual(
+      expect.objectContaining({
+        finishReason: 'stop',
+        requestId: 'conversation-request',
+        type: 'done',
+        version: 2,
+      }),
+    );
+    expect(stream).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ requestId: 'conversation-request' }),
+    );
+  });
+});
+
 describe('SlidingWindowStrategy', () => {
+  it('preserves complete tool-call and tool-result exchanges while trimming', () => {
+    const strategy = new SlidingWindowStrategy({
+      maxMessages: 3,
+    });
+    const messages: CanonicalMessage[] = [
+      { content: 'Old user', role: 'user' },
+      {
+        content: [
+          { args: { city: 'Paris' }, id: 'call-1', name: 'weather', type: 'tool_call' },
+        ],
+        role: 'assistant',
+      },
+      {
+        content: [
+          {
+            name: 'weather',
+            result: { temperature: 20 },
+            toolCallId: 'call-1',
+            type: 'tool_result',
+          },
+        ],
+        role: 'user',
+      },
+      { content: 'Latest user', role: 'user' },
+    ];
+
+    expect(strategy.trim(messages, {})).toEqual(messages.slice(1));
+  });
+
   it('trims the oldest removable messages while preserving pinned and latest user content', () => {
     const strategy = new SlidingWindowStrategy({
       maxMessages: 2,
@@ -2511,6 +2718,48 @@ describe('SlidingWindowStrategy', () => {
 });
 
 describe('SummarisationStrategy', () => {
+  it('summarises tool-call and tool-result exchanges atomically', async () => {
+    const summarizer = vi.fn(async () => 'Atomic summary');
+    const strategy = new SummarisationStrategy({
+      keepLastMessages: 0,
+      maxMessages: 2,
+      summarizer,
+    });
+    const messages: CanonicalMessage[] = [
+      { content: 'Old user', role: 'user' },
+      {
+        content: [
+          { args: { city: 'Paris' }, id: 'call-1', name: 'weather', type: 'tool_call' },
+        ],
+        role: 'assistant',
+      },
+      {
+        content: [
+          {
+            name: 'weather',
+            result: { temperature: 20 },
+            toolCallId: 'call-1',
+            type: 'tool_result',
+          },
+        ],
+        role: 'user',
+      },
+      { content: 'Latest user', role: 'user' },
+    ];
+
+    const trimmed = await strategy.trim(messages, {});
+
+    expect(summarizer).toHaveBeenCalledWith(messages.slice(0, 3), {});
+    expect(trimmed).toEqual([
+      {
+        content: 'Atomic summary',
+        metadata: { summarizedMessageCount: 3, summary: true },
+        role: 'assistant',
+      },
+      { content: 'Latest user', role: 'user' },
+    ]);
+  });
+
   it('replaces older removable messages with a generated summary', async () => {
     const summarizer = vi.fn(async (messages: CanonicalMessage[]) => {
       return `Summary of ${messages.length} messages`;

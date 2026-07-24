@@ -376,6 +376,11 @@ describe('SessionApi', () => {
             result: { city: 'Berlin', secret: 'raw-tool-secret' },
             type: 'tool-call-result',
           },
+          { type: 'reasoning-start' },
+          { delta: 'checking', type: 'reasoning-delta' },
+          { type: 'reasoning-end' },
+          { status: 'structured-output', type: 'response-status' },
+          { attempt: 1, type: 'retry' },
           {
             finishReason: 'stop',
             type: 'done',
@@ -412,6 +417,7 @@ describe('SessionApi', () => {
 
     expect(response.headers.get('content-type')).toContain('text/event-stream');
     expect(text).toContain('event: session.message.started');
+    expect(text).toContain('event: response.started');
     expect(text).toContain('event: response.text.delta');
     expect(text).toContain('event: response.tool_call.start');
     expect(text).toContain('event: response.tool_call.delta');
@@ -419,7 +425,14 @@ describe('SessionApi', () => {
     expect(text).toContain('[tool result withheld]');
     expect(text).toContain('"redacted":true');
     expect(text).not.toContain('raw-tool-secret');
+    expect(text).toContain('event: response.reasoning.started');
+    expect(text).toContain('event: response.reasoning.delta');
+    expect(text).toContain('event: response.reasoning.completed');
+    expect(text).toContain('event: response.status');
+    expect(text).toContain('event: response.retry');
+    expect(text).toContain('event: response.usage.updated');
     expect(text).toContain('event: response.completed');
+    expect(text).toContain('"version":2');
   });
 
   it('aborts streamed session work when the request signal is aborted', async () => {
@@ -473,6 +486,7 @@ describe('SessionApi', () => {
 
     const reader = response.body?.getReader();
     expect(reader).toBeDefined();
+    await reader?.read();
     await reader?.read();
     await reader?.read();
     abortController.abort(new Error('client disconnected'));
