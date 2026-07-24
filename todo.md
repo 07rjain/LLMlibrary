@@ -438,3 +438,58 @@ Dependencies: `T-18`
 - [x] `PRD-25` Add OpenTelemetry spans and trace IDs to [docs/ROADMAP.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/ROADMAP.md)
 - [x] `PRD-26` Add Python port planning / parity tracking to [docs/ROADMAP.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/ROADMAP.md)
 - [x] `PRD-27` Record the open question on response caching in [docs/ROADMAP.md](/Users/rishabh/Desktop/tryandtested/chatbot101/docs/ROADMAP.md)
+
+## 2026-07-25 Runtime Follow-up
+
+Baseline: `main` at `411a128`. PR #12 remains closed; only the missing metadata and
+correlation behavior is being implemented as a focused follow-up.
+
+### Runtime fixes
+
+- [x] Make `estimateRequest()` quote the primary `ModelRouter` attempt.
+- [x] Keep budget preflight on the already-resolved route attempt.
+- [x] Capture and persist `response-start` model/provider in streaming conversations.
+- [x] Pass resolved model/provider into follow-up context callbacks.
+
+### Correlation and request metadata
+
+- [x] Add JSON-safe request metadata to `LLMRequestOptions`.
+- [x] Add request metadata and `requestId` to `UsageEvent`.
+- [x] Preserve correlation for both `complete()` and `stream()`.
+- [x] Accept correlation options in `Conversation.send()` and `sendStream()`.
+- [x] Use caller `requestId` in context callbacks, retaining the synthesized fallback.
+- [x] Accept and forward metadata and `requestId` in Session API message requests.
+
+### Regression tests
+
+- [x] Router-only `estimateRequest()`.
+- [x] Complete and streaming usage-event metadata propagation.
+- [x] Streaming dispatcher with only client-level default model/provider.
+- [x] Context callbacks with implicitly resolved model/provider.
+- [x] Caller `requestId` across context rounds.
+- [x] Session API request metadata and `requestId`.
+
+### Release housekeeping
+
+- [x] Document request metadata and end-to-end correlation.
+- [x] Update the package version to `0.1.9`.
+- [x] Add the `0.1.9` changelog entry.
+- [x] Adjust the main bundle budget to retain useful headroom.
+
+### Verification
+
+- [x] Focused client, Conversation, Session API, and Test_Droid tests.
+- [x] Full unit and coverage suite.
+- [x] Typecheck and lint.
+- [x] Build and declaration output.
+- [x] Bundle-size, dependency, and edge checks.
+- [x] Documentation build (CI verify passed; local VitePress process did not terminate after bundle output).
+- [ ] Live provider conformance.
+- [x] Focused real-provider correlation, estimate, dispatcher, and context checks.
+- [x] Restore generated verification output and confirm only intended files remain.
+
+Verification note: the OpenAI and Google live gates passed. Anthropic live cases
+reached the provider but were rejected because the configured account has no
+remaining credits. Repository-wide ESLint and TypeDoc/VitePress startup are
+currently extremely slow in this workspace and need a clean rerun before
+release.

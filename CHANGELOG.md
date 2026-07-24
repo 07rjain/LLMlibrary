@@ -2,6 +2,25 @@
 
 All notable changes to this project will be tracked here.
 
+## 0.1.9 - 2026-07-25
+
+### fix
+
+- resolve routed model/provider values from streaming `response-start` events before external tool dispatch
+- make `estimateRequest()` quote the primary `ModelRouter` attempt and keep budget preflight on that resolved attempt
+
+### feat
+
+- propagate JSON-safe request metadata and `requestId` through direct requests, Conversation turns, Session API messages, context callbacks, stream events, and usage logs
+
+### test
+
+- add regression coverage for router-only estimates, implicit streaming dispatch, per-step context correlation, usage logging, and Session API propagation
+
+### docs
+
+- document request metadata, end-to-end usage correlation, and the 0.1.9 release scope
+
 ## 0.1.0 - 2026-04-16
 
 ### feat

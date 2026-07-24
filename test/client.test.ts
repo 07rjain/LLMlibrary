@@ -66,6 +66,30 @@ describe('LLMClient', () => {
     expect(estimate.estimatedCostUSD).toBeGreaterThan(0);
   });
 
+  it('quotes the primary model selected by ModelRouter', () => {
+    const client = new LLMClient({
+      modelRouter: new ModelRouter({
+        rules: [
+          {
+            fallback: ['claude-haiku-4-5'],
+            name: 'quote-route',
+            target: 'gpt-4o-mini',
+          },
+        ],
+      }),
+    });
+
+    const estimate = client.estimateRequest({
+      maxTokens: 64,
+      messages: [{ content: 'Hello', role: 'user' }],
+    });
+
+    expect(estimate.model).toBe('gpt-4o-mini');
+    expect(estimate.provider).toBe('openai');
+    expect(estimate.maxOutputTokens).toBe(64);
+    expect(estimate.estimatedCostUSD).toBeGreaterThan(0);
+  });
+
   it('proxies model registry methods', () => {
     const client = new LLMClient();
     client.models.register({
@@ -1742,7 +1766,9 @@ describe('LLMClient', () => {
 
     const chunks = [];
     for await (const chunk of client.stream({
+      metadata: { feature: 'stream-correlation' },
       messages: [{ content: 'Hello', role: 'user' }],
+      requestId: 'stream-request-123',
       sessionId: 'stream-session',
     })) {
       chunks.push(chunk);
@@ -1760,6 +1786,8 @@ describe('LLMClient', () => {
     expect(fetchImplementation).toHaveBeenCalledTimes(2);
     expect(usageLogger.log).toHaveBeenCalledWith(
       expect.objectContaining({
+        metadata: { feature: 'stream-correlation' },
+        requestId: 'stream-request-123',
         routingDecision: 'rule:stream-fallback:primary:gpt-4o -> rule:stream-fallback:fallback:1:gpt-4o-mini',
         sessionId: 'stream-session',
       }),
@@ -1882,7 +1910,12 @@ describe('LLMClient', () => {
 
     await client.complete({
       botId: 'bot-1',
+      metadata: {
+        feature: 'usage-correlation',
+        nested: { attempt: 1 },
+      },
       messages: [{ content: 'Hello', role: 'user' }],
+      requestId: 'request-123',
       sessionId: 'usage-session',
       tenantId: 'tenant-2',
     });
@@ -1890,8 +1923,13 @@ describe('LLMClient', () => {
     expect(usageLogger.log).toHaveBeenCalledWith(
       expect.objectContaining({
         botId: 'bot-1',
+        metadata: {
+          feature: 'usage-correlation',
+          nested: { attempt: 1 },
+        },
         model: 'gpt-4o',
         provider: 'openai',
+        requestId: 'request-123',
         routingDecision: 'default:gpt-4o',
         sessionId: 'usage-session',
         tenantId: 'tenant-2',
