@@ -107,16 +107,6 @@ export interface LLMRequestOptions {
   model?: string;
   provider?: CanonicalProvider;
   providerOptions?: ProviderOptions;
-  /** @internal Route selected before conversation context trimming. */
-  resolvedRoute?: {
-    attempts?: Array<{
-      decision: string;
-      model: string;
-      provider: CanonicalProvider;
-    }>;
-    model: string;
-    provider: CanonicalProvider;
-  };
   responseFormat?: ResponseFormat;
   requestId?: string;
   sessionId?: string;
@@ -126,6 +116,18 @@ export interface LLMRequestOptions {
   tenantId?: string;
   toolChoice?: CanonicalToolChoice;
   tools?: CanonicalTool[];
+}
+
+interface InternalLLMRequestOptions extends LLMRequestOptions {
+  resolvedRoute?: {
+    attempts?: Array<{
+      decision: string;
+      model: string;
+      provider: CanonicalProvider;
+    }>;
+    model: string;
+    provider: CanonicalProvider;
+  };
 }
 
 /** Provider-neutral estimate returned before a completion request is sent. */
@@ -989,7 +991,8 @@ export class LLMClient {
       };
     }>;
   } {
-    const { resolvedRoute: pinnedRoute, ...requestOptions } = options;
+    const { resolvedRoute: pinnedRoute, ...requestOptions } =
+      options as InternalLLMRequestOptions;
     const resolvedRoute = pinnedRoute
       ? {
           attempts:
