@@ -437,6 +437,9 @@ describe('SessionApi', () => {
     expect(text).toContain('event: response.completed');
     expect(text).toContain('"version":2');
     expect(text).toContain('"requestId":"session-request-123"');
+    expect(text).toMatch(
+      /event: session\.message\.started\ndata: .*"requestId":"session-request-123"/,
+    );
     expect(streamSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         metadata: { source: 'session-api-test' },

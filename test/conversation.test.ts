@@ -4,6 +4,7 @@ import { LLMClient } from '../src/client.js';
 import { SlidingWindowStrategy, SummarisationStrategy } from '../src/context-manager.js';
 import { Conversation } from '../src/conversation.js';
 import { BudgetExceededError, MaxToolRoundsError } from '../src/errors.js';
+import { ModelRouter } from '../src/router.js';
 import { InMemorySessionStore } from '../src/session-store.js';
 
 import type { ConversationClient, ConversationSnapshot } from '../src/conversation.js';
@@ -2182,6 +2183,115 @@ describe('Conversation', () => {
     ]);
   });
 
+  it('resolves implicit initial route metadata before context trimming', async () => {
+    const contextRounds: Array<Record<string, unknown>> = [];
+    const client = LLMClient.mock({
+      modelRouter: new ModelRouter({
+        rules: [{ name: 'initial-route', target: 'gpt-4o-mini' }],
+      }),
+      responses: [
+        {
+          content: [{ text: 'Done.', type: 'text' }],
+          finishReason: 'stop',
+          model: 'gpt-4o-mini',
+          provider: 'openai',
+          raw: {},
+          text: 'Done.',
+          toolCalls: [],
+          usage: {
+            cachedTokens: 0,
+            cost: '$0.00',
+            costUSD: 0,
+            inputTokens: 2,
+            outputTokens: 1,
+          },
+        },
+      ],
+    });
+    const conversation = await client.conversation({
+      contextManager: {
+        shouldTrim: vi.fn((_messages, context) => {
+          contextRounds.push(context);
+          return false;
+        }),
+        trim: vi.fn(),
+      },
+      maxTokens: 64,
+      sessionId: 'implicit-initial-route',
+    });
+
+    await conversation.send('Hello');
+
+    expect(contextRounds[0]).toEqual(
+      expect.objectContaining({
+        contextWindow: 128_000,
+        model: 'gpt-4o-mini',
+        provider: 'openai',
+        reservedOutputTokens: 64,
+        toolRound: 0,
+      }),
+    );
+  });
+
+  it('pins the router-selected initial route for the provider request', async () => {
+    const requests: Array<{ model?: string; provider?: string }> = [];
+    const client = LLMClient.mock({
+      defaultModel: 'gpt-4o',
+      defaultProvider: 'openai',
+      modelRouter: new ModelRouter({
+        rules: [{ name: 'initial-route', target: 'gpt-4o-mini' }],
+      }),
+      responses: [
+        (options) => {
+          requests.push(options);
+          return {
+            content: [{ text: 'Done.', type: 'text' }],
+            finishReason: 'stop',
+            model: 'gpt-4o-mini',
+            provider: 'openai',
+            raw: {},
+            text: 'Done.',
+            toolCalls: [],
+            usage: {
+              cachedTokens: 0,
+              cost: '$0.00',
+              costUSD: 0,
+              inputTokens: 2,
+              outputTokens: 1,
+            },
+          };
+        },
+      ],
+    });
+    const conversation = await client.conversation({ sessionId: 'router-context-route' });
+
+    await conversation.send('Hello');
+
+    expect(requests[0]).toEqual(
+      expect.objectContaining({
+        model: 'gpt-4o-mini',
+        provider: 'openai',
+        resolvedRoute: {
+          attempts: [
+            {
+              decision: 'rule:initial-route:primary:gpt-4o-mini',
+              model: 'gpt-4o-mini',
+              provider: 'openai',
+            },
+          ],
+          model: 'gpt-4o-mini',
+          provider: 'openai',
+        },
+      }),
+    );
+    expect(conversation.serialise()).toEqual(
+      expect.objectContaining({
+        model: 'gpt-4o-mini',
+        provider: 'openai',
+      }),
+    );
+  });
+
   it('applies a context manager before requests and preserves structured assistant content', async () => {
     const trim = vi.fn((messages: CanonicalMessage[]) => messages.slice(1));
     const complete = vi.fn(async (): Promise<CanonicalResponse> => ({
@@ -2627,7 +2737,15 @@ describe('Conversation stream event contract', () => {
       toolRound?: number;
     }> = [];
     const conversation = new Conversation(
-      { complete: vi.fn(), stream },
+      {
+        complete: vi.fn(),
+        resolveContext: () => ({
+          contextWindow: 4096,
+          model: 'resolved-model',
+          provider: 'mock',
+        }),
+        stream,
+      },
       {
         contextManager: {
           shouldTrim: vi.fn((_messages, context) => {
@@ -2667,6 +2785,8 @@ describe('Conversation stream event contract', () => {
       1,
       expect.objectContaining({
         metadata: { source: 'conversation-test' },
+        model: 'resolved-model',
+        provider: 'mock',
         requestId: 'caller-request-456',
       }),
     );
@@ -2680,6 +2800,9 @@ describe('Conversation stream event contract', () => {
     expect(contextRounds.map((context) => context.toolRound)).toEqual([0, 1]);
     expect(contextRounds).toEqual([
       expect.objectContaining({
+        contextWindow: 4096,
+        model: 'resolved-model',
+        provider: 'mock',
         requestId: 'caller-request-456',
         toolRound: 0,
       }),
@@ -2819,6 +2942,34 @@ describe('Conversation stream event contract', () => {
 });
 
 describe('SlidingWindowStrategy', () => {
+  it('uses the model context window after reserving output and tool schema tokens', () => {
+    const strategy = new SlidingWindowStrategy({
+      tokenEstimator: (messages) => messages.length * 10,
+    });
+    const messages: CanonicalMessage[] = [
+      { content: 'One', role: 'user' },
+      { content: 'Two', role: 'assistant' },
+      { content: 'Three', role: 'user' },
+      { content: 'Four', role: 'assistant' },
+      { content: 'Latest', role: 'user' },
+    ];
+
+    expect(
+      strategy.shouldTrim(messages, {
+        contextWindow: 90,
+        estimatedToolSchemaTokens: 20,
+        reservedOutputTokens: 30,
+      }),
+    ).toBe(true);
+    expect(
+      strategy.shouldTrim(messages.slice(-4), {
+        contextWindow: 90,
+        estimatedToolSchemaTokens: 20,
+        reservedOutputTokens: 30,
+      }),
+    ).toBe(false);
+  });
+
   it('preserves complete tool-call and tool-result exchanges while trimming', () => {
     const strategy = new SlidingWindowStrategy({
       maxMessages: 3,

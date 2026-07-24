@@ -80,6 +80,49 @@ liveDescribe('live-real sessions, tools, and context', () => {
     expect(conversation.totals.costUSD).toBeGreaterThanOrEqual(0);
   }, 120_000);
 
+  it('resolves implicit conversation routes before the real provider call', async () => {
+    requireLiveEnv('OPENAI_API_KEY');
+    const contexts: Array<{
+      contextWindow?: number;
+      model?: string;
+      provider?: string;
+      reservedOutputTokens?: number;
+      toolRound?: number;
+    }> = [];
+    const client = LLMClient.fromEnv({
+      defaultModel: providerModels.openai,
+      defaultProvider: 'openai',
+      retryOptions: { maxAttempts: 2 },
+    });
+    const conversation = await client.conversation({
+      contextManager: {
+        shouldTrim: (_messages, context) => {
+          contexts.push(context);
+          return false;
+        },
+        trim: (messages) => messages,
+      },
+      maxTokens: 32,
+      sessionId: runId('implicit_context'),
+    });
+
+    const response = await conversation.send(
+      'Reply with exactly: IMPLICIT_CONTEXT_OK',
+    );
+
+    assertCanonicalResponse(response, 'openai');
+    expect(response.text).toContain('IMPLICIT_CONTEXT_OK');
+    expect(contexts[0]).toEqual(
+      expect.objectContaining({
+        contextWindow: client.models.get(providerModels.openai).contextWindow,
+        model: providerModels.openai,
+        provider: 'openai',
+        reservedOutputTokens: 32,
+        toolRound: 0,
+      }),
+    );
+  }, 120_000);
+
   it('validates strict and permissive tool argument modes', async () => {
     const badToolResponse = buildToolCallResponse({ city: 123 });
 

@@ -7,7 +7,7 @@ import {
   RateLimitError,
 } from './errors.js';
 import { ModelRegistry } from './models/registry.js';
-import { Conversation } from './conversation.js';
+import { Conversation, type ConversationRoute } from './conversation.js';
 import { AnthropicAdapter } from './providers/anthropic.js';
 import { GeminiAdapter } from './providers/gemini.js';
 import { OpenAIAdapter } from './providers/openai.js';
@@ -107,6 +107,16 @@ export interface LLMRequestOptions {
   model?: string;
   provider?: CanonicalProvider;
   providerOptions?: ProviderOptions;
+  /** @internal Route selected before conversation context trimming. */
+  resolvedRoute?: {
+    attempts?: Array<{
+      decision: string;
+      model: string;
+      provider: CanonicalProvider;
+    }>;
+    model: string;
+    provider: CanonicalProvider;
+  };
   responseFormat?: ResponseFormat;
   requestId?: string;
   sessionId?: string;
@@ -383,6 +393,47 @@ export class LLMClient {
     }
 
     throw new ProviderCapabilityError('No model route attempts were available.');
+  }
+
+  /** Resolves a conversation turn before context trimming and provider dispatch. */
+  resolveContext(options: {
+    maxTokens?: number;
+    messages: CanonicalMessage[];
+    model?: string;
+    provider?: CanonicalProvider;
+    responseFormat?: ResponseFormat;
+    sessionId?: string;
+    system?: string;
+    tenantId?: string;
+    toolChoice?: CanonicalToolChoice;
+    tools?: CanonicalTool[];
+  }): ConversationRoute {
+    const plan = options.model
+      ? {
+          attempts: [
+            {
+              decision: `requested:${options.model}`,
+              request: this.resolveRequest(options),
+            },
+          ],
+        }
+      : this.resolveRequestPlan(options);
+    const attempt = plan.attempts[0];
+    if (!attempt) {
+      throw new ProviderCapabilityError('No model route attempts were available.');
+    }
+
+    const modelInfo = this.modelRegistry.get(attempt.request.model);
+    return {
+      attempts: plan.attempts.map((routeAttempt) => ({
+        decision: routeAttempt.decision,
+        model: routeAttempt.request.model,
+        provider: routeAttempt.request.provider,
+      })),
+      contextWindow: modelInfo.contextWindow,
+      model: attempt.request.model,
+      provider: attempt.request.provider,
+    };
   }
 
   /** Estimates completion cost using the same preflight calculation as budgets. */
@@ -938,11 +989,25 @@ export class LLMClient {
       };
     }>;
   } {
-    const resolvedRoute = this.resolveRoute(options, resolveOptions);
+    const { resolvedRoute: pinnedRoute, ...requestOptions } = options;
+    const resolvedRoute = pinnedRoute
+      ? {
+          attempts:
+            pinnedRoute.attempts && pinnedRoute.attempts.length > 0
+              ? pinnedRoute.attempts
+              : [
+                  {
+                    decision: `resolved:${pinnedRoute.model}`,
+                    model: pinnedRoute.model,
+                    provider: pinnedRoute.provider,
+                  },
+                ],
+        }
+      : this.resolveRoute(requestOptions, resolveOptions);
     return {
       attempts: resolvedRoute.attempts.map((attempt) => ({
         decision: attempt.decision,
-        request: this.resolveRequest(options, attempt, resolveOptions),
+        request: this.resolveRequest(requestOptions, attempt, resolveOptions),
       })),
     };
   }
@@ -1376,6 +1441,37 @@ class MockLLMClient extends LLMClient {
     this.speechQueue = [...(options.speeches ?? [])];
     this.streamQueue = [...(options.streams ?? [])];
     this.transcriptionQueue = [...(options.transcriptions ?? [])];
+  }
+
+  override resolveContext(options: {
+    maxTokens?: number;
+    messages: CanonicalMessage[];
+    model?: string;
+    provider?: CanonicalProvider;
+    responseFormat?: ResponseFormat;
+    sessionId?: string;
+    system?: string;
+    tenantId?: string;
+    toolChoice?: CanonicalToolChoice;
+    tools?: CanonicalTool[];
+  }): ConversationRoute {
+    try {
+      return super.resolveContext(options);
+    } catch {
+      const model = options.model ?? this.mockDefaultModel;
+      const provider = options.provider ?? this.mockDefaultProvider;
+      let contextWindow: number | undefined;
+      try {
+        contextWindow = this.models.get(model).contextWindow;
+      } catch {
+        // Mock-only models do not need registry entries.
+      }
+      return {
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        model,
+        provider,
+      };
+    }
   }
 
   override async embed(options: EmbeddingRequestOptions): Promise<EmbeddingResponse> {

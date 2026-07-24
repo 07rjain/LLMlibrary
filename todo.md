@@ -441,8 +441,8 @@ Dependencies: `T-18`
 
 ## 2026-07-25 Runtime Follow-up
 
-Baseline: `main` at `411a128`. PR #12 remains closed; only the missing metadata and
-correlation behavior is being implemented as a focused follow-up.
+Baseline: `main` at `feb5915`. PR #12 remains closed because its work was consolidated
+into the merged runtime feature PRs.
 
 ### Runtime fixes
 
@@ -450,6 +450,8 @@ correlation behavior is being implemented as a focused follow-up.
 - [x] Keep budget preflight on the already-resolved route attempt.
 - [x] Capture and persist `response-start` model/provider in streaming conversations.
 - [x] Pass resolved model/provider into follow-up context callbacks.
+- [x] Resolve the initial route and model context window before context trimming.
+- [x] Reserve output and tool-schema tokens from the effective context budget.
 
 ### Correlation and request metadata
 
@@ -466,8 +468,11 @@ correlation behavior is being implemented as a focused follow-up.
 - [x] Complete and streaming usage-event metadata propagation.
 - [x] Streaming dispatcher with only client-level default model/provider.
 - [x] Context callbacks with implicitly resolved model/provider.
+- [x] Initial context callback receives routed model/provider/context window.
 - [x] Caller `requestId` across context rounds.
 - [x] Session API request metadata and `requestId`.
+- [x] Include request IDs on the initial Session API SSE event and early errors.
+- [x] Live conformance asserts billable usage, stream sequencing, and canonical tool arguments.
 
 ### Release housekeeping
 

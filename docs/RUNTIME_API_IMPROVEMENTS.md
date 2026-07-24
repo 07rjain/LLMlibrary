@@ -47,7 +47,7 @@ The dispatcher receives a canonical tool call and execution context. The existin
 
 ## 4. Per-Step Context Policy
 
-Context management runs before the initial request and each automatic tool-loop follow-up. Context strategies receive the current tool round, request ID, reserved output capacity, context-window information when configured, and an estimated tool-schema allowance.
+Context management runs before the initial request and each automatic tool-loop follow-up. The client resolves the selected model/provider before the first trim, and context strategies receive the current tool round, request ID, model context window, reserved output capacity, and estimated tool-schema allowance. The effective token budget is bounded by both the application `maxContextTokens` cap and the selected model's context window.
 
 Use `ConversationOptions.onCompaction` to observe removed or summarized messages:
 

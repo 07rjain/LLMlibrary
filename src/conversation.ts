@@ -37,8 +37,32 @@ const FORBIDDEN_TOOL_ARGUMENT_KEYS = new Set(['__proto__', 'constructor', 'proto
 
 export type ToolValidationMode = 'permissive' | 'strict';
 
+/** Resolved route metadata used to prepare one conversation turn. */
+export interface ConversationRoute {
+  attempts?: Array<{
+    decision: string;
+    model: string;
+    provider: CanonicalProvider;
+  }>;
+  contextWindow?: number;
+  model: string;
+  provider: CanonicalProvider;
+}
+
 /** Minimal client contract consumed by `Conversation`. */
 export interface ConversationClient {
+  resolveContext?(options: {
+    maxTokens?: number;
+    messages: CanonicalMessage[];
+    model?: string;
+    provider?: CanonicalProvider;
+    responseFormat?: ResponseFormat;
+    sessionId?: string;
+    system?: string;
+    tenantId?: string;
+    toolChoice?: CanonicalToolChoice;
+    tools?: CanonicalTool[];
+  }): ConversationRoute;
   complete(options: {
     budgetExceededAction?: BudgetExceededAction;
     budgetUsd?: number;
@@ -47,6 +71,11 @@ export interface ConversationClient {
     messages: CanonicalMessage[];
     model?: string;
     provider?: CanonicalProvider;
+    resolvedRoute?: {
+      attempts?: ConversationRoute['attempts'];
+      model: string;
+      provider: CanonicalProvider;
+    };
     providerOptions?: ProviderOptions;
     requestId?: string;
     responseFormat?: ResponseFormat;
@@ -65,6 +94,11 @@ export interface ConversationClient {
     messages: CanonicalMessage[];
     model?: string;
     provider?: CanonicalProvider;
+    resolvedRoute?: {
+      attempts?: ConversationRoute['attempts'];
+      model: string;
+      provider: CanonicalProvider;
+    };
     providerOptions?: ProviderOptions;
     requestId?: string;
     responseFormat?: ResponseFormat;
@@ -262,15 +296,16 @@ export class Conversation {
     input: CanonicalMessage['content'],
     options: ConversationRequestOptions = {},
   ): Promise<CanonicalResponse> {
-    const nextMessages = await this.prepareMessages(
-      buildUserMessage(input),
-      options.requestId,
-    );
+    const userMessage = buildUserMessage(input);
+    const initialMessages = [...this.messages, userMessage];
+    const route = this.resolveConversationRoute(initialMessages);
+    const nextMessages = await this.prepareMessages(userMessage, options.requestId, route);
     const result = await this.runCompleteToolLoop(
       nextMessages,
       options.signal,
       options.requestId,
       options.metadata,
+      route,
     );
 
     await this.finalizeExecution(result);
@@ -287,15 +322,16 @@ export class Conversation {
         this: Conversation,
         signal: AbortSignal,
       ): AsyncGenerator<StreamChunk, void, void> {
-        const nextMessages = await this.prepareMessages(
-          buildUserMessage(input),
-          options.requestId,
-        );
+        const userMessage = buildUserMessage(input);
+        const initialMessages = [...this.messages, userMessage];
+        const route = this.resolveConversationRoute(initialMessages);
+        const nextMessages = await this.prepareMessages(userMessage, options.requestId, route);
         const result = yield* this.runStreamToolLoop(
           nextMessages,
           signal,
           options.requestId,
           options.metadata,
+          route,
         );
         await this.finalizeExecution(result);
       }.bind(this),
@@ -500,9 +536,17 @@ export class Conversation {
   private async prepareMessages(
     userMessage: CanonicalMessage,
     requestId: string | undefined,
+    route: ConversationRoute | undefined,
   ): Promise<CanonicalMessage[]> {
     const nextMessages = [...this.messages, userMessage];
-    return this.prepareModelStepMessages(nextMessages, 0, requestId);
+    return this.prepareModelStepMessages(
+      nextMessages,
+      0,
+      requestId,
+      route?.model,
+      route?.provider,
+      route?.contextWindow,
+    );
   }
 
   private async prepareModelStepMessages(
@@ -511,6 +555,7 @@ export class Conversation {
     requestId: string | undefined = undefined,
     model: string | undefined = this.model,
     provider: CanonicalProvider | undefined = this.provider,
+    contextWindow: number | undefined = undefined,
   ): Promise<CanonicalMessage[]> {
     if (!this.contextManager) {
       return messages;
@@ -523,8 +568,9 @@ export class Conversation {
         : 0,
       requestId: requestId ?? `${this.sessionId}:${toolRound}`,
       toolRound,
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
       ...(this.maxContextTokens !== undefined
-        ? { contextWindow: this.maxContextTokens }
+        ? { maxContextTokens: this.maxContextTokens }
         : {}),
       ...(this.maxTokens !== undefined ? { reservedOutputTokens: this.maxTokens } : {}),
     };
@@ -549,6 +595,7 @@ export class Conversation {
     signal: AbortSignal | undefined,
     requestId: string | undefined,
     metadata: Record<string, JsonValue> | undefined,
+    initialRoute: ConversationRoute | undefined,
   ): Promise<{
     messages: CanonicalMessage[];
     model?: string;
@@ -558,8 +605,10 @@ export class Conversation {
   }> {
     let workingMessages = [...initialMessages];
     let aggregateUsage = createEmptyUsage();
-    let model = this.model;
-    let provider = this.provider;
+    let model = initialRoute?.model ?? this.model;
+    let provider = initialRoute?.provider ?? this.provider;
+    let contextWindow = initialRoute?.contextWindow;
+    let route = initialRoute;
     let toolRounds = 0;
 
     while (true) {
@@ -571,6 +620,7 @@ export class Conversation {
           requestId,
           model,
           provider,
+          contextWindow,
         );
       }
       const remainingBudget = this.resolveRemainingBudgetDecision(aggregateUsage.costUSD);
@@ -598,10 +648,21 @@ export class Conversation {
           remainingBudget.budgetUsd,
           requestId,
           metadata,
+          model,
+          provider,
+          route,
         ),
       );
       model = response.model;
       provider = response.provider;
+      contextWindow =
+        this.resolveConversationRoute(workingMessages, model, provider)?.contextWindow ??
+        contextWindow;
+      route = {
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        model,
+        provider,
+      };
       aggregateUsage = accumulateUsage(aggregateUsage, response.usage);
       workingMessages = [...workingMessages, buildAssistantMessage(response)];
 
@@ -631,6 +692,7 @@ export class Conversation {
     signal: AbortSignal | undefined,
     requestId: string | undefined,
     metadata: Record<string, JsonValue> | undefined,
+    initialRoute: ConversationRoute | undefined,
   ): AsyncGenerator<
     StreamChunk,
     {
@@ -643,8 +705,10 @@ export class Conversation {
   > {
     let workingMessages = [...initialMessages];
     let aggregateUsage = createEmptyUsage();
-    let model = this.model;
-    let provider = this.provider;
+    let model = initialRoute?.model ?? this.model;
+    let provider = initialRoute?.provider ?? this.provider;
+    let contextWindow = initialRoute?.contextWindow;
+    let route = initialRoute;
     let toolRounds = 0;
     let sequence = 0;
 
@@ -684,6 +748,9 @@ export class Conversation {
         remainingBudget.budgetUsd,
         requestId,
         metadata,
+        model,
+        provider,
+        route,
       );
       if (toolRounds > 0) {
         workingMessages = await this.prepareModelStepMessages(
@@ -692,6 +759,7 @@ export class Conversation {
           requestId,
           model,
           provider,
+          contextWindow,
         );
       }
       requestOptions.messages = workingMessages;
@@ -706,6 +774,14 @@ export class Conversation {
         if (chunk.type === 'response-start') {
           model = chunk.model;
           provider = chunk.provider;
+          contextWindow =
+            this.resolveConversationRoute(workingMessages, model, provider)?.contextWindow ??
+            contextWindow;
+          route = {
+            ...(contextWindow !== undefined ? { contextWindow } : {}),
+            model,
+            provider,
+          };
           yield decorate(chunk);
           continue;
         }
@@ -929,6 +1005,33 @@ export class Conversation {
     });
   }
 
+  private resolveConversationRoute(
+    messages: CanonicalMessage[],
+    model: string | undefined = this.model,
+    provider: CanonicalProvider | undefined = this.provider,
+  ): ConversationRoute | undefined {
+    const resolved = this.client.resolveContext?.({
+      messages,
+      ...(this.maxTokens !== undefined ? { maxTokens: this.maxTokens } : {}),
+      ...(model !== undefined ? { model } : {}),
+      ...(provider !== undefined ? { provider } : {}),
+      ...(this.responseFormat !== undefined ? { responseFormat: this.responseFormat } : {}),
+      sessionId: this.sessionId,
+      ...(this.system !== undefined ? { system: this.system } : {}),
+      ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
+      ...(this.toolChoice !== undefined ? { toolChoice: this.toolChoice } : {}),
+      ...(this.tools !== undefined ? { tools: this.tools } : {}),
+    });
+
+    if (resolved) {
+      return resolved;
+    }
+    if (model !== undefined && provider !== undefined) {
+      return { model, provider };
+    }
+    return undefined;
+  }
+
   private buildContextManagerContext(
     model: string | undefined = this.model,
     provider: CanonicalProvider | undefined = this.provider,
@@ -955,6 +1058,9 @@ export class Conversation {
     budgetUsd: number | undefined = undefined,
     requestId: string | undefined = undefined,
     metadata: Record<string, JsonValue> | undefined = undefined,
+    model: string | undefined = this.model,
+    provider: CanonicalProvider | undefined = this.provider,
+    route: ConversationRoute | undefined = undefined,
   ): {
     budgetExceededAction?: BudgetExceededAction;
     budgetUsd?: number;
@@ -963,6 +1069,11 @@ export class Conversation {
     messages: CanonicalMessage[];
     model?: string;
     provider?: CanonicalProvider;
+    resolvedRoute?: {
+      attempts?: ConversationRoute['attempts'];
+      model: string;
+      provider: CanonicalProvider;
+    };
     providerOptions?: ProviderOptions;
     responseFormat?: ResponseFormat;
     requestId?: string;
@@ -981,8 +1092,17 @@ export class Conversation {
       ...(metadata !== undefined ? { metadata } : {}),
       messages,
       ...(this.maxTokens !== undefined ? { maxTokens: this.maxTokens } : {}),
-      ...(this.model !== undefined ? { model: this.model } : {}),
-      ...(this.provider !== undefined ? { provider: this.provider } : {}),
+      ...(model !== undefined ? { model } : {}),
+      ...(provider !== undefined ? { provider } : {}),
+      ...(route !== undefined
+        ? {
+            resolvedRoute: {
+              ...(route.attempts !== undefined ? { attempts: route.attempts } : {}),
+              model: route.model,
+              provider: route.provider,
+            },
+          }
+        : {}),
       ...(this.providerOptions !== undefined ? { providerOptions: this.providerOptions } : {}),
       ...(this.responseFormat !== undefined ? { responseFormat: this.responseFormat } : {}),
       ...(requestId !== undefined ? { requestId } : {}),

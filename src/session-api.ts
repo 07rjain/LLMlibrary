@@ -720,7 +720,14 @@ export class SessionApi {
     const body = new ReadableStream<Uint8Array>({
       start: async (controller) => {
         try {
-          controller.enqueue(encoder.encode(formatSseEvent('session.message.started', { sessionId })));
+          controller.enqueue(
+            encoder.encode(
+              formatSseEvent('session.message.started', {
+                sessionId,
+                ...(requestId !== undefined ? { requestId } : {}),
+              }),
+            ),
+          );
 
           stream = conversation.sendStream(content, {
             ...(metadata !== undefined ? { metadata } : {}),
@@ -899,8 +906,16 @@ export class SessionApi {
           }
         } catch (error) {
           if (!abortController.signal.aborted) {
+            const errorPayload = serializeStreamError(error);
             controller.enqueue(
-              encoder.encode(formatSseEvent('response.error', serializeStreamError(error))),
+              encoder.encode(
+                formatSseEvent('response.error', {
+                  ...errorPayload,
+                  ...(requestId !== undefined && errorPayload.requestId === undefined
+                    ? { requestId }
+                    : {}),
+                }),
+              ),
             );
           }
         } finally {
