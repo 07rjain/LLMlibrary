@@ -480,10 +480,10 @@ correlation behavior is being implemented as a focused follow-up.
 
 - [x] Focused client, Conversation, Session API, and Test_Droid tests.
 - [x] Full unit and coverage suite.
-- [x] Typecheck; lint remains pending because the repository ESLint process stalls during rule loading in this workspace.
+- [x] Typecheck and lint.
 - [x] Build and declaration output.
 - [x] Bundle-size, dependency, and edge checks.
-- [ ] Documentation build.
+- [x] Documentation build (CI verify passed; local VitePress process did not terminate after bundle output).
 - [ ] Live provider conformance.
 - [x] Focused real-provider correlation, estimate, dispatcher, and context checks.
 - [x] Restore generated verification output and confirm only intended files remain.
