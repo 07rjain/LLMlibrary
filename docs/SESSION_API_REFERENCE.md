@@ -90,9 +90,16 @@ Example body:
 
 ```json
 {
-  "content": "Summarize the latest ticket."
+  "content": "Summarize the latest ticket.",
+  "requestId": "http-request-123",
+  "metadata": {
+    "feature": "ticket-summary"
+  }
 }
 ```
+
+`requestId` and JSON-safe `metadata` are optional and are forwarded to the
+conversation, stream events, context callbacks, and usage logger.
 
 If `stream=true` is passed in the query string or request body, the endpoint returns `text/event-stream`.
 

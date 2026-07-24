@@ -267,12 +267,22 @@ export class PostgresUsageLogger implements UsageLogger {
           tenant_id TEXT NOT NULL DEFAULT '',
           session_id TEXT,
           bot_id TEXT,
-          routing_decision TEXT
+          routing_decision TEXT,
+          request_id TEXT,
+          metadata JSONB
         )`,
       );
       await pool.query(
         `ALTER TABLE ${this.qualifiedTableName()}
          ADD COLUMN IF NOT EXISTS reasoning_tokens INTEGER NOT NULL DEFAULT 0`,
+      );
+      await pool.query(
+        `ALTER TABLE ${this.qualifiedTableName()}
+         ADD COLUMN IF NOT EXISTS request_id TEXT`,
+      );
+      await pool.query(
+        `ALTER TABLE ${this.qualifiedTableName()}
+         ADD COLUMN IF NOT EXISTS metadata JSONB`,
       );
       await pool.query(
         `CREATE INDEX IF NOT EXISTS ${quoteIdentifier(
@@ -533,6 +543,8 @@ export class PostgresUsageLogger implements UsageLogger {
         'session_id',
         'bot_id',
         'routing_decision',
+        'request_id',
+        'metadata',
       ];
       const values: unknown[] = [];
       const placeholders = batch.map((event, index) => {
@@ -554,6 +566,8 @@ export class PostgresUsageLogger implements UsageLogger {
           event.sessionId ?? null,
           event.botId ?? null,
           event.routingDecision ?? null,
+          event.requestId ?? null,
+          event.metadata !== undefined ? sanitizeForLogging(event.metadata) : null,
         );
         return `(${columns.map((_, columnIndex) => `$${offset + columnIndex + 1}`).join(', ')})`;
       });

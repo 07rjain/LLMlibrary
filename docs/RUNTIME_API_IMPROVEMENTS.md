@@ -1,6 +1,6 @@
 # Runtime API Improvements
 
-This page documents the focused runtime improvements currently included in main. They are generic LLMlibrary APIs and are intentionally reviewable and releasable separately. Request-level metadata from PR #12 is intentionally excluded.
+This page documents the focused runtime improvements currently included in main. They are generic LLMlibrary APIs and are intentionally reviewable and releasable separately.
 
 ## 1. Request IDs
 
@@ -12,7 +12,7 @@ Completion and streaming requests accept:
 }
 ```
 
-The request ID is copied to v2 stream events. Request-level metadata and UsageEvent propagation remain outside this release; PR #12 is intentionally excluded.
+The request ID is copied to v2 stream events, per-step context callbacks, provider attempts, and UsageEvents. Requests also accept JSON-safe application metadata; see [Request Metadata](./REQUEST_METADATA.md).
 
 ## 2. Request Cost Quotes
 
@@ -26,6 +26,7 @@ const quote = client.estimateRequest({
 ```
 
 The returned `RequestCostEstimate` includes input tokens, maximum output tokens, reasoning tokens, estimated USD cost, model, provider, and `priceVersion`. Budget preflight uses the same calculation.
+When a `ModelRouter` is configured without an explicit model, the quote uses the router's primary attempt.
 
 ## 3. External Tool Call Dispatch
 
@@ -87,6 +88,7 @@ The conformance gate uses provider-appropriate output budgets so Gemini thinking
 The implementation is split into focused pull requests:
 
 - Request IDs and stream correlation
+- Request metadata and UsageEvent correlation
 - Request cost quotes
 - External tool dispatch
 - Per-step context policy

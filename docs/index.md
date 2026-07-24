@@ -56,6 +56,7 @@ The fastest path through the docs is:
 7. [Production Setup](./PRODUCTION_SETUP.md)
 8. [Production Guide](./PRODUCTION_GUIDE.md)
 9. [Runtime API Improvements](./RUNTIME_API_IMPROVEMENTS.md)
+10. [Request Metadata](./REQUEST_METADATA.md)
 
 If you want the lower-level generated API surface, open [API Reference](./api/index.html).
 

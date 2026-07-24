@@ -49,6 +49,7 @@ import type {
   EmbeddingProvider,
   EmbeddingRequestOptions,
   EmbeddingResponse,
+  JsonValue,
   ModelInfo,
   ProviderOptions,
   RemoteModelInfo,
@@ -100,6 +101,7 @@ export interface LLMRequestOptions {
   botId?: string;
   budgetExceededAction?: BudgetExceededAction;
   budgetUsd?: number;
+  metadata?: Record<string, JsonValue>;
   maxTokens?: number;
   messages: CanonicalMessage[];
   model?: string;
@@ -385,7 +387,21 @@ export class LLMClient {
 
   /** Estimates completion cost using the same preflight calculation as budgets. */
   estimateRequest(options: LLMRequestOptions): RequestCostEstimate {
-    const resolved = this.resolveRequest(options);
+    const primaryAttempt = this.resolveRequestPlan(options).attempts[0];
+    if (!primaryAttempt) {
+      throw new ProviderCapabilityError('No model route attempts were available.');
+    }
+
+    return this.estimateResolvedRequest(primaryAttempt.request);
+  }
+
+  private estimateResolvedRequest(
+    resolved: LLMRequestOptions & {
+      maxTokens: number;
+      model: string;
+      provider: CanonicalProvider;
+    },
+  ): RequestCostEstimate {
     const estimatedMessages = resolved.system
       ? [{ content: resolved.system, role: 'system' as const }, ...resolved.messages]
       : resolved.messages;
@@ -985,7 +1001,7 @@ export class LLMClient {
       return null;
     }
 
-    const estimate = this.estimateRequest(options);
+    const estimate = this.estimateResolvedRequest(options);
     const estimatedInputTokens = estimate.inputTokens;
     const estimatedOutputTokens = estimate.maxOutputTokens;
     const estimatedReasoningTokens = estimate.reasoningTokens;
@@ -1712,6 +1728,8 @@ function buildUsageEvent(input: {
     provider: input.provider,
     timestamp: new Date().toISOString(),
     ...(input.options.botId !== undefined ? { botId: input.options.botId } : {}),
+    ...(input.options.metadata !== undefined ? { metadata: input.options.metadata } : {}),
+    ...(input.options.requestId !== undefined ? { requestId: input.options.requestId } : {}),
     ...(input.routingDecision ? { routingDecision: input.routingDecision } : {}),
     ...(input.options.sessionId !== undefined ? { sessionId: input.options.sessionId } : {}),
     ...(input.options.tenantId !== undefined ? { tenantId: input.options.tenantId } : {}),

@@ -68,7 +68,6 @@ describe('Usage logging', () => {
       ...buildUsageEvent(),
       model: 'gpt-4o',
       sessionId: 'session-1',
-      // @ts-expect-error test redaction of unexpected fields
       metadata: { authorization: 'Bearer sk-secret-value' },
     });
 
@@ -86,7 +85,13 @@ describe('Usage logging', () => {
       tableName: 'usage_events',
     });
 
-    await logger.log(buildUsageEvent({ sessionId: 'session-1' }));
+    await logger.log(
+      buildUsageEvent({
+        metadata: { authorization: 'Bearer sk-secret-value', feature: 'billing' },
+        requestId: 'usage-request-1',
+        sessionId: 'session-1',
+      }),
+    );
     expect(pool.queries).toHaveLength(0);
 
     await logger.log(
@@ -101,6 +106,11 @@ describe('Usage logging', () => {
     expect(pool.queries[0]?.text).toContain('CREATE SCHEMA IF NOT EXISTS "llm"');
     expect(pool.queries[1]?.text).toContain('CREATE TABLE IF NOT EXISTS "llm"."usage_events"');
     expect(pool.queries.at(-1)?.text).toContain('INSERT INTO "llm"."usage_events"');
+    expect(pool.queries.at(-1)?.values).toContain('usage-request-1');
+    expect(pool.queries.at(-1)?.values).toContainEqual({
+      authorization: '[REDACTED]',
+      feature: 'billing',
+    });
 
     pool.queueRows([
       {

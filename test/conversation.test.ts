@@ -2089,6 +2089,99 @@ describe('Conversation', () => {
     ]);
   });
 
+  it('passes caller correlation and resolved defaults to complete context rounds', async () => {
+    const usage = {
+      cachedTokens: 0,
+      cost: '$0.00',
+      costUSD: 0,
+      inputTokens: 1,
+      outputTokens: 1,
+    };
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockResolvedValueOnce({
+        content: [],
+        finishReason: 'tool_call',
+        model: 'resolved-model',
+        provider: 'mock',
+        raw: {},
+        text: '',
+        toolCalls: [{ args: { city: 'Berlin' }, id: 'call-1', name: 'lookup' }],
+        usage,
+      })
+      .mockResolvedValueOnce({
+        content: [{ text: 'Done.', type: 'text' }],
+        finishReason: 'stop',
+        model: 'resolved-model',
+        provider: 'mock',
+        raw: {},
+        text: 'Done.',
+        toolCalls: [],
+        usage,
+      });
+    const contextRounds: Array<{
+      model?: string;
+      provider?: string;
+      requestId?: string;
+      toolRound?: number;
+    }> = [];
+    const conversation = new Conversation(
+      { complete, stream: vi.fn() },
+      {
+        contextManager: {
+          shouldTrim: vi.fn((_messages, context) => {
+            contextRounds.push(context);
+            return false;
+          }),
+          trim: vi.fn(),
+        },
+        sessionId: 'implicit-complete-context',
+        toolCallDispatcher: {
+          execute: vi.fn(async () => ({ temperature: 20 })),
+        },
+        tools: [
+          {
+            description: 'Look up a city',
+            name: 'lookup',
+            parameters: { properties: { city: { type: 'string' } }, type: 'object' },
+          },
+        ],
+      },
+    );
+
+    await conversation.send('Look up Berlin.', {
+      metadata: { source: 'conversation-test' },
+      requestId: 'caller-request-123',
+    });
+
+    expect(complete).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        metadata: { source: 'conversation-test' },
+        requestId: 'caller-request-123',
+      }),
+    );
+    expect(complete).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        metadata: { source: 'conversation-test' },
+        requestId: 'caller-request-123',
+      }),
+    );
+    expect(contextRounds).toEqual([
+      expect.objectContaining({
+        requestId: 'caller-request-123',
+        toolRound: 0,
+      }),
+      expect.objectContaining({
+        model: 'resolved-model',
+        provider: 'mock',
+        requestId: 'caller-request-123',
+        toolRound: 1,
+      }),
+    ]);
+  });
+
   it('applies a context manager before requests and preserves structured assistant content', async () => {
     const trim = vi.fn((messages: CanonicalMessage[]) => messages.slice(1));
     const complete = vi.fn(async (): Promise<CanonicalResponse> => ({
@@ -2505,6 +2598,107 @@ describe('Conversation', () => {
 });
 
 describe('Conversation stream event contract', () => {
+  it('resolves defaults before dispatching streamed tools and correlates context rounds', async () => {
+    const usage = {
+      cachedTokens: 0,
+      cost: '$0.00',
+      costUSD: 0,
+      inputTokens: 1,
+      outputTokens: 1,
+    };
+    const stream = vi
+      .fn<ConversationClient['stream']>()
+      .mockImplementationOnce(async function* (): AsyncGenerator<StreamChunk, void, void> {
+        yield { model: 'resolved-model', provider: 'mock', type: 'response-start' };
+        yield { id: 'call-1', name: 'lookup', type: 'tool-call-start' };
+        yield { id: 'call-1', name: 'lookup', result: { city: 'Berlin' }, type: 'tool-call-result' };
+        yield { finishReason: 'tool_call', type: 'done', usage };
+      })
+      .mockImplementationOnce(async function* (): AsyncGenerator<StreamChunk, void, void> {
+        yield { model: 'resolved-model', provider: 'mock', type: 'response-start' };
+        yield { delta: 'Done.', type: 'text-delta' };
+        yield { finishReason: 'stop', type: 'done', usage };
+      });
+    const dispatcher = vi.fn(async () => ({ temperature: 20 }));
+    const contextRounds: Array<{
+      model?: string;
+      provider?: string;
+      requestId?: string;
+      toolRound?: number;
+    }> = [];
+    const conversation = new Conversation(
+      { complete: vi.fn(), stream },
+      {
+        contextManager: {
+          shouldTrim: vi.fn((_messages, context) => {
+            contextRounds.push(context);
+            return false;
+          }),
+          trim: vi.fn(),
+        },
+        sessionId: 'implicit-stream-dispatch',
+        toolCallDispatcher: { execute: dispatcher },
+        tools: [
+          {
+            description: 'Look up a city',
+            name: 'lookup',
+            parameters: { properties: { city: { type: 'string' } }, type: 'object' },
+          },
+        ],
+      },
+    );
+
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of conversation.sendStream('Look up Berlin.', {
+      metadata: { source: 'conversation-test' },
+      requestId: 'caller-request-456',
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(dispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        call: { args: { city: 'Berlin' }, id: 'call-1', name: 'lookup' },
+        model: 'resolved-model',
+        provider: 'mock',
+      }),
+    );
+    expect(stream).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        metadata: { source: 'conversation-test' },
+        requestId: 'caller-request-456',
+      }),
+    );
+    expect(stream).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        metadata: { source: 'conversation-test' },
+        requestId: 'caller-request-456',
+      }),
+    );
+    expect(contextRounds.map((context) => context.toolRound)).toEqual([0, 1]);
+    expect(contextRounds).toEqual([
+      expect.objectContaining({
+        requestId: 'caller-request-456',
+        toolRound: 0,
+      }),
+      expect.objectContaining({
+        model: 'resolved-model',
+        provider: 'mock',
+        requestId: 'caller-request-456',
+        toolRound: 1,
+      }),
+    ]);
+    expect(conversation.serialise()).toEqual(
+      expect.objectContaining({
+        model: 'resolved-model',
+        provider: 'mock',
+      }),
+    );
+    expect(chunks.at(-1)).toEqual(expect.objectContaining({ finishReason: 'stop', type: 'done' }));
+  });
+
   it('keeps v2 metadata monotonic across automatic tool-loop rounds', async () => {
     const usage = {
       cachedTokens: 0,

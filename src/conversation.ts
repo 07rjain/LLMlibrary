@@ -42,11 +42,13 @@ export interface ConversationClient {
   complete(options: {
     budgetExceededAction?: BudgetExceededAction;
     budgetUsd?: number;
+    metadata?: Record<string, JsonValue>;
     maxTokens?: number;
     messages: CanonicalMessage[];
     model?: string;
     provider?: CanonicalProvider;
     providerOptions?: ProviderOptions;
+    requestId?: string;
     responseFormat?: ResponseFormat;
     sessionId?: string;
     signal?: AbortSignal;
@@ -58,11 +60,13 @@ export interface ConversationClient {
   stream(options: {
     budgetExceededAction?: BudgetExceededAction;
     budgetUsd?: number;
+    metadata?: Record<string, JsonValue>;
     maxTokens?: number;
     messages: CanonicalMessage[];
     model?: string;
     provider?: CanonicalProvider;
     providerOptions?: ProviderOptions;
+    requestId?: string;
     responseFormat?: ResponseFormat;
     sessionId?: string;
     signal?: AbortSignal;
@@ -71,6 +75,13 @@ export interface ConversationClient {
     toolChoice?: CanonicalToolChoice;
     tools?: CanonicalTool[];
   }): AsyncIterable<StreamChunk>;
+}
+
+/** Correlation and cancellation options for one conversation turn. */
+export interface ConversationRequestOptions {
+  metadata?: Record<string, JsonValue>;
+  requestId?: string;
+  signal?: AbortSignal;
 }
 
 /** Serializable conversation state persisted by session stores. */
@@ -249,10 +260,18 @@ export class Conversation {
   /** Appends a user turn, executes the model/tool loop, and commits state. */
   async send(
     input: CanonicalMessage['content'],
-    options: { signal?: AbortSignal } = {},
+    options: ConversationRequestOptions = {},
   ): Promise<CanonicalResponse> {
-    const nextMessages = await this.prepareMessages(buildUserMessage(input));
-    const result = await this.runCompleteToolLoop(nextMessages, options.signal);
+    const nextMessages = await this.prepareMessages(
+      buildUserMessage(input),
+      options.requestId,
+    );
+    const result = await this.runCompleteToolLoop(
+      nextMessages,
+      options.signal,
+      options.requestId,
+      options.metadata,
+    );
 
     await this.finalizeExecution(result);
     return result.response;
@@ -261,15 +280,23 @@ export class Conversation {
   /** Streams a user turn and commits state when the final `done` chunk arrives. */
   sendStream(
     input: CanonicalMessage['content'],
-    options: { requestId?: string; signal?: AbortSignal } = {},
+    options: ConversationRequestOptions = {},
   ): CancelableStream<StreamChunk> {
     return createCancelableStream(
       async function* (
         this: Conversation,
         signal: AbortSignal,
       ): AsyncGenerator<StreamChunk, void, void> {
-        const nextMessages = await this.prepareMessages(buildUserMessage(input));
-        const result = yield* this.runStreamToolLoop(nextMessages, signal, options.requestId);
+        const nextMessages = await this.prepareMessages(
+          buildUserMessage(input),
+          options.requestId,
+        );
+        const result = yield* this.runStreamToolLoop(
+          nextMessages,
+          signal,
+          options.requestId,
+          options.metadata,
+        );
         await this.finalizeExecution(result);
       }.bind(this),
       options.signal,
@@ -470,25 +497,31 @@ export class Conversation {
     this.updatedAt = new Date().toISOString();
   }
 
-  private async prepareMessages(userMessage: CanonicalMessage): Promise<CanonicalMessage[]> {
+  private async prepareMessages(
+    userMessage: CanonicalMessage,
+    requestId: string | undefined,
+  ): Promise<CanonicalMessage[]> {
     const nextMessages = [...this.messages, userMessage];
-    return this.prepareModelStepMessages(nextMessages, 0);
+    return this.prepareModelStepMessages(nextMessages, 0, requestId);
   }
 
   private async prepareModelStepMessages(
     messages: CanonicalMessage[],
     toolRound: number,
+    requestId: string | undefined = undefined,
+    model: string | undefined = this.model,
+    provider: CanonicalProvider | undefined = this.provider,
   ): Promise<CanonicalMessage[]> {
     if (!this.contextManager) {
       return messages;
     }
 
     const context = {
-      ...this.buildContextManagerContext(),
+      ...this.buildContextManagerContext(model, provider),
       estimatedToolSchemaTokens: this.tools
         ? Math.ceil(JSON.stringify(this.tools).length / 4)
         : 0,
-      requestId: `${this.sessionId}:${toolRound}`,
+      requestId: requestId ?? `${this.sessionId}:${toolRound}`,
       toolRound,
       ...(this.maxContextTokens !== undefined
         ? { contextWindow: this.maxContextTokens }
@@ -514,6 +547,8 @@ export class Conversation {
   private async runCompleteToolLoop(
     initialMessages: CanonicalMessage[],
     signal: AbortSignal | undefined,
+    requestId: string | undefined,
+    metadata: Record<string, JsonValue> | undefined,
   ): Promise<{
     messages: CanonicalMessage[];
     model?: string;
@@ -530,7 +565,13 @@ export class Conversation {
     while (true) {
       throwIfAborted(signal);
       if (toolRounds > 0) {
-        workingMessages = await this.prepareModelStepMessages(workingMessages, toolRounds);
+        workingMessages = await this.prepareModelStepMessages(
+          workingMessages,
+          toolRounds,
+          requestId,
+          model,
+          provider,
+        );
       }
       const remainingBudget = this.resolveRemainingBudgetDecision(aggregateUsage.costUSD);
       if (remainingBudget.action === 'skip') {
@@ -555,6 +596,8 @@ export class Conversation {
           signal,
           toolRounds,
           remainingBudget.budgetUsd,
+          requestId,
+          metadata,
         ),
       );
       model = response.model;
@@ -587,6 +630,7 @@ export class Conversation {
     initialMessages: CanonicalMessage[],
     signal: AbortSignal | undefined,
     requestId: string | undefined,
+    metadata: Record<string, JsonValue> | undefined,
   ): AsyncGenerator<
     StreamChunk,
     {
@@ -639,9 +683,16 @@ export class Conversation {
         toolRounds,
         remainingBudget.budgetUsd,
         requestId,
+        metadata,
       );
       if (toolRounds > 0) {
-        workingMessages = await this.prepareModelStepMessages(workingMessages, toolRounds);
+        workingMessages = await this.prepareModelStepMessages(
+          workingMessages,
+          toolRounds,
+          requestId,
+          model,
+          provider,
+        );
       }
       requestOptions.messages = workingMessages;
       model = requestOptions.model ?? model;
@@ -652,6 +703,13 @@ export class Conversation {
       let usage: UsageMetrics | undefined;
 
       for await (const chunk of this.client.stream(requestOptions)) {
+        if (chunk.type === 'response-start') {
+          model = chunk.model;
+          provider = chunk.provider;
+          yield decorate(chunk);
+          continue;
+        }
+
         if (chunk.type === 'text-delta') {
           text += chunk.delta;
           yield decorate(chunk);
@@ -871,7 +929,10 @@ export class Conversation {
     });
   }
 
-  private buildContextManagerContext(): {
+  private buildContextManagerContext(
+    model: string | undefined = this.model,
+    provider: CanonicalProvider | undefined = this.provider,
+  ): {
     maxContextTokens?: number;
     model?: string;
     provider?: CanonicalProvider;
@@ -881,8 +942,8 @@ export class Conversation {
       ...(this.maxContextTokens !== undefined
         ? { maxContextTokens: this.maxContextTokens }
         : {}),
-      ...(this.model !== undefined ? { model: this.model } : {}),
-      ...(this.provider !== undefined ? { provider: this.provider } : {}),
+      ...(model !== undefined ? { model } : {}),
+      ...(provider !== undefined ? { provider } : {}),
       ...(this.system !== undefined ? { system: this.system } : {}),
     };
   }
@@ -893,9 +954,11 @@ export class Conversation {
     toolRound: number = 0,
     budgetUsd: number | undefined = undefined,
     requestId: string | undefined = undefined,
+    metadata: Record<string, JsonValue> | undefined = undefined,
   ): {
     budgetExceededAction?: BudgetExceededAction;
     budgetUsd?: number;
+    metadata?: Record<string, JsonValue>;
     maxTokens?: number;
     messages: CanonicalMessage[];
     model?: string;
@@ -915,6 +978,7 @@ export class Conversation {
     return {
       budgetExceededAction: this.budgetExceededAction,
       ...(budgetUsd !== undefined ? { budgetUsd } : {}),
+      ...(metadata !== undefined ? { metadata } : {}),
       messages,
       ...(this.maxTokens !== undefined ? { maxTokens: this.maxTokens } : {}),
       ...(this.model !== undefined ? { model: this.model } : {}),

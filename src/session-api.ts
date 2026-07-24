@@ -18,6 +18,7 @@ import type {
   CanonicalProvider,
   CanonicalTool,
   CanonicalToolChoice,
+  JsonValue,
   ProviderOptions,
   ResponseFormat,
   StreamChunk,
@@ -114,6 +115,8 @@ export interface SessionCreateRequest extends SessionConversationConfig {
 /** Request body accepted by `POST /sessions/{id}/message`. */
 export interface SessionMessageRequest extends SessionConversationConfig {
   content: CanonicalMessage['content'];
+  metadata?: Record<string, JsonValue>;
+  requestId?: string;
   stream?: boolean;
   tenantId?: string;
 }
@@ -356,10 +359,22 @@ export class SessionApi {
     const shouldStream = body.stream ?? url.searchParams.get('stream') === 'true';
 
     if (shouldStream) {
-      return this.streamSessionMessage(conversation, sessionId, tenantId, body.content, request.signal);
+      return this.streamSessionMessage(
+        conversation,
+        sessionId,
+        tenantId,
+        body.content,
+        request.signal,
+        body.requestId,
+        body.metadata,
+      );
     }
 
-    const response = await conversation.send(body.content, { signal: request.signal });
+    const response = await conversation.send(body.content, {
+      ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
+      ...(body.requestId !== undefined ? { requestId: body.requestId } : {}),
+      signal: request.signal,
+    });
     const record = await this.requireSession(sessionId, tenantId);
     const include = parseInclude(url.searchParams, ['cost', 'messages']);
 
@@ -679,6 +694,8 @@ export class SessionApi {
     tenantId: string | undefined,
     content: CanonicalMessage['content'],
     requestSignal: AbortSignal | undefined,
+    requestId: string | undefined,
+    metadata: Record<string, JsonValue> | undefined,
   ): Promise<Response> {
     const encoder = new TextEncoder();
     const abortController = new AbortController();
@@ -705,7 +722,11 @@ export class SessionApi {
         try {
           controller.enqueue(encoder.encode(formatSseEvent('session.message.started', { sessionId })));
 
-          stream = conversation.sendStream(content, { signal: abortController.signal });
+          stream = conversation.sendStream(content, {
+            ...(metadata !== undefined ? { metadata } : {}),
+            ...(requestId !== undefined ? { requestId } : {}),
+            signal: abortController.signal,
+          });
           for await (const chunk of stream) {
             if (chunk.type === 'text-delta') {
               controller.enqueue(

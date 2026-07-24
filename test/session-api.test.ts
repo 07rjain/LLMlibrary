@@ -395,6 +395,7 @@ describe('SessionApi', () => {
         ],
       ],
     });
+    const streamSpy = vi.spyOn(client, 'stream');
     const api = createSessionApi({
       client,
       sessionStore: store,
@@ -410,6 +411,8 @@ describe('SessionApi', () => {
     const response = await api.handle(
       jsonRequest('https://example.test/sessions/stream-session/message?stream=true', 'POST', {
         content: 'Stream this',
+        metadata: { source: 'session-api-test' },
+        requestId: 'session-request-123',
         stream: true,
       }),
     );
@@ -433,6 +436,13 @@ describe('SessionApi', () => {
     expect(text).toContain('event: response.usage.updated');
     expect(text).toContain('event: response.completed');
     expect(text).toContain('"version":2');
+    expect(text).toContain('"requestId":"session-request-123"');
+    expect(streamSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: { source: 'session-api-test' },
+        requestId: 'session-request-123',
+      }),
+    );
   });
 
   it('aborts streamed session work when the request signal is aborted', async () => {
