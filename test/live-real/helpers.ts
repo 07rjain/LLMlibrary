@@ -81,15 +81,18 @@ export function weatherTool(
 }
 
 export async function collectStream(stream: AsyncIterable<StreamChunk>): Promise<{
+  chunks: StreamChunk[];
   done: Extract<StreamChunk, { type: 'done' }> | undefined;
   text: string;
   toolCalls: number;
 }> {
+  const chunks: StreamChunk[] = [];
   let text = '';
   let done: Extract<StreamChunk, { type: 'done' }> | undefined;
   let toolCalls = 0;
 
   for await (const chunk of stream) {
+    chunks.push(chunk);
     if (chunk.type === 'text-delta') {
       text += chunk.delta;
     }
@@ -102,6 +105,7 @@ export async function collectStream(stream: AsyncIterable<StreamChunk>): Promise
   }
 
   return {
+    chunks,
     done,
     text,
     toolCalls,
@@ -130,6 +134,13 @@ export function assertUsage(usage: UsageMetrics): void {
   expect(usage.cachedTokens).toBeGreaterThanOrEqual(0);
   expect(usage.costUSD).toBeGreaterThanOrEqual(0);
   expect(usage.cost).toMatch(/^\$/);
+}
+
+export function assertBillableUsage(usage: UsageMetrics): void {
+  assertUsage(usage);
+  expect(usage.inputTokens).toBeGreaterThan(0);
+  expect(usage.outputTokens).toBeGreaterThan(0);
+  expect(usage.costUSD).toBeGreaterThan(0);
 }
 
 export function expectNoSecretLeak(value: unknown): void {

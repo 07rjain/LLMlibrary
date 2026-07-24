@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assertCanonicalResponse,
+  assertBillableUsage,
   collectStream,
   hasEnv,
   liveClient,
@@ -36,6 +37,7 @@ conformanceDescribe('live provider conformance', () => {
         temperature: 0,
       });
       assertCanonicalResponse(completion, provider.name);
+      assertBillableUsage(completion.usage);
       expect(completion.text).toContain(`${provider.name.toUpperCase()}_CONFORMANCE_OK`);
 
       const stream = await collectStream(
@@ -49,7 +51,12 @@ conformanceDescribe('live provider conformance', () => {
       );
       expect(stream.done).toBeDefined();
       expect(stream.text).toContain(`${provider.name.toUpperCase()}_STREAM_OK`);
-      expect(stream.done?.usage.costUSD).toBeGreaterThanOrEqual(0);
+      expect(stream.chunks.filter((chunk) => chunk.type === 'done')).toHaveLength(1);
+      expect(stream.chunks.every((chunk) => chunk.version === 2)).toBe(true);
+      expect(stream.chunks.map((chunk) => chunk.sequence)).toEqual(
+        stream.chunks.map((_, index) => index + 1),
+      );
+      assertBillableUsage(stream.done!.usage);
     }, 120_000);
 
     it(`${provider.name} supports canonical tool calls`, async () => {
@@ -67,8 +74,13 @@ conformanceDescribe('live provider conformance', () => {
 
       assertCanonicalResponse(response, provider.name);
       expect(response.finishReason).toBe('tool_call');
+      expect(response.toolCalls).toHaveLength(1);
       expect(response.toolCalls[0]?.name).toBe('get_weather');
-      expect(response.toolCalls[0]?.args).toBeTruthy();
+      const args = response.toolCalls[0]?.args;
+      expect(args).toBeDefined();
+      expect(Object.keys(args ?? {})).toEqual(['city']);
+      expect(args?.city).toEqual(expect.any(String));
+      expect(String(args?.city).toLowerCase()).toContain('paris');
     }, 120_000);
   }
 

@@ -6,8 +6,10 @@ type MaybePromise<TValue> = Promise<TValue> | TValue;
 
 /** Metadata passed to context trimming strategies before a model call. */
 export interface ContextManagerContext {
+  /** Selected model's registry context window, before output/tool reservations. */
   contextWindow?: number;
   estimatedToolSchemaTokens?: number;
+  /** Application-level cap, independent from the selected model limit. */
   maxContextTokens?: number;
   model?: string;
   provider?: CanonicalProvider;
@@ -79,7 +81,7 @@ export class SlidingWindowStrategy implements ContextManager {
       return true;
     }
 
-    const maxTokens = context.maxContextTokens ?? this.maxTokens;
+    const maxTokens = this.resolveMaxTokens(context);
     if (maxTokens === undefined) {
       return false;
     }
@@ -90,7 +92,7 @@ export class SlidingWindowStrategy implements ContextManager {
   trim(messages: CanonicalMessage[], context: ContextManagerContext): CanonicalMessage[] {
     const working = [...messages];
     const beforeCount = working.length;
-    const maxTokens = context.maxContextTokens ?? this.maxTokens;
+    const maxTokens = this.resolveMaxTokens(context);
 
     while (
       this.exceedsMessageLimit(working) ||
@@ -122,6 +124,27 @@ export class SlidingWindowStrategy implements ContextManager {
       : messages;
 
     return this.tokenEstimator(effectiveMessages);
+  }
+
+  private resolveMaxTokens(context: ContextManagerContext): number | undefined {
+    const configuredLimit = context.maxContextTokens ?? this.maxTokens;
+    const modelLimit =
+      context.contextWindow !== undefined
+        ? Math.max(
+            1,
+            context.contextWindow -
+              (context.reservedOutputTokens ?? 0) -
+              (context.estimatedToolSchemaTokens ?? 0),
+          )
+        : undefined;
+
+    if (configuredLimit === undefined) {
+      return modelLimit;
+    }
+    if (modelLimit === undefined) {
+      return configuredLimit;
+    }
+    return Math.min(configuredLimit, modelLimit);
   }
 
   private exceedsMessageLimit(messages: CanonicalMessage[]): boolean {

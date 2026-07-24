@@ -8,6 +8,8 @@ All notable changes to this project will be tracked here.
 
 - resolve routed model/provider values from streaming `response-start` events before external tool dispatch
 - make `estimateRequest()` quote the primary `ModelRouter` attempt and keep budget preflight on that resolved attempt
+- resolve the initial conversation route before context trimming and account for model context, reserved output, and tool-schema budgets
+- include Session API request IDs on the initial SSE event and early stream errors
 
 ### feat
 
@@ -16,6 +18,7 @@ All notable changes to this project will be tracked here.
 ### test
 
 - add regression coverage for router-only estimates, implicit streaming dispatch, per-step context correlation, usage logging, and Session API propagation
+- strengthen live conformance checks for billable usage, stream sequencing, and canonical tool arguments
 
 ### docs
 
