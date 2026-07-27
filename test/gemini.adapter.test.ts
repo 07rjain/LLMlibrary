@@ -403,6 +403,27 @@ describe('Gemini adapter', () => {
     });
   });
 
+  it.each(['gemini-3.6-flash', 'gemini-3.5-flash-lite'])(
+    'omits deprecated sampling parameters for %s',
+    (model) => {
+      const request = translateGeminiRequest({
+        maxTokens: 256,
+        messages: [{ content: 'Hello', role: 'user' }],
+        model,
+        temperature: 0,
+      });
+
+      expect(request).toMatchObject({
+        generationConfig: {
+          maxOutputTokens: 256,
+        },
+      });
+      expect(
+        (request.generationConfig as Record<string, unknown>).temperature,
+      ).toBeUndefined();
+    },
+  );
+
   it('translates Gemini embedding requests with task type, dimensions, and title', () => {
     const request = translateGeminiEmbeddingRequest(
       {

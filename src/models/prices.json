@@ -47,6 +47,18 @@
     "cacheWritePrice": 6.25,
     "lastUpdated": "2026-07-13"
   },
+  "claude-opus-5": {
+    "provider": "anthropic",
+    "contextWindow": 1000000,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 5,
+    "outputPrice": 25,
+    "cacheReadPrice": 0.5,
+    "cacheWritePrice": 6.25,
+    "lastUpdated": "2026-07-28"
+  },
   "claude-fable-5": {
     "provider": "anthropic",
     "contextWindow": 1000000,
@@ -79,6 +91,42 @@
     "cacheReadPrice": 0.1,
     "cacheWritePrice": 1.25,
     "lastUpdated": "2026-07-27"
+  },
+  "gpt-5.6-sol": {
+    "provider": "openai",
+    "contextWindow": 1050000,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 5,
+    "outputPrice": 30,
+    "cacheReadPrice": 0.5,
+    "cacheWritePrice": 6.25,
+    "lastUpdated": "2026-07-28"
+  },
+  "gpt-5.6": {
+    "provider": "openai",
+    "contextWindow": 1050000,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 5,
+    "outputPrice": 30,
+    "cacheReadPrice": 0.5,
+    "cacheWritePrice": 6.25,
+    "lastUpdated": "2026-07-28"
+  },
+  "gpt-5.6-terra": {
+    "provider": "openai",
+    "contextWindow": 1050000,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 2.5,
+    "outputPrice": 15,
+    "cacheReadPrice": 0.25,
+    "cacheWritePrice": 3.125,
+    "lastUpdated": "2026-07-28"
   },
   "gpt-5.4": {
     "provider": "openai",
@@ -186,6 +234,28 @@
     "outputPrice": 9,
     "cacheReadPrice": 0.15,
     "lastUpdated": "2026-06-12"
+  },
+  "gemini-3.6-flash": {
+    "provider": "google",
+    "contextWindow": 1048576,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 1.5,
+    "outputPrice": 7.5,
+    "cacheReadPrice": 0.15,
+    "lastUpdated": "2026-07-28"
+  },
+  "gemini-3.5-flash-lite": {
+    "provider": "google",
+    "contextWindow": 1048576,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 0.3,
+    "outputPrice": 2.5,
+    "cacheReadPrice": 0.03,
+    "lastUpdated": "2026-07-28"
   },
   "gemini-3.1-pro-preview": {
     "provider": "google",
