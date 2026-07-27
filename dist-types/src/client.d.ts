@@ -1,11 +1,11 @@
 import { ModelRegistry } from './models/registry.js';
-import { Conversation } from './conversation.js';
+import { Conversation, type ConversationRoute } from './conversation.js';
 import type { ModelRegistryOptions, ModelPriceOverrides } from './models/index.js';
 import type { ConversationOptions, ConversationSnapshot } from './conversation.js';
 import type { GeminiCachedContent, GeminiCachedContentPage, GeminiCreateCacheOptions, GeminiListCachesOptions, GeminiUpdateCacheOptions } from './providers/gemini.js';
 import type { SessionStore } from './session-store.js';
 import type { ModelRouter } from './router.js';
-import type { CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, BudgetExceededAction, CancelableStream, EmbeddingProvider, EmbeddingRequestOptions, EmbeddingResponse, ProviderOptions, RemoteModelInfo, RemoteModelListOptions, ResponseFormat, SpeechProvider, SpeechRequestOptions, SpeechResponse, StreamChunk, TranscriptionRequestOptions, TranscriptionResponse } from './types.js';
+import type { CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, BudgetExceededAction, CancelableStream, EmbeddingProvider, EmbeddingRequestOptions, EmbeddingResponse, JsonValue, ProviderOptions, RemoteModelInfo, RemoteModelListOptions, ResponseFormat, SpeechProvider, SpeechRequestOptions, SpeechResponse, StreamChunk, TranscriptionRequestOptions, TranscriptionResponse } from './types.js';
 import type { UsageExportFormat, UsageLogger, UsageQuery, UsageSummary, SpeechUsageQuery, SpeechUsageSummary } from './usage.js';
 import type { RetryOptions } from './utils/retry.js';
 /** Constructor options for `LLMClient`. */
@@ -34,12 +34,14 @@ export interface LLMRequestOptions {
     botId?: string;
     budgetExceededAction?: BudgetExceededAction;
     budgetUsd?: number;
+    metadata?: Record<string, JsonValue>;
     maxTokens?: number;
     messages: CanonicalMessage[];
     model?: string;
     provider?: CanonicalProvider;
     providerOptions?: ProviderOptions;
     responseFormat?: ResponseFormat;
+    requestId?: string;
     sessionId?: string;
     signal?: AbortSignal;
     system?: string;
@@ -47,6 +49,16 @@ export interface LLMRequestOptions {
     tenantId?: string;
     toolChoice?: CanonicalToolChoice;
     tools?: CanonicalTool[];
+}
+/** Provider-neutral estimate returned before a completion request is sent. */
+export interface RequestCostEstimate {
+    estimatedCostUSD: number;
+    inputTokens: number;
+    maxOutputTokens: number;
+    model: string;
+    priceVersion: string;
+    provider: CanonicalProvider;
+    reasoningTokens: number;
 }
 /** Configuration for `LLMClient.mock()` test instances. */
 export interface MockLLMClientOptions extends Omit<LLMClientOptions, 'anthropicApiKey' | 'geminiApiKey' | 'openaiApiKey'> {
@@ -125,6 +137,22 @@ export declare class LLMClient {
     static mock(options?: MockLLMClientOptions): LLMClient;
     /** Executes a single non-streaming completion request. */
     complete(options: LLMRequestOptions): Promise<CanonicalResponse>;
+    /** Resolves a conversation turn before context trimming and provider dispatch. */
+    resolveContext(options: {
+        maxTokens?: number;
+        messages: CanonicalMessage[];
+        model?: string;
+        provider?: CanonicalProvider;
+        responseFormat?: ResponseFormat;
+        sessionId?: string;
+        system?: string;
+        tenantId?: string;
+        toolChoice?: CanonicalToolChoice;
+        tools?: CanonicalTool[];
+    }): ConversationRoute;
+    /** Estimates completion cost using the same preflight calculation as budgets. */
+    estimateRequest(options: LLMRequestOptions): RequestCostEstimate;
+    private estimateResolvedRequest;
     /** Executes a single non-streaming embedding request. */
     embed(options: EmbeddingRequestOptions): Promise<EmbeddingResponse>;
     /** Executes a single non-streaming text-to-speech request. */

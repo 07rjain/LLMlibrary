@@ -7,18 +7,104 @@ describe('ModelRegistry', () => {
         const modelIds = registry.list().map((model) => model.id);
         expect(modelIds).toEqual(expect.arrayContaining([
             'claude-fable-5',
+            'claude-haiku-4-5-20251001',
+            'claude-opus-5',
             'claude-sonnet-4-6',
             'gemini-3.5-flash',
+            'gemini-3.5-flash-lite',
+            'gemini-3.6-flash',
             'gemini-3.1-pro-preview',
             'gemini-3.1-flash-lite',
             'gpt-5.5',
+            'gpt-5.6-luna',
+            'gpt-5.6-sol',
+            'gpt-5.6-terra',
+            'gpt-5.6',
         ]));
         expect(registry.isSupported('claude-fable-5')).toBe(true);
+        expect(registry.isSupported('claude-haiku-4-5-20251001')).toBe(true);
+        expect(registry.isSupported('claude-opus-5')).toBe(true);
         expect(registry.isSupported('claude-sonnet-4-6')).toBe(true);
         expect(registry.isSupported('gemini-3.5-flash')).toBe(true);
+        expect(registry.isSupported('gemini-3.5-flash-lite')).toBe(true);
+        expect(registry.isSupported('gemini-3.6-flash')).toBe(true);
         expect(registry.isSupported('gemini-3.1-pro-preview')).toBe(true);
         expect(registry.isSupported('gemini-3.1-flash-lite')).toBe(true);
         expect(registry.isSupported('gpt-5.5')).toBe(true);
+        expect(registry.isSupported('gpt-5.6-luna')).toBe(true);
+        expect(registry.isSupported('gpt-5.6-sol')).toBe(true);
+        expect(registry.isSupported('gpt-5.6-terra')).toBe(true);
+        expect(registry.isSupported('gpt-5.6')).toBe(true);
+    });
+    it('registers the current provider model IDs with their published metadata', () => {
+        const registry = new ModelRegistry();
+        expect(registry.get('gpt-5.6-luna')).toMatchObject({
+            contextWindow: 1050000,
+            inputPrice: 1,
+            outputPrice: 6,
+            provider: 'openai',
+            cacheReadPrice: 0.1,
+            cacheWritePrice: 1.25,
+        });
+        expect(registry.get('gpt-5.6-sol')).toMatchObject({
+            contextWindow: 1050000,
+            inputPrice: 5,
+            outputPrice: 30,
+            provider: 'openai',
+            cacheReadPrice: 0.5,
+            cacheWritePrice: 6.25,
+        });
+        expect(registry.get('gpt-5.6')).toMatchObject({
+            contextWindow: 1050000,
+            inputPrice: 5,
+            outputPrice: 30,
+            provider: 'openai',
+        });
+        expect(registry.get('gpt-5.6-terra')).toMatchObject({
+            contextWindow: 1050000,
+            inputPrice: 2.5,
+            outputPrice: 15,
+            provider: 'openai',
+            cacheReadPrice: 0.25,
+            cacheWritePrice: 3.125,
+        });
+        expect(registry.get('claude-haiku-4-5-20251001')).toMatchObject({
+            contextWindow: 200000,
+            inputPrice: 1,
+            outputPrice: 5,
+            provider: 'anthropic',
+            cacheReadPrice: 0.1,
+            cacheWritePrice: 1.25,
+        });
+        expect(registry.get('claude-opus-5')).toMatchObject({
+            contextWindow: 1000000,
+            inputPrice: 5,
+            outputPrice: 25,
+            provider: 'anthropic',
+            cacheReadPrice: 0.5,
+            cacheWritePrice: 6.25,
+        });
+        expect(registry.get('gemini-3.6-flash')).toMatchObject({
+            contextWindow: 1048576,
+            inputPrice: 1.5,
+            outputPrice: 7.5,
+            provider: 'google',
+            cacheReadPrice: 0.15,
+        });
+        expect(registry.get('gemini-3.5-flash-lite')).toMatchObject({
+            contextWindow: 1048576,
+            inputPrice: 0.3,
+            outputPrice: 2.5,
+            provider: 'google',
+            cacheReadPrice: 0.03,
+        });
+        expect(registry.get('gemini-3.1-flash-lite')).toMatchObject({
+            contextWindow: 1048576,
+            inputPrice: 0.25,
+            outputPrice: 1.5,
+            provider: 'google',
+            cacheReadPrice: 0.025,
+        });
     });
     it('returns a model and validates capabilities', () => {
         const registry = new ModelRegistry();

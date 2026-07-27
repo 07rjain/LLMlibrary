@@ -35,6 +35,40 @@ describe('LLMClient', () => {
         });
         expect(client.models.get('gpt-4o').inputPrice).toBe(3.5);
     });
+    it('quotes completion cost without sending a request', () => {
+        const client = new LLMClient({ defaultModel: 'gpt-4o' });
+        const estimate = client.estimateRequest({
+            maxTokens: 100,
+            messages: [{ content: 'Hello', role: 'user' }],
+        });
+        expect(estimate.model).toBe('gpt-4o');
+        expect(estimate.provider).toBe('openai');
+        expect(estimate.inputTokens).toBeGreaterThan(0);
+        expect(estimate.maxOutputTokens).toBe(100);
+        expect(estimate.priceVersion).toBe(client.models.get('gpt-4o').lastUpdated);
+        expect(estimate.estimatedCostUSD).toBeGreaterThan(0);
+    });
+    it('quotes the primary model selected by ModelRouter', () => {
+        const client = new LLMClient({
+            modelRouter: new ModelRouter({
+                rules: [
+                    {
+                        fallback: ['claude-haiku-4-5'],
+                        name: 'quote-route',
+                        target: 'gpt-4o-mini',
+                    },
+                ],
+            }),
+        });
+        const estimate = client.estimateRequest({
+            maxTokens: 64,
+            messages: [{ content: 'Hello', role: 'user' }],
+        });
+        expect(estimate.model).toBe('gpt-4o-mini');
+        expect(estimate.provider).toBe('openai');
+        expect(estimate.maxOutputTokens).toBe(64);
+        expect(estimate.estimatedCostUSD).toBeGreaterThan(0);
+    });
     it('proxies model registry methods', () => {
         const client = new LLMClient();
         client.models.register({
@@ -785,7 +819,7 @@ describe('LLMClient', () => {
         })) {
             chunks.push(chunk);
         }
-        expect(chunks[0]).toEqual({ delta: 'Hi', type: 'text-delta' });
+        expect(chunks.find((chunk) => chunk.type === 'text-delta')).toEqual(expect.objectContaining({ delta: 'Hi', version: 2 }));
         expect(chunks.at(-1)).toEqual(expect.objectContaining({
             finishReason: 'stop',
             type: 'done',
@@ -827,7 +861,7 @@ describe('LLMClient', () => {
         })) {
             chunks.push(chunk);
         }
-        expect(chunks[0]).toEqual({ delta: 'Hello from Gemini', type: 'text-delta' });
+        expect(chunks.find((chunk) => chunk.type === 'text-delta')).toEqual(expect.objectContaining({ delta: 'Hello from Gemini', version: 2 }));
         expect(chunks.at(-1)).toEqual(expect.objectContaining({
             finishReason: 'stop',
             type: 'done',
@@ -1146,14 +1180,21 @@ describe('LLMClient', () => {
         const chunks = [];
         for await (const chunk of client.stream({
             messages: [{ content: 'Stream', role: 'user' }],
+            requestId: 'mock-request',
         })) {
             chunks.push(chunk);
         }
         expect(response.text).toBe('Mock queue');
-        expect(chunks).toEqual([
-            { delta: 'Mock stream', type: 'text-delta' },
-            expect.objectContaining({ finishReason: 'stop', type: 'done' }),
+        expect(chunks.map((chunk) => chunk.type)).toEqual([
+            'response-start',
+            'text-delta',
+            'usage-update',
+            'done',
         ]);
+        expect(chunks.map((chunk) => chunk.sequence)).toEqual([1, 2, 3, 4]);
+        expect(chunks.every((chunk) => chunk.version === 2)).toBe(true);
+        expect(chunks.every((chunk) => chunk.requestId === 'mock-request')).toBe(true);
+        expect(chunks.every((chunk) => typeof chunk.timestamp === 'string')).toBe(true);
     });
     it('parses structured output responses through LLMClient.mock()', async () => {
         const client = LLMClient.mock({
@@ -1372,18 +1413,22 @@ describe('LLMClient', () => {
         });
         const chunks = [];
         for await (const chunk of client.stream({
+            metadata: { feature: 'stream-correlation' },
             messages: [{ content: 'Hello', role: 'user' }],
+            requestId: 'stream-request-123',
             sessionId: 'stream-session',
         })) {
             chunks.push(chunk);
         }
-        expect(chunks[0]).toEqual({ delta: 'Fallback stream', type: 'text-delta' });
+        expect(chunks.find((chunk) => chunk.type === 'text-delta')).toEqual(expect.objectContaining({ delta: 'Fallback stream', version: 2 }));
         expect(chunks.at(-1)).toEqual(expect.objectContaining({
             finishReason: 'stop',
             type: 'done',
         }));
         expect(fetchImplementation).toHaveBeenCalledTimes(2);
         expect(usageLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+            metadata: { feature: 'stream-correlation' },
+            requestId: 'stream-request-123',
             routingDecision: 'rule:stream-fallback:primary:gpt-4o -> rule:stream-fallback:fallback:1:gpt-4o-mini',
             sessionId: 'stream-session',
         }));
@@ -1441,7 +1486,7 @@ describe('LLMClient', () => {
                 chunks.push(chunk);
             }
         })()).rejects.toThrow('stream exploded');
-        expect(chunks).toContainEqual({ delta: 'partial', type: 'text-delta' });
+        expect(chunks).toContainEqual(expect.objectContaining({ delta: 'partial', type: 'text-delta', version: 2 }));
         expect(fetchImplementation).toHaveBeenCalledTimes(1);
     });
     it('logs usage events for successful requests', async () => {
@@ -1484,14 +1529,24 @@ describe('LLMClient', () => {
         });
         await client.complete({
             botId: 'bot-1',
+            metadata: {
+                feature: 'usage-correlation',
+                nested: { attempt: 1 },
+            },
             messages: [{ content: 'Hello', role: 'user' }],
+            requestId: 'request-123',
             sessionId: 'usage-session',
             tenantId: 'tenant-2',
         });
         expect(usageLogger.log).toHaveBeenCalledWith(expect.objectContaining({
             botId: 'bot-1',
+            metadata: {
+                feature: 'usage-correlation',
+                nested: { attempt: 1 },
+            },
             model: 'gpt-4o',
             provider: 'openai',
+            requestId: 'request-123',
             routingDecision: 'default:gpt-4o',
             sessionId: 'usage-session',
             tenantId: 'tenant-2',
@@ -1732,7 +1787,11 @@ describe('LLMClient', () => {
         const iterator = stream[Symbol.asyncIterator]();
         await expect(iterator.next()).resolves.toEqual({
             done: false,
-            value: { delta: 'first', type: 'text-delta' },
+            value: expect.objectContaining({ type: 'response-start', version: 2 }),
+        });
+        await expect(iterator.next()).resolves.toEqual({
+            done: false,
+            value: expect.objectContaining({ delta: 'first', type: 'text-delta', version: 2 }),
         });
         stream.cancel(new Error('manual cancel'));
         await expect(iterator.next()).rejects.toThrow('manual cancel');

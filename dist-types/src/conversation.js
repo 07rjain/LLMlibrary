@@ -38,12 +38,15 @@ export class Conversation {
     sessionId;
     store;
     system;
+    toolCallDispatcherMetadata;
     tenantId;
     toolExecutionTimeoutMs;
     toolValidation;
     toolChoice;
     tools;
+    toolCallDispatcher;
     onWarning;
+    onCompaction;
     totalCachedTokens = 0;
     totalCostUSD = 0;
     totalInputTokens = 0;
@@ -69,12 +72,17 @@ export class Conversation {
         this.sessionId = options.sessionId ?? generateSessionId();
         this.store = options.store;
         this.system = options.system;
+        this.toolCallDispatcherMetadata = options.toolCallDispatcherMetadata
+            ? cloneValue(options.toolCallDispatcherMetadata)
+            : undefined;
         this.tenantId = options.tenantId;
         this.toolExecutionTimeoutMs = normalizeToolExecutionTimeoutMs(options.toolExecutionTimeoutMs);
         this.toolValidation = options.toolValidation ?? DEFAULT_TOOL_VALIDATION;
         this.toolChoice = options.toolChoice;
         this.tools = options.tools ? cloneTools(options.tools) : undefined;
+        this.toolCallDispatcher = options.toolCallDispatcher;
         this.onWarning = options.onWarning ?? ((message) => console.warn(message));
+        this.onCompaction = options.onCompaction;
         this.updatedAt = this.createdAt;
     }
     get cost() {
@@ -98,16 +106,22 @@ export class Conversation {
     }
     /** Appends a user turn, executes the model/tool loop, and commits state. */
     async send(input, options = {}) {
-        const nextMessages = await this.prepareMessages(buildUserMessage(input));
-        const result = await this.runCompleteToolLoop(nextMessages, options.signal);
+        const userMessage = buildUserMessage(input);
+        const initialMessages = [...this.messages, userMessage];
+        const route = this.resolveConversationRoute(initialMessages);
+        const nextMessages = await this.prepareMessages(userMessage, options.requestId, route);
+        const result = await this.runCompleteToolLoop(nextMessages, options.signal, options.requestId, options.metadata, route);
         await this.finalizeExecution(result);
         return result.response;
     }
     /** Streams a user turn and commits state when the final `done` chunk arrives. */
     sendStream(input, options = {}) {
         return createCancelableStream(async function* (signal) {
-            const nextMessages = await this.prepareMessages(buildUserMessage(input));
-            const result = yield* this.runStreamToolLoop(nextMessages, signal);
+            const userMessage = buildUserMessage(input);
+            const initialMessages = [...this.messages, userMessage];
+            const route = this.resolveConversationRoute(initialMessages);
+            const nextMessages = await this.prepareMessages(userMessage, options.requestId, route);
+            const result = yield* this.runStreamToolLoop(nextMessages, signal, options.requestId, options.metadata, route);
             await this.finalizeExecution(result);
         }.bind(this), options.signal);
     }
@@ -289,25 +303,54 @@ export class Conversation {
         this.totalReasoningTokens += usage.reasoningTokens ?? 0;
         this.updatedAt = new Date().toISOString();
     }
-    async prepareMessages(userMessage) {
+    async prepareMessages(userMessage, requestId, route) {
         const nextMessages = [...this.messages, userMessage];
-        if (!this.contextManager) {
-            return nextMessages;
-        }
-        const context = this.buildContextManagerContext();
-        if (!(await this.contextManager.shouldTrim(nextMessages, context))) {
-            return nextMessages;
-        }
-        return this.contextManager.trim(nextMessages, context);
+        return this.prepareModelStepMessages(nextMessages, 0, requestId, route?.model, route?.provider, route?.contextWindow);
     }
-    async runCompleteToolLoop(initialMessages, signal) {
+    async prepareModelStepMessages(messages, toolRound, requestId = undefined, model = this.model, provider = this.provider, contextWindow = undefined) {
+        if (!this.contextManager) {
+            return messages;
+        }
+        const context = {
+            ...this.buildContextManagerContext(model, provider),
+            estimatedToolSchemaTokens: this.tools
+                ? Math.ceil(JSON.stringify(this.tools).length / 4)
+                : 0,
+            requestId: requestId ?? `${this.sessionId}:${toolRound}`,
+            toolRound,
+            ...(contextWindow !== undefined ? { contextWindow } : {}),
+            ...(this.maxContextTokens !== undefined
+                ? { maxContextTokens: this.maxContextTokens }
+                : {}),
+            ...(this.maxTokens !== undefined ? { reservedOutputTokens: this.maxTokens } : {}),
+        };
+        if (!(await this.contextManager.shouldTrim(messages, context))) {
+            return messages;
+        }
+        const trimmed = await this.contextManager.trim(messages, context);
+        if (trimmed.length !== messages.length) {
+            this.onCompaction?.({
+                afterCount: trimmed.length,
+                beforeCount: messages.length,
+                removedCount: messages.length - trimmed.length,
+                toolRound,
+            });
+        }
+        return trimmed;
+    }
+    async runCompleteToolLoop(initialMessages, signal, requestId, metadata, initialRoute) {
         let workingMessages = [...initialMessages];
         let aggregateUsage = createEmptyUsage();
-        let model = this.model;
-        let provider = this.provider;
+        let model = initialRoute?.model ?? this.model;
+        let provider = initialRoute?.provider ?? this.provider;
+        let contextWindow = initialRoute?.contextWindow;
+        let route = initialRoute;
         let toolRounds = 0;
         while (true) {
             throwIfAborted(signal);
+            if (toolRounds > 0) {
+                workingMessages = await this.prepareModelStepMessages(workingMessages, toolRounds, requestId, model, provider, contextWindow);
+            }
             const remainingBudget = this.resolveRemainingBudgetDecision(aggregateUsage.costUSD);
             if (remainingBudget.action === 'skip') {
                 const response = buildBudgetSkipResponse(remainingBudget.error, model, provider);
@@ -324,9 +367,17 @@ export class Conversation {
                     usage: aggregateUsage,
                 };
             }
-            const response = await this.client.complete(this.buildRequestOptions(workingMessages, signal, toolRounds, remainingBudget.budgetUsd));
+            const response = await this.client.complete(this.buildRequestOptions(workingMessages, signal, toolRounds, remainingBudget.budgetUsd, requestId, metadata, model, provider, route));
             model = response.model;
             provider = response.provider;
+            contextWindow =
+                this.resolveConversationRoute(workingMessages, model, provider)?.contextWindow ??
+                    contextWindow;
+            route = {
+                ...(contextWindow !== undefined ? { contextWindow } : {}),
+                model,
+                provider,
+            };
             aggregateUsage = accumulateUsage(aggregateUsage, response.usage);
             workingMessages = [...workingMessages, buildAssistantMessage(response)];
             if (!this.shouldContinueToolLoop(response.finishReason, response.toolCalls)) {
@@ -348,12 +399,22 @@ export class Conversation {
             ];
         }
     }
-    async *runStreamToolLoop(initialMessages, signal) {
+    async *runStreamToolLoop(initialMessages, signal, requestId, metadata, initialRoute) {
         let workingMessages = [...initialMessages];
         let aggregateUsage = createEmptyUsage();
-        let model = this.model;
-        let provider = this.provider;
+        let model = initialRoute?.model ?? this.model;
+        let provider = initialRoute?.provider ?? this.provider;
+        let contextWindow = initialRoute?.contextWindow;
+        let route = initialRoute;
         let toolRounds = 0;
+        let sequence = 0;
+        const decorate = (chunk) => ({
+            ...chunk,
+            ...(requestId !== undefined ? { requestId } : {}),
+            sequence: ++sequence,
+            timestamp: new Date().toISOString(),
+            version: 2,
+        });
         while (true) {
             throwIfAborted(signal);
             const remainingBudget = this.resolveRemainingBudgetDecision(aggregateUsage.costUSD);
@@ -361,12 +422,12 @@ export class Conversation {
                 const response = buildBudgetSkipResponse(remainingBudget.error, model, provider);
                 aggregateUsage = accumulateUsage(aggregateUsage, response.usage);
                 workingMessages = [...workingMessages, buildAssistantMessage(response)];
-                yield { delta: response.text, type: 'text-delta' };
-                yield {
+                yield decorate({ delta: response.text, type: 'text-delta' });
+                yield decorate({
                     finishReason: response.finishReason,
                     type: 'done',
                     usage: aggregateUsage,
-                };
+                });
                 return {
                     messages: workingMessages,
                     model: response.model,
@@ -374,7 +435,11 @@ export class Conversation {
                     usage: aggregateUsage,
                 };
             }
-            const requestOptions = this.buildRequestOptions(workingMessages, signal, toolRounds, remainingBudget.budgetUsd);
+            const requestOptions = this.buildRequestOptions(workingMessages, signal, toolRounds, remainingBudget.budgetUsd, requestId, metadata, model, provider, route);
+            if (toolRounds > 0) {
+                workingMessages = await this.prepareModelStepMessages(workingMessages, toolRounds, requestId, model, provider, contextWindow);
+            }
+            requestOptions.messages = workingMessages;
             model = requestOptions.model ?? model;
             provider = requestOptions.provider ?? provider;
             const pendingToolCalls = new Map();
@@ -382,14 +447,28 @@ export class Conversation {
             let finishReason;
             let usage;
             for await (const chunk of this.client.stream(requestOptions)) {
+                if (chunk.type === 'response-start') {
+                    model = chunk.model;
+                    provider = chunk.provider;
+                    contextWindow =
+                        this.resolveConversationRoute(workingMessages, model, provider)?.contextWindow ??
+                            contextWindow;
+                    route = {
+                        ...(contextWindow !== undefined ? { contextWindow } : {}),
+                        model,
+                        provider,
+                    };
+                    yield decorate(chunk);
+                    continue;
+                }
                 if (chunk.type === 'text-delta') {
                     text += chunk.delta;
-                    yield chunk;
+                    yield decorate(chunk);
                     continue;
                 }
                 if (chunk.type === 'tool-call-start') {
                     pendingToolCalls.set(chunk.id, { name: chunk.name });
-                    yield chunk;
+                    yield decorate(chunk);
                     continue;
                 }
                 if (chunk.type === 'tool-call-result') {
@@ -398,15 +477,19 @@ export class Conversation {
                         args: isPlainJsonObject(chunk.result) ? chunk.result : { result: chunk.result },
                         name: current?.name ?? chunk.name,
                     });
-                    yield chunk;
+                    yield decorate(chunk);
                     continue;
                 }
                 if (chunk.type === 'tool-call-delta') {
-                    yield chunk;
+                    yield decorate(chunk);
                     continue;
                 }
                 if (chunk.type === 'error') {
-                    yield chunk;
+                    yield decorate(chunk);
+                    continue;
+                }
+                if (chunk.type !== 'done') {
+                    yield decorate(chunk);
                     continue;
                 }
                 finishReason = chunk.finishReason;
@@ -422,11 +505,11 @@ export class Conversation {
             ];
             const toolCalls = buildToolCallsFromPendingToolCalls(pendingToolCalls);
             if (!this.shouldContinueToolLoop(finishReason, toolCalls)) {
-                yield {
+                yield decorate({
                     finishReason,
                     type: 'done',
                     usage: aggregateUsage,
-                };
+                });
                 return {
                     messages: workingMessages,
                     usage: aggregateUsage,
@@ -444,7 +527,8 @@ export class Conversation {
     shouldContinueToolLoop(finishReason, toolCalls) {
         return (finishReason === 'tool_call' &&
             toolCalls.length > 0 &&
-            Boolean(this.tools?.some((tool) => typeof tool.execute === 'function')));
+            Boolean(this.toolCallDispatcher ||
+                this.tools?.some((tool) => typeof tool.execute === 'function')));
     }
     assertNextToolRound(nextRound, model, provider) {
         if (nextRound > this.maxToolRounds) {
@@ -464,22 +548,42 @@ export class Conversation {
     }
     async executeToolCall(toolCall, model, provider, signal) {
         const tool = this.tools?.find((candidate) => candidate.name === toolCall.name);
-        if (!tool?.execute) {
+        if (!tool?.execute && !this.toolCallDispatcher) {
             return buildToolErrorPart(toolCall, new Error(`No executable tool registered for "${toolCall.name}".`));
         }
-        const execute = tool.execute;
+        const execute = tool?.execute;
         try {
             throwIfAborted(signal);
-            if (this.toolValidation === 'strict') {
+            if (this.toolValidation === 'strict' && tool) {
                 validateToolArguments(toolCall.args, tool.parameters);
             }
-            const result = await executeToolWithGuards((toolSignal) => Promise.resolve(execute(toolCall.args, {
-                ...(model !== undefined ? { model } : {}),
-                ...(provider !== undefined ? { provider } : {}),
-                signal: toolSignal,
-                sessionId: this.sessionId,
-                ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
-            })), this.toolExecutionTimeoutMs, signal);
+            else if (this.toolValidation === 'strict' && this.toolCallDispatcher && !tool) {
+                throw new Error(`No tool schema registered for "${toolCall.name}".`);
+            }
+            const result = await executeToolWithGuards((toolSignal) => {
+                if (this.toolCallDispatcher) {
+                    if (!model || !provider) {
+                        throw new Error('Tool dispatcher requires resolved model and provider.');
+                    }
+                    return this.toolCallDispatcher.execute({
+                        call: toolCall,
+                        model,
+                        provider,
+                        sessionId: this.sessionId,
+                        signal: toolSignal,
+                        ...(this.toolCallDispatcherMetadata !== undefined
+                            ? { metadata: cloneValue(this.toolCallDispatcherMetadata) }
+                            : {}),
+                    });
+                }
+                return Promise.resolve(execute(toolCall.args, {
+                    ...(model !== undefined ? { model } : {}),
+                    ...(provider !== undefined ? { provider } : {}),
+                    signal: toolSignal,
+                    sessionId: this.sessionId,
+                    ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
+                }));
+            }, this.toolExecutionTimeoutMs, signal);
             return {
                 isError: false,
                 name: toolCall.name,
@@ -515,27 +619,59 @@ export class Conversation {
             ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
         });
     }
-    buildContextManagerContext() {
+    resolveConversationRoute(messages, model = this.model, provider = this.provider) {
+        const resolved = this.client.resolveContext?.({
+            messages,
+            ...(this.maxTokens !== undefined ? { maxTokens: this.maxTokens } : {}),
+            ...(model !== undefined ? { model } : {}),
+            ...(provider !== undefined ? { provider } : {}),
+            ...(this.responseFormat !== undefined ? { responseFormat: this.responseFormat } : {}),
+            sessionId: this.sessionId,
+            ...(this.system !== undefined ? { system: this.system } : {}),
+            ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
+            ...(this.toolChoice !== undefined ? { toolChoice: this.toolChoice } : {}),
+            ...(this.tools !== undefined ? { tools: this.tools } : {}),
+        });
+        if (resolved) {
+            return resolved;
+        }
+        if (model !== undefined && provider !== undefined) {
+            return { model, provider };
+        }
+        return undefined;
+    }
+    buildContextManagerContext(model = this.model, provider = this.provider) {
         return {
             ...(this.maxContextTokens !== undefined
                 ? { maxContextTokens: this.maxContextTokens }
                 : {}),
-            ...(this.model !== undefined ? { model: this.model } : {}),
-            ...(this.provider !== undefined ? { provider: this.provider } : {}),
+            ...(model !== undefined ? { model } : {}),
+            ...(provider !== undefined ? { provider } : {}),
             ...(this.system !== undefined ? { system: this.system } : {}),
         };
     }
-    buildRequestOptions(messages, signal, toolRound = 0, budgetUsd = undefined) {
+    buildRequestOptions(messages, signal, toolRound = 0, budgetUsd = undefined, requestId = undefined, metadata = undefined, model = this.model, provider = this.provider, route = undefined) {
         const toolChoice = resolveToolChoiceForRound(this.toolChoice, toolRound);
         return {
             budgetExceededAction: this.budgetExceededAction,
             ...(budgetUsd !== undefined ? { budgetUsd } : {}),
+            ...(metadata !== undefined ? { metadata } : {}),
             messages,
             ...(this.maxTokens !== undefined ? { maxTokens: this.maxTokens } : {}),
-            ...(this.model !== undefined ? { model: this.model } : {}),
-            ...(this.provider !== undefined ? { provider: this.provider } : {}),
+            ...(model !== undefined ? { model } : {}),
+            ...(provider !== undefined ? { provider } : {}),
+            ...(route !== undefined
+                ? {
+                    resolvedRoute: {
+                        ...(route.attempts !== undefined ? { attempts: route.attempts } : {}),
+                        model: route.model,
+                        provider: route.provider,
+                    },
+                }
+                : {}),
             ...(this.providerOptions !== undefined ? { providerOptions: this.providerOptions } : {}),
             ...(this.responseFormat !== undefined ? { responseFormat: this.responseFormat } : {}),
+            ...(requestId !== undefined ? { requestId } : {}),
             sessionId: this.sessionId,
             ...(signal !== undefined ? { signal } : {}),
             ...(this.system !== undefined ? { system: this.system } : {}),

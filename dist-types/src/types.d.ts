@@ -176,6 +176,17 @@ export interface CanonicalToolCall {
     name: string;
     result?: JsonValue;
 }
+/** Allows an integration to own tool execution outside the conversation runtime. */
+export interface ToolCallDispatcher {
+    execute(input: {
+        call: CanonicalToolCall;
+        metadata?: Record<string, JsonValue>;
+        model: string;
+        provider: CanonicalProvider;
+        sessionId: string;
+        signal: AbortSignal;
+    }): Promise<JsonValue>;
+}
 export type BudgetExceededAction = 'skip' | 'throw' | 'warn';
 export interface CancelableStream<TChunk> extends AsyncIterable<TChunk> {
     cancel(reason?: unknown): void;
@@ -385,36 +396,67 @@ export interface CanonicalResponse {
     toolCalls: CanonicalToolCall[];
     usage: UsageMetrics;
 }
-export type StreamChunk = {
+export declare const STREAM_EVENT_VERSION: 2;
+export type StreamEventVersion = typeof STREAM_EVENT_VERSION;
+export interface StreamEventBase {
+    requestId?: string;
+    sequence?: number;
+    timestamp?: string;
+    version?: StreamEventVersion;
+}
+export type StreamChunk = (StreamEventBase & {
     delta: string;
     type: 'text-delta';
-} | {
+}) | (StreamEventBase & {
     id: string;
     name: string;
     type: 'tool-call-start';
-} | {
+}) | (StreamEventBase & {
     argsDelta: string;
     id: string;
     type: 'tool-call-delta';
-} | {
+}) | (StreamEventBase & {
     id: string;
     name: string;
     result: JsonValue;
     type: 'tool-call-result';
-} | {
+}) | (StreamEventBase & {
     finishReason: CanonicalFinishReason;
     type: 'done';
     usage: UsageMetrics;
-} | {
+}) | (StreamEventBase & {
     error: Error;
     type: 'error';
-};
+}) | (StreamEventBase & {
+    model: string;
+    provider: CanonicalProvider;
+    type: 'response-start';
+}) | (StreamEventBase & {
+    type: 'reasoning-start';
+}) | (StreamEventBase & {
+    delta: string;
+    type: 'reasoning-delta';
+}) | (StreamEventBase & {
+    type: 'reasoning-end';
+}) | (StreamEventBase & {
+    type: 'usage-update';
+    usage: UsageMetrics;
+}) | (StreamEventBase & {
+    attempt: number;
+    error?: Error;
+    type: 'retry';
+}) | (StreamEventBase & {
+    status: 'refusal' | 'structured-output';
+    type: 'response-status';
+});
 export interface UsageEvent extends UsageMetrics {
     botId?: string;
     durationMs: number;
     finishReason: CanonicalFinishReason;
+    metadata?: Record<string, JsonValue>;
     model: string;
     provider: CanonicalProvider;
+    requestId?: string;
     routingDecision?: string;
     sessionId?: string;
     tenantId?: string;

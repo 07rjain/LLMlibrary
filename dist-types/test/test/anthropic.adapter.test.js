@@ -423,7 +423,7 @@ describe('Anthropic adapter', () => {
         const response = translateAnthropicResponse({
             content: [{ text: 'Hello', type: 'text' }],
             id: 'msg_2',
-            model: 'claude-haiku-4-5-20251001',
+            model: 'claude-haiku-4-5-20250901',
             role: 'assistant',
             stop_reason: 'end_turn',
             usage: {

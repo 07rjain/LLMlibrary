@@ -141,6 +141,65 @@ export class LLMClient {
         }
         throw new ProviderCapabilityError('No model route attempts were available.');
     }
+    /** Resolves a conversation turn before context trimming and provider dispatch. */
+    resolveContext(options) {
+        const plan = options.model
+            ? {
+                attempts: [
+                    {
+                        decision: `requested:${options.model}`,
+                        request: this.resolveRequest(options),
+                    },
+                ],
+            }
+            : this.resolveRequestPlan(options);
+        const attempt = plan.attempts[0];
+        if (!attempt) {
+            throw new ProviderCapabilityError('No model route attempts were available.');
+        }
+        const modelInfo = this.modelRegistry.get(attempt.request.model);
+        return {
+            attempts: plan.attempts.map((routeAttempt) => ({
+                decision: routeAttempt.decision,
+                model: routeAttempt.request.model,
+                provider: routeAttempt.request.provider,
+            })),
+            contextWindow: modelInfo.contextWindow,
+            model: attempt.request.model,
+            provider: attempt.request.provider,
+        };
+    }
+    /** Estimates completion cost using the same preflight calculation as budgets. */
+    estimateRequest(options) {
+        const primaryAttempt = this.resolveRequestPlan(options).attempts[0];
+        if (!primaryAttempt) {
+            throw new ProviderCapabilityError('No model route attempts were available.');
+        }
+        return this.estimateResolvedRequest(primaryAttempt.request);
+    }
+    estimateResolvedRequest(resolved) {
+        const estimatedMessages = resolved.system
+            ? [{ content: resolved.system, role: 'system' }, ...resolved.messages]
+            : resolved.messages;
+        const inputTokens = estimateMessageTokens(estimatedMessages);
+        const maxOutputTokens = resolved.maxTokens;
+        const reasoningTokens = estimateBillableReasoningTokens(resolved);
+        const estimatedCostUSD = calcCostUSD({
+            ...(reasoningTokens > 0 ? { billableReasoningTokens: reasoningTokens } : {}),
+            inputTokens,
+            model: resolved.model,
+            outputTokens: maxOutputTokens,
+        }, this.modelRegistry);
+        return {
+            estimatedCostUSD,
+            inputTokens,
+            maxOutputTokens,
+            model: resolved.model,
+            priceVersion: this.modelRegistry.get(resolved.model).lastUpdated,
+            provider: resolved.provider,
+            reasoningTokens,
+        };
+    }
     /** Executes a single non-streaming embedding request. */
     async embed(options) {
         const resolved = this.resolveEmbeddingRequest(options);
@@ -457,11 +516,24 @@ export class LLMClient {
         };
     }
     resolveRequestPlan(options, resolveOptions = {}) {
-        const resolvedRoute = this.resolveRoute(options, resolveOptions);
+        const { resolvedRoute: pinnedRoute, ...requestOptions } = options;
+        const resolvedRoute = pinnedRoute
+            ? {
+                attempts: pinnedRoute.attempts && pinnedRoute.attempts.length > 0
+                    ? pinnedRoute.attempts
+                    : [
+                        {
+                            decision: `resolved:${pinnedRoute.model}`,
+                            model: pinnedRoute.model,
+                            provider: pinnedRoute.provider,
+                        },
+                    ],
+            }
+            : this.resolveRoute(requestOptions, resolveOptions);
         return {
             attempts: resolvedRoute.attempts.map((attempt) => ({
                 decision: attempt.decision,
-                request: this.resolveRequest(options, attempt, resolveOptions),
+                request: this.resolveRequest(requestOptions, attempt, resolveOptions),
             })),
         };
     }
@@ -506,20 +578,11 @@ export class LLMClient {
         if (options.budgetUsd === undefined) {
             return null;
         }
-        const estimatedMessages = options.system
-            ? [{ content: options.system, role: 'system' }, ...options.messages]
-            : options.messages;
-        const estimatedInputTokens = estimateMessageTokens(estimatedMessages);
-        const estimatedOutputTokens = options.maxTokens;
-        const estimatedReasoningTokens = estimateBillableReasoningTokens(options);
-        const estimatedCostUSD = calcCostUSD({
-            ...(estimatedReasoningTokens > 0
-                ? { billableReasoningTokens: estimatedReasoningTokens }
-                : {}),
-            inputTokens: estimatedInputTokens,
-            model: options.model,
-            outputTokens: estimatedOutputTokens,
-        }, this.modelRegistry);
+        const estimate = this.estimateResolvedRequest(options);
+        const estimatedInputTokens = estimate.inputTokens;
+        const estimatedOutputTokens = estimate.maxOutputTokens;
+        const estimatedReasoningTokens = estimate.reasoningTokens;
+        const estimatedCostUSD = estimate.estimatedCostUSD;
         if (estimatedCostUSD <= options.budgetUsd) {
             return null;
         }
@@ -663,6 +726,14 @@ export class LLMClient {
     }
     async *streamWithFallback(plan, options, startedAt) {
         const attemptedRoutes = [];
+        let sequence = 0;
+        const decorate = (chunk) => ({
+            ...chunk,
+            ...(options.requestId !== undefined ? { requestId: options.requestId } : {}),
+            sequence: ++sequence,
+            timestamp: new Date().toISOString(),
+            version: 2,
+        });
         for (const [index, attempt] of plan.attempts.entries()) {
             attemptedRoutes.push(attempt.decision);
             let emittedUserVisibleChunk = false;
@@ -670,7 +741,7 @@ export class LLMClient {
                 const budgetDecision = this.handleBudgetExceededAction(attempt.request);
                 if (budgetDecision.action === 'skip') {
                     const skipped = buildBudgetSkipResponse(budgetDecision.error, attempt.request);
-                    yield { delta: skipped.text, type: 'text-delta' };
+                    yield decorate({ delta: skipped.text, type: 'text-delta' });
                     await this.logUsageEvent(buildUsageEvent({
                         durationMs: Date.now() - startedAt,
                         finishReason: skipped.finishReason,
@@ -682,15 +753,25 @@ export class LLMClient {
                             ? { routingDecision: joinRoutingDecision(attemptedRoutes) }
                             : {}),
                     }));
-                    yield {
+                    yield decorate({
                         finishReason: skipped.finishReason,
                         type: 'done',
                         usage: skipped.usage,
-                    };
+                    });
                     return;
                 }
+                yield decorate({
+                    model: attempt.request.model,
+                    provider: attempt.request.provider,
+                    type: 'response-start',
+                });
                 for await (const chunk of this.dispatchStream(attempt.request)) {
-                    emittedUserVisibleChunk = true;
+                    if (chunk.type === 'text-delta' ||
+                        chunk.type === 'tool-call-start' ||
+                        chunk.type === 'tool-call-delta' ||
+                        chunk.type === 'tool-call-result') {
+                        emittedUserVisibleChunk = true;
+                    }
                     if (chunk.type === 'done') {
                         await this.logUsageEvent(buildUsageEvent({
                             durationMs: Date.now() - startedAt,
@@ -703,8 +784,9 @@ export class LLMClient {
                                 ? { routingDecision: joinRoutingDecision(attemptedRoutes) }
                                 : {}),
                         }));
+                        yield decorate({ type: 'usage-update', usage: chunk.usage });
                     }
-                    yield chunk;
+                    yield decorate(chunk);
                 }
                 return;
             }
@@ -714,6 +796,11 @@ export class LLMClient {
                     index === plan.attempts.length - 1) {
                     throw error;
                 }
+                yield decorate({
+                    attempt: index + 1,
+                    ...(error instanceof Error ? { error } : {}),
+                    type: 'retry',
+                });
             }
         }
     }
@@ -749,6 +836,27 @@ class MockLLMClient extends LLMClient {
         this.speechQueue = [...(options.speeches ?? [])];
         this.streamQueue = [...(options.streams ?? [])];
         this.transcriptionQueue = [...(options.transcriptions ?? [])];
+    }
+    resolveContext(options) {
+        try {
+            return super.resolveContext(options);
+        }
+        catch {
+            const model = options.model ?? this.mockDefaultModel;
+            const provider = options.provider ?? this.mockDefaultProvider;
+            let contextWindow;
+            try {
+                contextWindow = this.models.get(model).contextWindow;
+            }
+            catch {
+                // Mock-only models do not need registry entries.
+            }
+            return {
+                ...(contextWindow !== undefined ? { contextWindow } : {}),
+                model,
+                provider,
+            };
+        }
     }
     async embed(options) {
         const resolved = this.resolveMockEmbeddingRequest(options);
@@ -821,27 +929,47 @@ class MockLLMClient extends LLMClient {
         return createCancelableStream(async function* () {
             const resolved = this.resolveMockRequest(options);
             const next = this.streamQueue.shift();
+            let sequence = 0;
+            const decorate = (chunk) => ({
+                ...chunk,
+                ...(options.requestId !== undefined ? { requestId: options.requestId } : {}),
+                sequence: ++sequence,
+                timestamp: new Date().toISOString(),
+                version: 2,
+            });
+            yield decorate({
+                model: resolved.model,
+                provider: resolved.provider,
+                type: 'response-start',
+            });
             if (!next) {
                 const response = buildMockResponse(extractLastUserText(resolved.messages), resolved);
                 if (response.text.length > 0) {
-                    yield { delta: response.text, type: 'text-delta' };
+                    yield decorate({ delta: response.text, type: 'text-delta' });
                 }
-                yield {
+                yield decorate({ type: 'usage-update', usage: response.usage });
+                yield decorate({
                     finishReason: response.finishReason,
                     type: 'done',
                     usage: response.usage,
-                };
+                });
                 return;
             }
             const stream = typeof next === 'function' ? await next(resolved) : next;
             if (isAsyncIterable(stream)) {
                 for await (const chunk of stream) {
-                    yield chunk;
+                    if (chunk.type === 'done') {
+                        yield decorate({ type: 'usage-update', usage: chunk.usage });
+                    }
+                    yield decorate(chunk);
                 }
                 return;
             }
             for (const chunk of stream) {
-                yield chunk;
+                if (chunk.type === 'done') {
+                    yield decorate({ type: 'usage-update', usage: chunk.usage });
+                }
+                yield decorate(chunk);
             }
         }.bind(this), options.signal);
     }
@@ -974,6 +1102,8 @@ function buildUsageEvent(input) {
         provider: input.provider,
         timestamp: new Date().toISOString(),
         ...(input.options.botId !== undefined ? { botId: input.options.botId } : {}),
+        ...(input.options.metadata !== undefined ? { metadata: input.options.metadata } : {}),
+        ...(input.options.requestId !== undefined ? { requestId: input.options.requestId } : {}),
         ...(input.routingDecision ? { routingDecision: input.routingDecision } : {}),
         ...(input.options.sessionId !== undefined ? { sessionId: input.options.sessionId } : {}),
         ...(input.options.tenantId !== undefined ? { tenantId: input.options.tenantId } : {}),

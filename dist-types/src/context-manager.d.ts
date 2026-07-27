@@ -2,10 +2,17 @@ import type { CanonicalMessage, CanonicalProvider } from './types.js';
 type MaybePromise<TValue> = Promise<TValue> | TValue;
 /** Metadata passed to context trimming strategies before a model call. */
 export interface ContextManagerContext {
+    /** Selected model's registry context window, before output/tool reservations. */
+    contextWindow?: number;
+    estimatedToolSchemaTokens?: number;
+    /** Application-level cap, independent from the selected model limit. */
     maxContextTokens?: number;
     model?: string;
     provider?: CanonicalProvider;
+    requestId?: string;
+    reservedOutputTokens?: number;
     system?: string;
+    toolRound?: number;
 }
 /** Contract for pluggable context trimming strategies. */
 export interface ContextManager {
@@ -45,6 +52,7 @@ export declare class SlidingWindowStrategy implements ContextManager {
     shouldTrim(messages: CanonicalMessage[], context: ContextManagerContext): boolean;
     trim(messages: CanonicalMessage[], context: ContextManagerContext): CanonicalMessage[];
     private estimateTokens;
+    private resolveMaxTokens;
     private exceedsMessageLimit;
 }
 export interface SummarisationStrategyOptions extends SlidingWindowStrategyOptions {

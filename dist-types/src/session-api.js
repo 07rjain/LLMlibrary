@@ -150,9 +150,13 @@ export class SessionApi {
         });
         const shouldStream = body.stream ?? url.searchParams.get('stream') === 'true';
         if (shouldStream) {
-            return this.streamSessionMessage(conversation, sessionId, tenantId, body.content, request.signal);
+            return this.streamSessionMessage(conversation, sessionId, tenantId, body.content, request.signal, body.requestId, body.metadata);
         }
-        const response = await conversation.send(body.content, { signal: request.signal });
+        const response = await conversation.send(body.content, {
+            ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
+            ...(body.requestId !== undefined ? { requestId: body.requestId } : {}),
+            signal: request.signal,
+        });
         const record = await this.requireSession(sessionId, tenantId);
         const include = parseInclude(url.searchParams, ['cost', 'messages']);
         return jsonResponse({
@@ -368,7 +372,7 @@ export class SessionApi {
             ...(this.tools !== undefined ? { tools: this.tools } : {}),
         };
     }
-    async streamSessionMessage(conversation, sessionId, tenantId, content, requestSignal) {
+    async streamSessionMessage(conversation, sessionId, tenantId, content, requestSignal, requestId, metadata) {
         const encoder = new TextEncoder();
         const abortController = new AbortController();
         let stream;
@@ -391,17 +395,25 @@ export class SessionApi {
         const body = new ReadableStream({
             start: async (controller) => {
                 try {
-                    controller.enqueue(encoder.encode(formatSseEvent('session.message.started', { sessionId })));
-                    stream = conversation.sendStream(content, { signal: abortController.signal });
+                    controller.enqueue(encoder.encode(formatSseEvent('session.message.started', {
+                        sessionId,
+                        ...(requestId !== undefined ? { requestId } : {}),
+                    })));
+                    stream = conversation.sendStream(content, {
+                        ...(metadata !== undefined ? { metadata } : {}),
+                        ...(requestId !== undefined ? { requestId } : {}),
+                        signal: abortController.signal,
+                    });
                     for await (const chunk of stream) {
                         if (chunk.type === 'text-delta') {
-                            controller.enqueue(encoder.encode(formatSseEvent('response.text.delta', { delta: chunk.delta })));
+                            controller.enqueue(encoder.encode(formatSseEvent('response.text.delta', streamEventData(chunk, { delta: chunk.delta }))));
                             continue;
                         }
                         if (chunk.type === 'tool-call-start') {
                             controller.enqueue(encoder.encode(formatSseEvent('response.tool_call.start', {
                                 id: chunk.id,
                                 name: chunk.name,
+                                ...streamEventData(chunk),
                             })));
                             continue;
                         }
@@ -409,6 +421,7 @@ export class SessionApi {
                             controller.enqueue(encoder.encode(formatSseEvent('response.tool_call.delta', {
                                 argsDelta: chunk.argsDelta,
                                 id: chunk.id,
+                                ...streamEventData(chunk),
                             })));
                             continue;
                         }
@@ -420,11 +433,51 @@ export class SessionApi {
                                 id: chunk.id,
                                 name: chunk.name,
                                 ...resultPayload,
+                                ...streamEventData(chunk),
                             })));
                             continue;
                         }
                         if (chunk.type === 'error') {
-                            controller.enqueue(encoder.encode(formatSseEvent('response.error', serializeStreamError(chunk.error))));
+                            controller.enqueue(encoder.encode(formatSseEvent('response.error', streamEventData(chunk, { ...serializeStreamError(chunk.error) }))));
+                            continue;
+                        }
+                        if (chunk.type === 'response-start') {
+                            controller.enqueue(encoder.encode(formatSseEvent('response.started', streamEventData(chunk, {
+                                model: chunk.model,
+                                provider: chunk.provider,
+                            }))));
+                            continue;
+                        }
+                        if (chunk.type === 'usage-update') {
+                            controller.enqueue(encoder.encode(formatSseEvent('response.usage.updated', streamEventData(chunk, { usage: chunk.usage }))));
+                            continue;
+                        }
+                        if (chunk.type === 'retry') {
+                            controller.enqueue(encoder.encode(formatSseEvent('response.retry', streamEventData(chunk, {
+                                attempt: chunk.attempt,
+                                ...(chunk.error
+                                    ? { error: serializeStreamError(chunk.error) }
+                                    : {}),
+                            }))));
+                            continue;
+                        }
+                        if (chunk.type === 'reasoning-start') {
+                            controller.enqueue(encoder.encode(formatSseEvent('response.reasoning.started', streamEventData(chunk))));
+                            continue;
+                        }
+                        if (chunk.type === 'reasoning-delta') {
+                            controller.enqueue(encoder.encode(formatSseEvent('response.reasoning.delta', streamEventData(chunk, { delta: chunk.delta }))));
+                            continue;
+                        }
+                        if (chunk.type === 'reasoning-end') {
+                            controller.enqueue(encoder.encode(formatSseEvent('response.reasoning.completed', streamEventData(chunk))));
+                            continue;
+                        }
+                        if (chunk.type === 'response-status') {
+                            controller.enqueue(encoder.encode(formatSseEvent('response.status', streamEventData(chunk, { status: chunk.status }))));
+                            continue;
+                        }
+                        if (chunk.type !== 'done') {
                             continue;
                         }
                         const record = await this.requireSession(sessionId, tenantId);
@@ -432,12 +485,19 @@ export class SessionApi {
                             finishReason: chunk.finishReason,
                             session: await this.buildSessionView(record, new Set(['cost', 'messages'])),
                             usage: chunk.usage,
+                            ...streamEventData(chunk),
                         })));
                     }
                 }
                 catch (error) {
                     if (!abortController.signal.aborted) {
-                        controller.enqueue(encoder.encode(formatSseEvent('response.error', serializeStreamError(error))));
+                        const errorPayload = serializeStreamError(error);
+                        controller.enqueue(encoder.encode(formatSseEvent('response.error', {
+                            ...errorPayload,
+                            ...(requestId !== undefined && errorPayload.requestId === undefined
+                                ? { requestId }
+                                : {}),
+                        })));
                     }
                 }
                 finally {
@@ -755,6 +815,15 @@ function stripSystemFromSnapshot(snapshot) {
 }
 function serializeStreamError(error) {
     return serializePublicError(error);
+}
+function streamEventData(chunk, data = {}) {
+    return {
+        ...data,
+        ...(chunk.requestId !== undefined ? { requestId: chunk.requestId } : {}),
+        ...(chunk.sequence !== undefined ? { sequence: chunk.sequence } : {}),
+        ...(chunk.timestamp !== undefined ? { timestamp: chunk.timestamp } : {}),
+        ...(chunk.version !== undefined ? { version: chunk.version } : {}),
+    };
 }
 function serializePublicError(error) {
     if (error instanceof HttpError) {

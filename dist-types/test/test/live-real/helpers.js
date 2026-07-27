@@ -55,10 +55,12 @@ export function weatherTool(execute) {
     };
 }
 export async function collectStream(stream) {
+    const chunks = [];
     let text = '';
     let done;
     let toolCalls = 0;
     for await (const chunk of stream) {
+        chunks.push(chunk);
         if (chunk.type === 'text-delta') {
             text += chunk.delta;
         }
@@ -70,6 +72,7 @@ export async function collectStream(stream) {
         }
     }
     return {
+        chunks,
         done,
         text,
         toolCalls,
@@ -91,6 +94,12 @@ export function assertUsage(usage) {
     expect(usage.cachedTokens).toBeGreaterThanOrEqual(0);
     expect(usage.costUSD).toBeGreaterThanOrEqual(0);
     expect(usage.cost).toMatch(/^\$/);
+}
+export function assertBillableUsage(usage) {
+    assertUsage(usage);
+    expect(usage.inputTokens).toBeGreaterThan(0);
+    expect(usage.outputTokens).toBeGreaterThan(0);
+    expect(usage.costUSD).toBeGreaterThan(0);
 }
 export function expectNoSecretLeak(value) {
     const serialized = JSON.stringify(value);

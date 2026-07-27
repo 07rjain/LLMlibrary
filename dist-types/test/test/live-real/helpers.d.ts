@@ -14,6 +14,7 @@ export declare function runId(prefix?: string): string;
 export declare function liveClient(): LLMClient;
 export declare function weatherTool(execute?: CanonicalTool['execute']): CanonicalTool;
 export declare function collectStream(stream: AsyncIterable<StreamChunk>): Promise<{
+    chunks: StreamChunk[];
     done: Extract<StreamChunk, {
         type: 'done';
     }> | undefined;
@@ -22,6 +23,7 @@ export declare function collectStream(stream: AsyncIterable<StreamChunk>): Promi
 }>;
 export declare function assertCanonicalResponse(response: CanonicalResponse, expectedProvider: CanonicalProvider): void;
 export declare function assertUsage(usage: UsageMetrics): void;
+export declare function assertBillableUsage(usage: UsageMetrics): void;
 export declare function expectNoSecretLeak(value: unknown): void;
 export declare function strictJsonObject(value: unknown): JsonObject;
 //# sourceMappingURL=helpers.d.ts.map

@@ -25,7 +25,31 @@ export declare const defaultModelPrices: {
         supportsTools: true;
         supportsVision: true;
     };
+    'claude-haiku-4-5-20251001': {
+        cacheReadPrice: number;
+        cacheWritePrice: number;
+        contextWindow: number;
+        inputPrice: number;
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "anthropic";
+        supportsStreaming: true;
+        supportsTools: true;
+        supportsVision: true;
+    };
     'claude-opus-4-6': {
+        cacheReadPrice: number;
+        cacheWritePrice: number;
+        contextWindow: number;
+        inputPrice: number;
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "anthropic";
+        supportsStreaming: true;
+        supportsTools: true;
+        supportsVision: true;
+    };
+    'claude-opus-5': {
         cacheReadPrice: number;
         cacheWritePrice: number;
         contextWindow: number;
@@ -49,6 +73,54 @@ export declare const defaultModelPrices: {
     };
     'gpt-5.5': {
         cacheReadPrice: number;
+        contextWindow: number;
+        inputPrice: number;
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "openai";
+        supportsStreaming: true;
+        supportsTools: true;
+        supportsVision: true;
+    };
+    'gpt-5.6-luna': {
+        cacheReadPrice: number;
+        cacheWritePrice: number;
+        contextWindow: number;
+        inputPrice: number;
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "openai";
+        supportsStreaming: true;
+        supportsTools: true;
+        supportsVision: true;
+    };
+    'gpt-5.6-sol': {
+        cacheReadPrice: number;
+        cacheWritePrice: number;
+        contextWindow: number;
+        inputPrice: number;
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "openai";
+        supportsStreaming: true;
+        supportsTools: true;
+        supportsVision: true;
+    };
+    'gpt-5.6': {
+        cacheReadPrice: number;
+        cacheWritePrice: number;
+        contextWindow: number;
+        inputPrice: number;
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "openai";
+        supportsStreaming: true;
+        supportsTools: true;
+        supportsVision: true;
+    };
+    'gpt-5.6-terra': {
+        cacheReadPrice: number;
+        cacheWritePrice: number;
         contextWindow: number;
         inputPrice: number;
         lastUpdated: string;
@@ -155,6 +227,28 @@ export declare const defaultModelPrices: {
         supportsVision: true;
     };
     'gemini-3.5-flash': {
+        cacheReadPrice: number;
+        contextWindow: number;
+        inputPrice: number;
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "google";
+        supportsStreaming: true;
+        supportsTools: true;
+        supportsVision: true;
+    };
+    'gemini-3.6-flash': {
+        cacheReadPrice: number;
+        contextWindow: number;
+        inputPrice: number;
+        lastUpdated: string;
+        outputPrice: number;
+        provider: "google";
+        supportsStreaming: true;
+        supportsTools: true;
+        supportsVision: true;
+    };
+    'gemini-3.5-flash-lite': {
         cacheReadPrice: number;
         contextWindow: number;
         inputPrice: number;

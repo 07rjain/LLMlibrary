@@ -3,8 +3,94 @@ import { LLMClient } from '../src/client.js';
 import { SlidingWindowStrategy, SummarisationStrategy } from '../src/context-manager.js';
 import { Conversation } from '../src/conversation.js';
 import { BudgetExceededError, MaxToolRoundsError } from '../src/errors.js';
+import { ModelRouter } from '../src/router.js';
 import { InMemorySessionStore } from '../src/session-store.js';
 describe('Conversation', () => {
+    it('routes tool calls through an external dispatcher', async () => {
+        const dispatcher = vi.fn(async () => ({ answer: 42 }));
+        const responses = [
+            {
+                content: [],
+                finishReason: 'tool_call',
+                model: 'mock-model',
+                provider: 'mock',
+                raw: {},
+                text: '',
+                toolCalls: [{ args: { value: 7 }, id: 'call-1', name: 'answer' }],
+                usage: { cachedTokens: 0, cost: '$0.00', costUSD: 0, inputTokens: 1, outputTokens: 1 },
+            },
+            {
+                content: [{ text: 'done', type: 'text' }],
+                finishReason: 'stop',
+                model: 'mock-model',
+                provider: 'mock',
+                raw: {},
+                text: 'done',
+                toolCalls: [],
+                usage: { cachedTokens: 0, cost: '$0.00', costUSD: 0, inputTokens: 1, outputTokens: 1 },
+            },
+        ];
+        const client = {
+            complete: vi.fn(async () => responses.shift()),
+            stream: vi.fn(),
+        };
+        const conversation = new Conversation(client, {
+            sessionId: 'dispatcher-session',
+            toolCallDispatcherMetadata: { source: 'dispatcher-test' },
+            toolCallDispatcher: { execute: dispatcher },
+            tools: [
+                {
+                    description: 'Answer',
+                    name: 'answer',
+                    parameters: { properties: { value: { type: 'number' } }, type: 'object' },
+                },
+            ],
+        });
+        await conversation.send('Call answer.');
+        expect(dispatcher).toHaveBeenCalledWith(expect.objectContaining({
+            call: { args: { value: 7 }, id: 'call-1', name: 'answer' },
+            model: 'mock-model',
+            provider: 'mock',
+            sessionId: 'dispatcher-session',
+            metadata: { source: 'dispatcher-test' },
+        }));
+    });
+    it('does not dispatch unregistered tool calls in strict validation mode', async () => {
+        const dispatcher = vi.fn(async () => ({ answer: 42 }));
+        const responses = [
+            {
+                content: [],
+                finishReason: 'tool_call',
+                model: 'mock-model',
+                provider: 'mock',
+                raw: {},
+                text: '',
+                toolCalls: [{ args: { value: 7 }, id: 'call-1', name: 'unregistered' }],
+                usage: { cachedTokens: 0, cost: '$0.00', costUSD: 0, inputTokens: 1, outputTokens: 1 },
+            },
+            {
+                content: [{ text: 'done', type: 'text' }],
+                finishReason: 'stop',
+                model: 'mock-model',
+                provider: 'mock',
+                raw: {},
+                text: 'done',
+                toolCalls: [],
+                usage: { cachedTokens: 0, cost: '$0.00', costUSD: 0, inputTokens: 1, outputTokens: 1 },
+            },
+        ];
+        const conversation = new Conversation({
+            complete: vi.fn(async () => responses.shift()),
+            stream: vi.fn(),
+        }, {
+            sessionId: 'strict-dispatcher-session',
+            toolCallDispatcher: { execute: dispatcher },
+            toolValidation: 'strict',
+        });
+        await conversation.send('Call the unregistered tool.');
+        expect(dispatcher).not.toHaveBeenCalled();
+        expect(JSON.stringify(conversation.history)).toContain('No tool schema registered for \\"unregistered\\".');
+    });
     it('generates a session id when one is not supplied', () => {
         const conversation = new Conversation({
             complete: vi.fn(),
@@ -211,9 +297,9 @@ describe('Conversation', () => {
             chunks.push(chunk);
         }
         expect(chunks).toEqual([
-            { delta: 'Hello ', type: 'text-delta' },
-            { delta: 'world', type: 'text-delta' },
-            expect.objectContaining({ finishReason: 'stop', type: 'done' }),
+            expect.objectContaining({ delta: 'Hello ', type: 'text-delta', version: 2 }),
+            expect.objectContaining({ delta: 'world', type: 'text-delta', version: 2 }),
+            expect.objectContaining({ finishReason: 'stop', type: 'done', version: 2 }),
         ]);
         expect(conversation.history).toEqual([
             { content: 'Hi', role: 'user' },
@@ -589,16 +675,26 @@ describe('Conversation', () => {
             chunks.push(chunk);
         }
         expect(chunks).toEqual([
-            { delta: 'Checking ', type: 'text-delta' },
-            { id: 'tool_1', name: 'lookup_weather', type: 'tool-call-start' },
-            {
+            expect.objectContaining({ delta: 'Checking ', type: 'text-delta', version: 2 }),
+            expect.objectContaining({
+                id: 'tool_1',
+                name: 'lookup_weather',
+                type: 'tool-call-start',
+                version: 2,
+            }),
+            expect.objectContaining({
                 id: 'tool_1',
                 name: 'lookup_weather',
                 result: { city: 'Berlin' },
                 type: 'tool-call-result',
-            },
-            { delta: 'Sunny in Berlin.', type: 'text-delta' },
-            {
+                version: 2,
+            }),
+            expect.objectContaining({
+                delta: 'Sunny in Berlin.',
+                type: 'text-delta',
+                version: 2,
+            }),
+            expect.objectContaining({
                 finishReason: 'stop',
                 type: 'done',
                 usage: {
@@ -608,7 +704,8 @@ describe('Conversation', () => {
                     inputTokens: 11,
                     outputTokens: 5,
                 },
-            },
+                version: 2,
+            }),
         ]);
         expect(stream).toHaveBeenCalledTimes(2);
         expect(conversation.history).toEqual([
@@ -1743,6 +1840,179 @@ describe('Conversation', () => {
             { content: 'Fresh system', pinned: true, role: 'system' },
         ]);
     });
+    it('passes caller correlation and resolved defaults to complete context rounds', async () => {
+        const usage = {
+            cachedTokens: 0,
+            cost: '$0.00',
+            costUSD: 0,
+            inputTokens: 1,
+            outputTokens: 1,
+        };
+        const complete = vi
+            .fn()
+            .mockResolvedValueOnce({
+            content: [],
+            finishReason: 'tool_call',
+            model: 'resolved-model',
+            provider: 'mock',
+            raw: {},
+            text: '',
+            toolCalls: [{ args: { city: 'Berlin' }, id: 'call-1', name: 'lookup' }],
+            usage,
+        })
+            .mockResolvedValueOnce({
+            content: [{ text: 'Done.', type: 'text' }],
+            finishReason: 'stop',
+            model: 'resolved-model',
+            provider: 'mock',
+            raw: {},
+            text: 'Done.',
+            toolCalls: [],
+            usage,
+        });
+        const contextRounds = [];
+        const conversation = new Conversation({ complete, stream: vi.fn() }, {
+            contextManager: {
+                shouldTrim: vi.fn((_messages, context) => {
+                    contextRounds.push(context);
+                    return false;
+                }),
+                trim: vi.fn(),
+            },
+            sessionId: 'implicit-complete-context',
+            toolCallDispatcher: {
+                execute: vi.fn(async () => ({ temperature: 20 })),
+            },
+            tools: [
+                {
+                    description: 'Look up a city',
+                    name: 'lookup',
+                    parameters: { properties: { city: { type: 'string' } }, type: 'object' },
+                },
+            ],
+        });
+        await conversation.send('Look up Berlin.', {
+            metadata: { source: 'conversation-test' },
+            requestId: 'caller-request-123',
+        });
+        expect(complete).toHaveBeenNthCalledWith(1, expect.objectContaining({
+            metadata: { source: 'conversation-test' },
+            requestId: 'caller-request-123',
+        }));
+        expect(complete).toHaveBeenNthCalledWith(2, expect.objectContaining({
+            metadata: { source: 'conversation-test' },
+            requestId: 'caller-request-123',
+        }));
+        expect(contextRounds).toEqual([
+            expect.objectContaining({
+                requestId: 'caller-request-123',
+                toolRound: 0,
+            }),
+            expect.objectContaining({
+                model: 'resolved-model',
+                provider: 'mock',
+                requestId: 'caller-request-123',
+                toolRound: 1,
+            }),
+        ]);
+    });
+    it('resolves implicit initial route metadata before context trimming', async () => {
+        const contextRounds = [];
+        const client = LLMClient.mock({
+            modelRouter: new ModelRouter({
+                rules: [{ name: 'initial-route', target: 'gpt-4o-mini' }],
+            }),
+            responses: [
+                {
+                    content: [{ text: 'Done.', type: 'text' }],
+                    finishReason: 'stop',
+                    model: 'gpt-4o-mini',
+                    provider: 'openai',
+                    raw: {},
+                    text: 'Done.',
+                    toolCalls: [],
+                    usage: {
+                        cachedTokens: 0,
+                        cost: '$0.00',
+                        costUSD: 0,
+                        inputTokens: 2,
+                        outputTokens: 1,
+                    },
+                },
+            ],
+        });
+        const conversation = await client.conversation({
+            contextManager: {
+                shouldTrim: vi.fn((_messages, context) => {
+                    contextRounds.push(context);
+                    return false;
+                }),
+                trim: vi.fn(),
+            },
+            maxTokens: 64,
+            sessionId: 'implicit-initial-route',
+        });
+        await conversation.send('Hello');
+        expect(contextRounds[0]).toEqual(expect.objectContaining({
+            contextWindow: 128_000,
+            model: 'gpt-4o-mini',
+            provider: 'openai',
+            reservedOutputTokens: 64,
+            toolRound: 0,
+        }));
+    });
+    it('pins the router-selected initial route for the provider request', async () => {
+        const requests = [];
+        const client = LLMClient.mock({
+            defaultModel: 'gpt-4o',
+            defaultProvider: 'openai',
+            modelRouter: new ModelRouter({
+                rules: [{ name: 'initial-route', target: 'gpt-4o-mini' }],
+            }),
+            responses: [
+                (options) => {
+                    requests.push(options);
+                    return {
+                        content: [{ text: 'Done.', type: 'text' }],
+                        finishReason: 'stop',
+                        model: 'gpt-4o-mini',
+                        provider: 'openai',
+                        raw: {},
+                        text: 'Done.',
+                        toolCalls: [],
+                        usage: {
+                            cachedTokens: 0,
+                            cost: '$0.00',
+                            costUSD: 0,
+                            inputTokens: 2,
+                            outputTokens: 1,
+                        },
+                    };
+                },
+            ],
+        });
+        const conversation = await client.conversation({ sessionId: 'router-context-route' });
+        await conversation.send('Hello');
+        expect(requests[0]).toEqual(expect.objectContaining({
+            model: 'gpt-4o-mini',
+            provider: 'openai',
+            resolvedRoute: {
+                attempts: [
+                    {
+                        decision: 'rule:initial-route:primary:gpt-4o-mini',
+                        model: 'gpt-4o-mini',
+                        provider: 'openai',
+                    },
+                ],
+                model: 'gpt-4o-mini',
+                provider: 'openai',
+            },
+        }));
+        expect(conversation.serialise()).toEqual(expect.objectContaining({
+            model: 'gpt-4o-mini',
+            provider: 'openai',
+        }));
+    });
     it('applies a context manager before requests and preserves structured assistant content', async () => {
         const trim = vi.fn((messages) => messages.slice(1));
         const complete = vi.fn(async () => ({
@@ -1932,11 +2202,12 @@ describe('Conversation', () => {
             error: expect.any(Error),
             type: 'error',
         }));
-        expect(chunks[1]).toEqual({
+        expect(chunks[1]).toEqual(expect.objectContaining({
             argsDelta: '{"value":"Ber',
             id: 'tool_1',
             type: 'tool-call-delta',
-        });
+            version: 2,
+        }));
         expect(execute).toHaveBeenCalledWith({ result: 'Berlin' }, expect.objectContaining({
             sessionId: conversation.id,
         }));
@@ -2096,7 +2367,256 @@ describe('Conversation', () => {
         }));
     });
 });
+describe('Conversation stream event contract', () => {
+    it('resolves defaults before dispatching streamed tools and correlates context rounds', async () => {
+        const usage = {
+            cachedTokens: 0,
+            cost: '$0.00',
+            costUSD: 0,
+            inputTokens: 1,
+            outputTokens: 1,
+        };
+        const stream = vi
+            .fn()
+            .mockImplementationOnce(async function* () {
+            yield { model: 'resolved-model', provider: 'mock', type: 'response-start' };
+            yield { id: 'call-1', name: 'lookup', type: 'tool-call-start' };
+            yield { id: 'call-1', name: 'lookup', result: { city: 'Berlin' }, type: 'tool-call-result' };
+            yield { finishReason: 'tool_call', type: 'done', usage };
+        })
+            .mockImplementationOnce(async function* () {
+            yield { model: 'resolved-model', provider: 'mock', type: 'response-start' };
+            yield { delta: 'Done.', type: 'text-delta' };
+            yield { finishReason: 'stop', type: 'done', usage };
+        });
+        const dispatcher = vi.fn(async () => ({ temperature: 20 }));
+        const contextRounds = [];
+        const conversation = new Conversation({
+            complete: vi.fn(),
+            resolveContext: () => ({
+                contextWindow: 4096,
+                model: 'resolved-model',
+                provider: 'mock',
+            }),
+            stream,
+        }, {
+            contextManager: {
+                shouldTrim: vi.fn((_messages, context) => {
+                    contextRounds.push(context);
+                    return false;
+                }),
+                trim: vi.fn(),
+            },
+            sessionId: 'implicit-stream-dispatch',
+            toolCallDispatcher: { execute: dispatcher },
+            tools: [
+                {
+                    description: 'Look up a city',
+                    name: 'lookup',
+                    parameters: { properties: { city: { type: 'string' } }, type: 'object' },
+                },
+            ],
+        });
+        const chunks = [];
+        for await (const chunk of conversation.sendStream('Look up Berlin.', {
+            metadata: { source: 'conversation-test' },
+            requestId: 'caller-request-456',
+        })) {
+            chunks.push(chunk);
+        }
+        expect(dispatcher).toHaveBeenCalledWith(expect.objectContaining({
+            call: { args: { city: 'Berlin' }, id: 'call-1', name: 'lookup' },
+            model: 'resolved-model',
+            provider: 'mock',
+        }));
+        expect(stream).toHaveBeenNthCalledWith(1, expect.objectContaining({
+            metadata: { source: 'conversation-test' },
+            model: 'resolved-model',
+            provider: 'mock',
+            requestId: 'caller-request-456',
+        }));
+        expect(stream).toHaveBeenNthCalledWith(2, expect.objectContaining({
+            metadata: { source: 'conversation-test' },
+            requestId: 'caller-request-456',
+        }));
+        expect(contextRounds.map((context) => context.toolRound)).toEqual([0, 1]);
+        expect(contextRounds).toEqual([
+            expect.objectContaining({
+                contextWindow: 4096,
+                model: 'resolved-model',
+                provider: 'mock',
+                requestId: 'caller-request-456',
+                toolRound: 0,
+            }),
+            expect.objectContaining({
+                model: 'resolved-model',
+                provider: 'mock',
+                requestId: 'caller-request-456',
+                toolRound: 1,
+            }),
+        ]);
+        expect(conversation.serialise()).toEqual(expect.objectContaining({
+            model: 'resolved-model',
+            provider: 'mock',
+        }));
+        expect(chunks.at(-1)).toEqual(expect.objectContaining({ finishReason: 'stop', type: 'done' }));
+    });
+    it('keeps v2 metadata monotonic across automatic tool-loop rounds', async () => {
+        const usage = {
+            cachedTokens: 0,
+            cost: '$0.00',
+            costUSD: 0,
+            inputTokens: 1,
+            outputTokens: 1,
+        };
+        const stream = vi
+            .fn()
+            .mockImplementationOnce(async function* () {
+            yield {
+                model: 'mock-model',
+                provider: 'mock',
+                sequence: 1,
+                timestamp: '2020-01-01T00:00:00.000Z',
+                type: 'response-start',
+                version: 2,
+            };
+            yield {
+                id: 'call-1',
+                name: 'weather',
+                sequence: 2,
+                timestamp: '2020-01-01T00:00:00.001Z',
+                type: 'tool-call-start',
+                version: 2,
+            };
+            yield {
+                id: 'call-1',
+                name: 'weather',
+                result: { city: 'Paris' },
+                sequence: 3,
+                timestamp: '2020-01-01T00:00:00.002Z',
+                type: 'tool-call-result',
+                version: 2,
+            };
+            yield {
+                finishReason: 'tool_call',
+                sequence: 4,
+                timestamp: '2020-01-01T00:00:00.003Z',
+                type: 'done',
+                usage,
+                version: 2,
+            };
+        })
+            .mockImplementationOnce(async function* () {
+            yield {
+                model: 'mock-model',
+                provider: 'mock',
+                sequence: 1,
+                timestamp: '2020-01-01T00:00:01.000Z',
+                type: 'response-start',
+                version: 2,
+            };
+            yield {
+                delta: 'done',
+                sequence: 2,
+                timestamp: '2020-01-01T00:00:01.001Z',
+                type: 'text-delta',
+                version: 2,
+            };
+            yield {
+                finishReason: 'stop',
+                sequence: 3,
+                timestamp: '2020-01-01T00:00:01.002Z',
+                type: 'done',
+                usage,
+                version: 2,
+            };
+        });
+        const conversation = new Conversation({ complete: vi.fn(), stream }, {
+            model: 'mock-model',
+            provider: 'mock',
+            tools: [
+                {
+                    description: 'Get weather',
+                    execute: async () => ({ temperature: 20 }),
+                    name: 'weather',
+                    parameters: {
+                        properties: { city: { type: 'string' } },
+                        required: ['city'],
+                        type: 'object',
+                    },
+                },
+            ],
+        });
+        const chunks = [];
+        for await (const chunk of conversation.sendStream('weather', {
+            requestId: 'conversation-request',
+        })) {
+            chunks.push(chunk);
+        }
+        expect(chunks.map((chunk) => chunk.sequence)).toEqual(chunks.map((_, index) => index + 1));
+        expect(chunks.every((chunk) => chunk.version === 2)).toBe(true);
+        expect(chunks.every((chunk) => chunk.requestId === 'conversation-request')).toBe(true);
+        expect(chunks.every((chunk) => typeof chunk.timestamp === 'string')).toBe(true);
+        expect(chunks.filter((chunk) => chunk.type === 'done')).toHaveLength(1);
+        expect(chunks.at(-1)).toEqual(expect.objectContaining({
+            finishReason: 'stop',
+            requestId: 'conversation-request',
+            type: 'done',
+            version: 2,
+        }));
+        expect(stream).toHaveBeenNthCalledWith(2, expect.objectContaining({ requestId: 'conversation-request' }));
+    });
+});
 describe('SlidingWindowStrategy', () => {
+    it('uses the model context window after reserving output and tool schema tokens', () => {
+        const strategy = new SlidingWindowStrategy({
+            tokenEstimator: (messages) => messages.length * 10,
+        });
+        const messages = [
+            { content: 'One', role: 'user' },
+            { content: 'Two', role: 'assistant' },
+            { content: 'Three', role: 'user' },
+            { content: 'Four', role: 'assistant' },
+            { content: 'Latest', role: 'user' },
+        ];
+        expect(strategy.shouldTrim(messages, {
+            contextWindow: 90,
+            estimatedToolSchemaTokens: 20,
+            reservedOutputTokens: 30,
+        })).toBe(true);
+        expect(strategy.shouldTrim(messages.slice(-4), {
+            contextWindow: 90,
+            estimatedToolSchemaTokens: 20,
+            reservedOutputTokens: 30,
+        })).toBe(false);
+    });
+    it('preserves complete tool-call and tool-result exchanges while trimming', () => {
+        const strategy = new SlidingWindowStrategy({
+            maxMessages: 3,
+        });
+        const messages = [
+            { content: 'Old user', role: 'user' },
+            {
+                content: [
+                    { args: { city: 'Paris' }, id: 'call-1', name: 'weather', type: 'tool_call' },
+                ],
+                role: 'assistant',
+            },
+            {
+                content: [
+                    {
+                        name: 'weather',
+                        result: { temperature: 20 },
+                        toolCallId: 'call-1',
+                        type: 'tool_result',
+                    },
+                ],
+                role: 'user',
+            },
+            { content: 'Latest user', role: 'user' },
+        ];
+        expect(strategy.trim(messages, {})).toEqual(messages.slice(1));
+    });
     it('trims the oldest removable messages while preserving pinned and latest user content', () => {
         const strategy = new SlidingWindowStrategy({
             maxMessages: 2,
@@ -2152,6 +2672,45 @@ describe('SlidingWindowStrategy', () => {
     });
 });
 describe('SummarisationStrategy', () => {
+    it('summarises tool-call and tool-result exchanges atomically', async () => {
+        const summarizer = vi.fn(async () => 'Atomic summary');
+        const strategy = new SummarisationStrategy({
+            keepLastMessages: 0,
+            maxMessages: 2,
+            summarizer,
+        });
+        const messages = [
+            { content: 'Old user', role: 'user' },
+            {
+                content: [
+                    { args: { city: 'Paris' }, id: 'call-1', name: 'weather', type: 'tool_call' },
+                ],
+                role: 'assistant',
+            },
+            {
+                content: [
+                    {
+                        name: 'weather',
+                        result: { temperature: 20 },
+                        toolCallId: 'call-1',
+                        type: 'tool_result',
+                    },
+                ],
+                role: 'user',
+            },
+            { content: 'Latest user', role: 'user' },
+        ];
+        const trimmed = await strategy.trim(messages, {});
+        expect(summarizer).toHaveBeenCalledWith(messages.slice(0, 3), {});
+        expect(trimmed).toEqual([
+            {
+                content: 'Atomic summary',
+                metadata: { summarizedMessageCount: 3, summary: true },
+                role: 'assistant',
+            },
+            { content: 'Latest user', role: 'user' },
+        ]);
+    });
     it('replaces older removable messages with a generated summary', async () => {
         const summarizer = vi.fn(async (messages) => {
             return `Summary of ${messages.length} messages`;

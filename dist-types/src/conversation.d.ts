@@ -1,17 +1,47 @@
 import type { ContextManager } from './context-manager.js';
 import type { SessionStore } from './session-store.js';
-import type { BudgetExceededAction, CancelableStream, CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, ProviderOptions, ResponseFormat, StreamChunk } from './types.js';
+import type { BudgetExceededAction, CancelableStream, CanonicalMessage, CanonicalProvider, CanonicalResponse, CanonicalTool, CanonicalToolChoice, JsonValue, ProviderOptions, ResponseFormat, StreamChunk, ToolCallDispatcher } from './types.js';
 export type ToolValidationMode = 'permissive' | 'strict';
+/** Resolved route metadata used to prepare one conversation turn. */
+export interface ConversationRoute {
+    attempts?: Array<{
+        decision: string;
+        model: string;
+        provider: CanonicalProvider;
+    }>;
+    contextWindow?: number;
+    model: string;
+    provider: CanonicalProvider;
+}
 /** Minimal client contract consumed by `Conversation`. */
 export interface ConversationClient {
-    complete(options: {
-        budgetExceededAction?: BudgetExceededAction;
-        budgetUsd?: number;
+    resolveContext?(options: {
         maxTokens?: number;
         messages: CanonicalMessage[];
         model?: string;
         provider?: CanonicalProvider;
+        responseFormat?: ResponseFormat;
+        sessionId?: string;
+        system?: string;
+        tenantId?: string;
+        toolChoice?: CanonicalToolChoice;
+        tools?: CanonicalTool[];
+    }): ConversationRoute;
+    complete(options: {
+        budgetExceededAction?: BudgetExceededAction;
+        budgetUsd?: number;
+        metadata?: Record<string, JsonValue>;
+        maxTokens?: number;
+        messages: CanonicalMessage[];
+        model?: string;
+        provider?: CanonicalProvider;
+        resolvedRoute?: {
+            attempts?: ConversationRoute['attempts'];
+            model: string;
+            provider: CanonicalProvider;
+        };
         providerOptions?: ProviderOptions;
+        requestId?: string;
         responseFormat?: ResponseFormat;
         sessionId?: string;
         signal?: AbortSignal;
@@ -23,11 +53,18 @@ export interface ConversationClient {
     stream(options: {
         budgetExceededAction?: BudgetExceededAction;
         budgetUsd?: number;
+        metadata?: Record<string, JsonValue>;
         maxTokens?: number;
         messages: CanonicalMessage[];
         model?: string;
         provider?: CanonicalProvider;
+        resolvedRoute?: {
+            attempts?: ConversationRoute['attempts'];
+            model: string;
+            provider: CanonicalProvider;
+        };
         providerOptions?: ProviderOptions;
+        requestId?: string;
         responseFormat?: ResponseFormat;
         sessionId?: string;
         signal?: AbortSignal;
@@ -36,6 +73,12 @@ export interface ConversationClient {
         toolChoice?: CanonicalToolChoice;
         tools?: CanonicalTool[];
     }): AsyncIterable<StreamChunk>;
+}
+/** Correlation and cancellation options for one conversation turn. */
+export interface ConversationRequestOptions {
+    metadata?: Record<string, JsonValue>;
+    requestId?: string;
+    signal?: AbortSignal;
 }
 /** Serializable conversation state persisted by session stores. */
 export interface ConversationSnapshot {
@@ -79,12 +122,20 @@ export interface ConversationOptions {
     sessionId?: string;
     store?: SessionStore<ConversationSnapshot>;
     system?: string;
+    toolCallDispatcherMetadata?: Record<string, JsonValue>;
     tenantId?: string;
     toolExecutionTimeoutMs?: number;
     toolValidation?: ToolValidationMode;
     toolChoice?: CanonicalToolChoice;
     tools?: CanonicalTool[];
+    toolCallDispatcher?: ToolCallDispatcher;
     onWarning?: (message: string) => void;
+    onCompaction?: (event: {
+        afterCount: number;
+        beforeCount: number;
+        removedCount: number;
+        toolRound: number;
+    }) => void;
 }
 /**
  * Stateful conversation wrapper that handles history, tool execution,
@@ -117,12 +168,15 @@ export declare class Conversation {
     private readonly sessionId;
     private readonly store;
     private system;
+    private readonly toolCallDispatcherMetadata;
     private readonly tenantId;
     private readonly toolExecutionTimeoutMs;
     private readonly toolValidation;
     private readonly toolChoice;
     private readonly tools;
+    private readonly toolCallDispatcher;
     private readonly onWarning;
+    private readonly onCompaction;
     private totalCachedTokens;
     private totalCostUSD;
     private totalInputTokens;
@@ -142,13 +196,9 @@ export declare class Conversation {
         reasoningTokens: number;
     };
     /** Appends a user turn, executes the model/tool loop, and commits state. */
-    send(input: CanonicalMessage['content'], options?: {
-        signal?: AbortSignal;
-    }): Promise<CanonicalResponse>;
+    send(input: CanonicalMessage['content'], options?: ConversationRequestOptions): Promise<CanonicalResponse>;
     /** Streams a user turn and commits state when the final `done` chunk arrives. */
-    sendStream(input: CanonicalMessage['content'], options?: {
-        signal?: AbortSignal;
-    }): CancelableStream<StreamChunk>;
+    sendStream(input: CanonicalMessage['content'], options?: ConversationRequestOptions): CancelableStream<StreamChunk>;
     /** Clears non-system history while preserving running totals. */
     clear(): void;
     /** Serializes the conversation for storage or transport. */
@@ -161,6 +211,7 @@ export declare class Conversation {
     static restore(client: ConversationClient, snapshot: ConversationSnapshot, options?: Omit<ConversationOptions, 'messages'>): Conversation;
     private applyUsage;
     private prepareMessages;
+    private prepareModelStepMessages;
     private runCompleteToolLoop;
     private runStreamToolLoop;
     private shouldContinueToolLoop;
@@ -169,6 +220,7 @@ export declare class Conversation {
     private executeToolCall;
     private finalizeExecution;
     private persist;
+    private resolveConversationRoute;
     private buildContextManagerContext;
     private buildRequestOptions;
     private resolveRemainingBudgetDecision;

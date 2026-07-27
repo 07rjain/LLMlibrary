@@ -98,10 +98,16 @@ export class PostgresUsageLogger {
           tenant_id TEXT NOT NULL DEFAULT '',
           session_id TEXT,
           bot_id TEXT,
-          routing_decision TEXT
+          routing_decision TEXT,
+          request_id TEXT,
+          metadata JSONB
         )`);
             await pool.query(`ALTER TABLE ${this.qualifiedTableName()}
          ADD COLUMN IF NOT EXISTS reasoning_tokens INTEGER NOT NULL DEFAULT 0`);
+            await pool.query(`ALTER TABLE ${this.qualifiedTableName()}
+         ADD COLUMN IF NOT EXISTS request_id TEXT`);
+            await pool.query(`ALTER TABLE ${this.qualifiedTableName()}
+         ADD COLUMN IF NOT EXISTS metadata JSONB`);
             await pool.query(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${this.tableName}_tenant_timestamp_idx`)} ON ${this.qualifiedTableName()} (tenant_id, timestamp DESC)`);
             await pool.query(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${this.tableName}_session_timestamp_idx`)} ON ${this.qualifiedTableName()} (session_id, timestamp DESC)`);
             await pool.query(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${this.tableName}_provider_model_timestamp_idx`)} ON ${this.qualifiedTableName()} (provider, model, timestamp DESC)`);
@@ -305,11 +311,13 @@ export class PostgresUsageLogger {
                 'session_id',
                 'bot_id',
                 'routing_decision',
+                'request_id',
+                'metadata',
             ];
             const values = [];
             const placeholders = batch.map((event, index) => {
                 const offset = index * columns.length;
-                values.push(event.timestamp, event.provider, event.model, event.inputTokens, event.outputTokens, event.cachedTokens, event.cachedReadTokens ?? 0, event.cachedWriteTokens ?? 0, event.reasoningTokens ?? 0, event.costUSD, event.finishReason, event.durationMs, normalizeTenantId(event.tenantId), event.sessionId ?? null, event.botId ?? null, event.routingDecision ?? null);
+                values.push(event.timestamp, event.provider, event.model, event.inputTokens, event.outputTokens, event.cachedTokens, event.cachedReadTokens ?? 0, event.cachedWriteTokens ?? 0, event.reasoningTokens ?? 0, event.costUSD, event.finishReason, event.durationMs, normalizeTenantId(event.tenantId), event.sessionId ?? null, event.botId ?? null, event.routingDecision ?? null, event.requestId ?? null, event.metadata !== undefined ? sanitizeForLogging(event.metadata) : null);
                 return `(${columns.map((_, columnIndex) => `$${offset + columnIndex + 1}`).join(', ')})`;
             });
             const pool = await this.getPool();
