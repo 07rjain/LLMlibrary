@@ -2,6 +2,12 @@
 
 All notable changes to this project will be tracked here.
 
+## 0.1.10 - 2026-07-27
+
+### refactor
+
+- keep the conversation's pre-resolved route internal to `LLMClient` instead of exposing it through the public request options
+
 ## 0.1.9 - 2026-07-25
 
 ### fix
