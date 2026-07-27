@@ -2,7 +2,7 @@
 
 All notable changes to this project will be tracked here.
 
-## Unreleased
+## 0.1.11 - 2026-07-28
 
 ### feat
 
