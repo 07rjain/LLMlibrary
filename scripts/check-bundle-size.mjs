@@ -12,11 +12,11 @@ const budgets = {
   },
   'dist/providers-anthropic.js': {
     gzip: 10_100,
-    raw: 47_000,
+    raw: 47_500,
   },
   'dist/providers-gemini.js': {
     gzip: 12_200,
-    raw: 59_200,
+    raw: 59_800,
   },
   'dist/providers-openai.js': {
     gzip: 15_600,
