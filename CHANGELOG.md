@@ -2,6 +2,16 @@
 
 All notable changes to this project will be tracked here.
 
+## Unreleased
+
+### feat
+
+- register OpenAI `gpt-5.6-luna` and Anthropic `claude-haiku-4-5-20251001` in the static model registry
+- keep the stable Gemini `gemini-3.1-flash-lite` metadata current and covered by registry tests
+- register the full OpenAI GPT-5.6 Sol/Terra/Luna family and `gpt-5.6` alias
+- register Anthropic `claude-opus-5`, Google `gemini-3.6-flash`, and Google `gemini-3.5-flash-lite`
+- omit deprecated Gemini sampling parameters for the newest Flash and Flash-Lite models
+
 ## 0.1.10 - 2026-07-27
 
 ### refactor

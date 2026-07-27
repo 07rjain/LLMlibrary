@@ -657,7 +657,10 @@ export function translateGeminiRequest(
   if (options.maxTokens !== undefined && !usesResponseFormatEnvelope) {
     generationConfig.maxOutputTokens = options.maxTokens;
   }
-  if (options.temperature !== undefined) {
+  if (
+    options.temperature !== undefined &&
+    supportsGeminiSamplingParameters(options.model)
+  ) {
     generationConfig.temperature = options.temperature;
   }
   if (googleOptions?.thinking) {
@@ -686,6 +689,10 @@ export function translateGeminiRequest(
   }
 
   return body;
+}
+
+function supportsGeminiSamplingParameters(model: string): boolean {
+  return model !== 'gemini-3.6-flash' && model !== 'gemini-3.5-flash-lite';
 }
 
 function translateGeminiThinkingConfig(
