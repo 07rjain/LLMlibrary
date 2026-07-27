@@ -2,6 +2,13 @@
 
 All notable changes to this project will be tracked here.
 
+## Unreleased
+
+### feat
+
+- register OpenAI `gpt-5.6-luna` and Anthropic `claude-haiku-4-5-20251001` in the static model registry
+- keep the stable Gemini `gemini-3.1-flash-lite` metadata current and covered by registry tests
+
 ## 0.1.10 - 2026-07-27
 
 ### refactor

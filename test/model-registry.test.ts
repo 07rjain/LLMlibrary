@@ -11,19 +11,51 @@ describe('ModelRegistry', () => {
     expect(modelIds).toEqual(
       expect.arrayContaining([
         'claude-fable-5',
+        'claude-haiku-4-5-20251001',
         'claude-sonnet-4-6',
         'gemini-3.5-flash',
         'gemini-3.1-pro-preview',
         'gemini-3.1-flash-lite',
         'gpt-5.5',
+        'gpt-5.6-luna',
       ]),
     );
     expect(registry.isSupported('claude-fable-5')).toBe(true);
+    expect(registry.isSupported('claude-haiku-4-5-20251001')).toBe(true);
     expect(registry.isSupported('claude-sonnet-4-6')).toBe(true);
     expect(registry.isSupported('gemini-3.5-flash')).toBe(true);
     expect(registry.isSupported('gemini-3.1-pro-preview')).toBe(true);
     expect(registry.isSupported('gemini-3.1-flash-lite')).toBe(true);
     expect(registry.isSupported('gpt-5.5')).toBe(true);
+    expect(registry.isSupported('gpt-5.6-luna')).toBe(true);
+  });
+
+  it('registers the current provider model IDs with their published metadata', () => {
+    const registry = new ModelRegistry();
+
+    expect(registry.get('gpt-5.6-luna')).toMatchObject({
+      contextWindow: 1050000,
+      inputPrice: 1,
+      outputPrice: 6,
+      provider: 'openai',
+      cacheReadPrice: 0.1,
+      cacheWritePrice: 1.25,
+    });
+    expect(registry.get('claude-haiku-4-5-20251001')).toMatchObject({
+      contextWindow: 200000,
+      inputPrice: 1,
+      outputPrice: 5,
+      provider: 'anthropic',
+      cacheReadPrice: 0.1,
+      cacheWritePrice: 1.25,
+    });
+    expect(registry.get('gemini-3.1-flash-lite')).toMatchObject({
+      contextWindow: 1048576,
+      inputPrice: 0.25,
+      outputPrice: 1.5,
+      provider: 'google',
+      cacheReadPrice: 0.025,
+    });
   });
 
   it('returns a model and validates capabilities', () => {
