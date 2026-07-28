@@ -247,6 +247,153 @@ describe('Anthropic adapter', () => {
     ).toThrow(ProviderCapabilityError);
   });
 
+  it.each([
+    { budgetTokens: 64, constraint: 'below_max_tokens' },
+    { budgetTokens: 65, constraint: 'below_max_tokens' },
+    { budgetTokens: 100, constraint: 'below_max_tokens' },
+    { budgetTokens: -1, constraint: 'non_negative' },
+    { budgetTokens: 1.5, constraint: 'safe_integer' },
+    { budgetTokens: NaN, constraint: 'safe_integer' },
+    { budgetTokens: Infinity, constraint: 'safe_integer' },
+    { budgetTokens: -Infinity, constraint: 'safe_integer' },
+  ])(
+    'rejects Anthropic thinking budget $budgetTokens with $constraint',
+    ({ budgetTokens, constraint }) => {
+      let error: unknown;
+      try {
+        translateAnthropicRequest({
+          maxTokens: 64,
+          messages: [{ content: 'Think carefully.', role: 'user' }],
+          model: 'claude-sonnet-4-6',
+          providerOptions: {
+            anthropic: {
+              thinking: {
+                budgetTokens,
+                type: 'enabled',
+              },
+            },
+          },
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeInstanceOf(ProviderCapabilityError);
+      expect(error).toMatchObject({
+        details: expect.objectContaining({ constraint }),
+      });
+    },
+  );
+
+  it('accepts non-negative safe-integer Anthropic thinking budgets below maxTokens', () => {
+    for (const budgetTokens of [0, 10, 63]) {
+      const request = translateAnthropicRequest({
+        maxTokens: 64,
+        messages: [{ content: 'Think carefully.', role: 'user' }],
+        model: 'claude-sonnet-4-6',
+        providerOptions: {
+          anthropic: {
+            thinking: {
+              budgetTokens,
+              type: 'enabled',
+            },
+          },
+        },
+      });
+
+      expect(request.thinking).toMatchObject({
+        budget_tokens: budgetTokens,
+        type: 'enabled',
+      });
+    }
+  });
+
+  it('rejects an Anthropic thinking budget when maxTokens is missing', () => {
+    expect(() =>
+      translateAnthropicRequest({
+        maxTokens: undefined as unknown as number,
+        messages: [{ content: 'Think carefully.', role: 'user' }],
+        model: 'claude-sonnet-4-6',
+        providerOptions: {
+          anthropic: {
+            thinking: {
+              budgetTokens: 10,
+              type: 'enabled',
+            },
+          },
+        },
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          constraint: 'requires_max_tokens',
+        }),
+      }),
+    );
+  });
+
+  it.each(['adaptive', 'disabled'] as const)(
+    'rejects Anthropic thinking budgets for %s mode',
+    type => {
+      expect(() =>
+        translateAnthropicRequest({
+          maxTokens: 64,
+          messages: [{ content: 'Think carefully.', role: 'user' }],
+          model: 'claude-sonnet-4-6',
+          providerOptions: {
+            anthropic: {
+              thinking: {
+                budgetTokens: 10,
+                type,
+              },
+            },
+          },
+        }),
+      ).toThrowError(
+        expect.objectContaining({
+          details: expect.objectContaining({
+            constraint: 'enabled_only',
+          }),
+        }),
+      );
+    },
+  );
+
+  it.each(['adaptive', 'disabled'] as const)(
+    'does not emit budget_tokens for %s mode without a budget',
+    type => {
+      const request = translateAnthropicRequest({
+        maxTokens: 64,
+        messages: [{ content: 'Think carefully.', role: 'user' }],
+        model: 'claude-sonnet-4-6',
+        providerOptions: {
+          anthropic: {
+            thinking: { type },
+          },
+        },
+      });
+
+      expect(request.thinking).toEqual({ type });
+      expect(request.thinking).not.toHaveProperty('budget_tokens');
+    },
+  );
+
+  it('preserves enabled thinking without a budget for compatibility', () => {
+    const request = translateAnthropicRequest({
+      maxTokens: 64,
+      messages: [{ content: 'Think carefully.', role: 'user' }],
+      model: 'claude-sonnet-4-6',
+      providerOptions: {
+        anthropic: {
+          thinking: { type: 'enabled' },
+        },
+      },
+    });
+
+    expect(request.thinking).toEqual({ type: 'enabled' });
+    expect(request.thinking).not.toHaveProperty('budget_tokens');
+  });
+
   it('maps cache_control onto cacheable Anthropic content blocks and tool definitions', () => {
     const request = translateAnthropicRequest({
       maxTokens: 64,
@@ -709,6 +856,41 @@ describe('Anthropic adapter', () => {
         model: 'mock-no-capabilities',
       }).next(),
     ).rejects.toBeInstanceOf(ProviderCapabilityError);
+
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid Anthropic thinking budgets before complete or stream fetches', async () => {
+    const fetchImplementation = vi.fn();
+    const adapter = new AnthropicAdapter({
+      apiKey: 'anthropic-key',
+      fetchImplementation,
+    });
+    const invalidThinkingOptions = [
+      { budgetTokens: NaN, type: 'enabled' as const },
+      { budgetTokens: 64, type: 'enabled' as const },
+      { budgetTokens: 10, type: 'adaptive' as const },
+    ];
+
+    for (const thinking of invalidThinkingOptions) {
+      const request = {
+        maxTokens: 64,
+        messages: [{ content: 'Think carefully.', role: 'user' as const }],
+        model: 'claude-sonnet-4-6',
+        providerOptions: {
+          anthropic: {
+            thinking,
+          },
+        },
+      };
+
+      await expect(adapter.complete(request)).rejects.toBeInstanceOf(
+        ProviderCapabilityError,
+      );
+      await expect(adapter.stream(request).next()).rejects.toBeInstanceOf(
+        ProviderCapabilityError,
+      );
+    }
 
     expect(fetchImplementation).not.toHaveBeenCalled();
   });

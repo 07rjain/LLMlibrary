@@ -417,30 +417,40 @@ function translateAnthropicThinking(
   maxTokens: number | undefined,
   model: string,
 ): Record<string, unknown> {
-  if (
-    thinking.type === 'enabled' &&
-    thinking.budgetTokens !== undefined &&
-    maxTokens !== undefined &&
-    thinking.budgetTokens >= maxTokens
-  ) {
-    throw new ProviderCapabilityError(
-      'Anthropic thinking.budgetTokens must be less than maxTokens.',
-      {
+  const budgetTokens = thinking.budgetTokens;
+
+  if (budgetTokens !== undefined) {
+    const constraint =
+      thinking.type !== 'enabled'
+        ? 'enabled_only'
+        : !Number.isSafeInteger(budgetTokens)
+          ? 'safe_integer'
+          : budgetTokens < 0
+            ? 'non_negative'
+            : maxTokens === undefined
+              ? 'requires_max_tokens'
+              : budgetTokens >= maxTokens
+                ? 'below_max_tokens'
+                : undefined;
+
+    if (constraint) {
+      throw new ProviderCapabilityError('Invalid thinking budget.', {
         details: {
-          budgetTokens: thinking.budgetTokens,
+          budgetTokens,
+          constraint,
           maxTokens,
         },
         model,
         provider: 'anthropic',
-      },
-    );
+      });
+    }
   }
 
   const body: Record<string, unknown> = {
     type: thinking.type,
   };
-  if (thinking.budgetTokens !== undefined) {
-    body.budget_tokens = thinking.budgetTokens;
+  if (budgetTokens !== undefined) {
+    body.budget_tokens = budgetTokens;
   }
   if (thinking.display !== undefined) {
     body.display = thinking.display;
