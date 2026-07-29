@@ -159,6 +159,7 @@ const client = LLMClient.fromEnv({
 const sessionApi = createSessionApi({
   client,
   sessionStore,
+  tenantResolution: 'single-tenant',
   conversationDefaults: {
     system: 'Be concise.',
   },
@@ -168,9 +169,7 @@ const response = await sessionApi.handle(
   new Request('https://example.test/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      sessionId: 'support-123',
-    }),
+    body: JSON.stringify({}),
   }),
 );
 ```
@@ -180,6 +179,10 @@ For public or multi-tenant routes, keep conversation policy in server-side
 `provider`, `providerOptions`, `responseFormat`, `budgetUsd`, `toolValidation`,
 `maxToolRounds`, and `toolExecutionTimeoutMs` are ignored unless the Session API
 is configured with an explicit `allowClientOverrides` allowlist.
+
+The HTTP API generates session IDs and requires existing sessions on message
+routes by default. Use `allowClientSessionIds: true` or
+`allowImplicitSessionCreate: true` only for trusted compatibility paths.
 
 ## Session API Endpoints
 
@@ -215,7 +218,9 @@ const sessionApi = createSessionApi({
 });
 ```
 
-This makes it practical to keep tenant-specific data separation inside your own application rules instead of hard-coding auth into the library.
+The default `trusted-context` mode fails with `403 tenant_context_required`
+when middleware does not supply a tenant ID. Explicit single-tenant
+applications can instead set `tenantResolution: 'single-tenant'`.
 
 ## When To Use Which Layer
 

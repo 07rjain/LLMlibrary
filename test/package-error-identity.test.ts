@@ -29,6 +29,8 @@ const openai = await import('unified-llm-client/providers/openai');
 assert.equal(errors.ProviderCapabilityError, root.ProviderCapabilityError);
 assert.equal(models.ModelRegistry, root.ModelRegistry);
 assert.equal(models.defaultModelPrices, root.defaultModelPrices);
+assert.equal(sessionApiModule.SessionApi, root.SessionApi);
+assert.equal(sessionApiModule.createSessionApi, root.createSessionApi);
 
 async function capture(operation) {
   try {
@@ -206,6 +208,26 @@ await capture(() =>
   }),
 );
 
+let metadataFetches = 0;
+const metadataClient = new clientModule.LLMClient({
+  openaiApiKey: 'test',
+  fetchImplementation: async () => {
+    metadataFetches += 1;
+    throw new Error('unexpected fetch');
+  },
+});
+const metadataError = await capture(() =>
+  metadataClient.complete({
+    metadata: { invalid: 1n },
+    messages: [{ role: 'user', content: 'x' }],
+    model: 'gpt-4o-mini',
+    provider: 'openai',
+  }),
+);
+assert.equal(metadataError.details.code, 'invalid_metadata');
+assert.equal(metadataError.statusCode, 400);
+assert.equal(metadataFetches, 0);
+
 const snapshot = {
   createdAt: '2026-01-01T00:00:00.000Z',
   messages: [],
@@ -238,6 +260,7 @@ const sessionClient = {
 const api = sessionApiModule.createSessionApi({
   client: sessionClient,
   sessionStore,
+  tenantResolution: 'single-tenant',
 });
 const sessionResponse = await api.handle(
   new Request('https://example.test/sessions/identity-test?include=usage'),
@@ -263,6 +286,8 @@ const assert = require('node:assert/strict');
   assert.equal(errors.ProviderCapabilityError, root.ProviderCapabilityError);
   assert.equal(models.ModelRegistry, root.ModelRegistry);
   assert.equal(models.defaultModelPrices, root.defaultModelPrices);
+  assert.equal(sessionApiModule.SessionApi, root.SessionApi);
+  assert.equal(sessionApiModule.createSessionApi, root.createSessionApi);
 
   async function capture(operation) {
     try {
@@ -440,6 +465,26 @@ const assert = require('node:assert/strict');
     }),
   );
 
+  let metadataFetches = 0;
+  const metadataClient = new clientModule.LLMClient({
+    openaiApiKey: 'test',
+    fetchImplementation: async () => {
+      metadataFetches += 1;
+      throw new Error('unexpected fetch');
+    },
+  });
+  const metadataError = await capture(() =>
+    metadataClient.complete({
+      metadata: { invalid: 1n },
+      messages: [{ role: 'user', content: 'x' }],
+      model: 'gpt-4o-mini',
+      provider: 'openai',
+    }),
+  );
+  assert.equal(metadataError.details.code, 'invalid_metadata');
+  assert.equal(metadataError.statusCode, 400);
+  assert.equal(metadataFetches, 0);
+
   const snapshot = {
     createdAt: '2026-01-01T00:00:00.000Z',
     messages: [],
@@ -472,6 +517,7 @@ const assert = require('node:assert/strict');
   const api = sessionApiModule.createSessionApi({
     client: sessionClient,
     sessionStore,
+    tenantResolution: 'single-tenant',
   });
   const sessionResponse = await api.handle(
     new Request('https://example.test/sessions/identity-test?include=usage'),

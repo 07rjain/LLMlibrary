@@ -9,7 +9,7 @@ export * from './providers/gemini.js';
 export * from './providers/openai.js';
 export * from './retrieval.js';
 export * from './router.js';
-export * from './session-api.js';
+export * from 'unified-llm-client/session-api';
 export * from './session-store.js';
 export * from './tools.js';
 export * from './types.js';

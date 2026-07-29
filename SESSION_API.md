@@ -27,6 +27,7 @@ const client = LLMClient.fromEnv({
 const sessionApi = createSessionApi({
   client,
   sessionStore,
+  tenantResolution: 'single-tenant',
   conversationDefaults: {
     model: 'gpt-4o',
     system: 'Be concise.',
@@ -41,6 +42,15 @@ const sessionApi = createSessionApi({
 - Conversation policy fields are server-controlled by default. Request body fields such as `system`, `model`, `provider`, `providerOptions`, `responseFormat`, `budgetUsd`, `toolValidation`, `maxToolRounds`, and `toolExecutionTimeoutMs` are ignored unless `allowClientOverrides` explicitly allows them.
 - `middleware` can resolve tenant identity or reject requests early.
 - `withRequestContext(context, execute)` is the hook for RLS-style request scoping. Use it to set request-local DB session variables before store/client work runs.
+- JSON POST routes accept `application/json` and `application/*+json`. Bodies
+  are limited to 1 MiB by default (`maxBodyBytes`) and return sanitized `400`,
+  `413`, or `415` errors before store or client mutation.
+- Session IDs are server-owned by default. `allowClientSessionIds: true` is a
+  trusted compatibility option; supplied and route IDs must match
+  `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`.
+- Message routes require an existing session and return `404` otherwise.
+  `allowImplicitSessionCreate: true` restores the legacy HTTP behavior without
+  changing the SDK `conversation()` restore-or-create contract.
 
 ## Endpoints
 
@@ -52,12 +62,15 @@ Example body:
 
 ```json
 {
-  "sessionId": "support-123",
   "messages": [
     { "role": "user", "content": "Initial history item" }
   ]
 }
 ```
+
+The response contains the server-generated ID in `session.id`. With
+`allowClientSessionIds: true`, a sequential duplicate supplied ID returns
+`409 session_already_exists` without replacing the first session.
 
 `system` and other policy fields should normally be supplied through
 `conversationDefaults` on the server. If a trusted internal caller must set one
@@ -91,6 +104,10 @@ Example body:
 
 `requestId` and JSON-safe `metadata` are optional and are forwarded to the
 conversation, stream events, context callbacks, and usage logger.
+Metadata is cloned and accepts only null, booleans, strings, finite numbers,
+arrays, and plain/null-prototype objects. Cycles, accessors, custom prototypes,
+undefined, BigInt, symbols, functions, and non-finite numbers reject before
+dispatch.
 
 If `stream=true` is passed in the query string or request body, the endpoint returns `text/event-stream`.
 
@@ -114,6 +131,10 @@ Supported query parameters:
   Meaning: zero-based offset encoded as a string
 - `limit`
   Range: `1..100`
+- `direction`
+  `forward` (default) or `backward`. A backward cursor is an exclusive upper
+  bound; `cursor=4&limit=2&direction=backward` returns indices 2 and 3 in
+  chronological order. Pages may include `previousCursor` and `nextCursor`.
 
 ### `DELETE /sessions/{id}`
 
@@ -138,10 +159,12 @@ Example body:
 ```json
 {
   "fromMessageIndex": 3,
-  "newSessionId": "support-123-branch",
   "resetUsage": true
 }
 ```
+
+Fork IDs are server-generated unless trusted callers enable
+`allowClientSessionIds`.
 
 Notes:
 
@@ -209,6 +232,10 @@ const sessionApi = createSessionApi({
 Operational rule:
 
 - By default, `SessionApi` uses `tenantResolution: 'trusted-context'`.
+- Trusted-context mode returns `403 tenant_context_required` before store
+  access when middleware does not provide a tenant ID.
+- Set `tenantResolution: 'single-tenant'` explicitly for a global,
+  non-tenant-scoped deployment.
 - Request-supplied `tenantId` values in query/body parameters are rejected by default.
 - Resolve tenant ids in trusted middleware. Use `tenantResolution: 'legacy-request-tenant'` only as an explicit compatibility mode for non-public or already-authenticated integrations.
 

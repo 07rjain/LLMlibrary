@@ -15,6 +15,14 @@ The values are copied to the corresponding `UsageEvent` sent to the configured
 usage logger. Metadata is application context; it is not sent to providers.
 `requestId` is also copied to v2 stream events.
 
+Metadata is validated and cloned before dispatch. It may contain only null,
+booleans, strings, finite numbers, arrays, and plain or null-prototype objects.
+Undefined values, BigInt, symbols, functions, non-finite numbers, cycles,
+custom prototypes, symbol keys, accessors, and excessively deep graphs reject
+with a typed HTTP-400-compatible `ProviderCapabilityError`. Accessors are
+inspected without invoking getters, and later caller mutation cannot change the
+captured request metadata.
+
 Conversation turns accept the same options:
 
 ```ts

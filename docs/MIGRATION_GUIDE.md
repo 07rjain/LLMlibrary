@@ -103,6 +103,12 @@ await conversation.send('What is the weather in Berlin?');
 - If you currently store raw provider transcripts yourself, move that persistence boundary to `Conversation` plus a `SessionStore`.
 - If you need HTTP endpoints, mount `createSessionApi()` and treat `sessionId` as the provider-agnostic equivalent of a conversation or `previous_response_id` chain.
 - If `DATABASE_URL` is present, `LLMClient.fromEnv()` will auto-wire `PostgresSessionStore.fromEnv()` unless you pass a custom store.
+- Session API IDs are now server-owned by default, unknown-session message
+  routes return `404`, and trusted-context tenancy fails closed without a
+  middleware tenant. Trusted compatibility callers may set
+  `allowClientSessionIds: true` or `allowImplicitSessionCreate: true`;
+  single-tenant deployments should explicitly set
+  `tenantResolution: 'single-tenant'`.
 
 ## Logging and Cost Tracking Migration
 
