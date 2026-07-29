@@ -1,5 +1,6 @@
 import { SlidingWindowStrategy, type ContextManager } from './context-manager.js';
 import { LLMError, ProviderCapabilityError } from 'unified-llm-client/errors';
+import { validateAndCloneMetadata } from './json-metadata.js';
 import { sanitizeForLogging } from './redaction.js';
 
 import type { LLMClient } from './client.js';
@@ -32,6 +33,8 @@ type TenantResolutionMode =
   | 'trusted-context';
 
 const REDACTION_MARKER = '[REDACTED]';
+const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 /** Request-scoped metadata passed through session API middleware and handlers. */
 export interface SessionApiRequestContext {
@@ -67,6 +70,17 @@ export interface SessionApiOptions {
    * @default false (deny all client overrides)
    */
   allowClientOverrides?: ClientOverridePolicy;
+  /**
+   * Allows trusted callers to choose session and fork ids. Server-owned ids
+   * are the secure default.
+   * @default false
+   */
+  allowClientSessionIds?: boolean;
+  /**
+   * Preserves the legacy restore-or-create behavior for message endpoints.
+   * @default false
+   */
+  allowImplicitSessionCreate?: boolean;
   basePath?: string;
   client: LLMClient;
   conversationDefaults?: SessionConversationConfig;
@@ -80,6 +94,8 @@ export interface SessionApiOptions {
    */
   exposeToolResults?: boolean;
   middleware?: SessionApiMiddleware[];
+  /** Maximum UTF-8 request-body size accepted by JSON POST routes. */
+  maxBodyBytes?: number;
   sessionStore?: SessionStore<ConversationSnapshot>;
   tenantResolution?: TenantResolutionMode;
   tools?: CanonicalTool[];
@@ -140,6 +156,7 @@ export interface SessionForkRequest {
 export interface SessionPage<TItem> {
   items: TItem[];
   nextCursor?: string;
+  previousCursor?: string;
 }
 
 /** Normalized session view returned by `SessionApi`. */
@@ -178,12 +195,15 @@ export interface SessionView {
  */
 export class SessionApi {
   private readonly allowedClientOverrides: ReadonlySet<SessionConversationConfigField>;
+  private readonly allowClientSessionIds: boolean;
+  private readonly allowImplicitSessionCreate: boolean;
   private readonly basePath: string;
   private readonly client: LLMClient;
   private readonly contextManager: ContextManager | undefined;
   private readonly conversationDefaults: SessionConversationConfig;
   private readonly exposeToolResults: boolean;
   private readonly middleware: SessionApiMiddleware[];
+  private readonly maxBodyBytes: number;
   private readonly sessionStore: SessionStore<ConversationSnapshot>;
   private readonly tenantResolution: TenantResolutionMode;
   private readonly tools: CanonicalTool[] | undefined;
@@ -200,12 +220,16 @@ export class SessionApi {
     }
 
     this.allowedClientOverrides = resolveClientOverridePolicy(options.allowClientOverrides);
+    this.allowClientSessionIds = options.allowClientSessionIds ?? false;
+    this.allowImplicitSessionCreate =
+      options.allowImplicitSessionCreate ?? false;
     this.basePath = normalizeBasePath(options.basePath ?? '/sessions');
     this.client = options.client;
     this.contextManager = options.contextManager;
     this.conversationDefaults = { ...(options.conversationDefaults ?? {}) };
     this.exposeToolResults = options.exposeToolResults ?? false;
     this.middleware = [...(options.middleware ?? [])];
+    this.maxBodyBytes = resolveMaxBodyBytes(options.maxBodyBytes);
     this.sessionStore = sessionStore;
     this.tenantResolution = options.tenantResolution ?? 'trusted-context';
     this.tools = options.tools;
@@ -220,6 +244,7 @@ export class SessionApi {
         return jsonResponse(
           {
             error: {
+              code: 'route_not_found',
               message: `No session API route matched ${request.method} ${url.pathname}.`,
               name: 'NotFoundError',
             },
@@ -247,6 +272,8 @@ export class SessionApi {
     route: MatchedRoute,
     requestContext: SessionApiRequestContext,
   ): Promise<Response> {
+    this.assertTenantContext(requestContext);
+
     if (route.type === 'collection') {
       if (request.method === 'GET') {
         return this.handleListSessions(url, requestContext);
@@ -315,9 +342,20 @@ export class SessionApi {
     request: Request,
     requestContext: SessionApiRequestContext,
   ): Promise<Response> {
-    const body = await parseJsonBody<SessionCreateRequest>(request);
-    const history = normalizeHistoryInput(body.messages ?? [], body.system);
+    const body = await parseJsonBody<SessionCreateRequest>(
+      request,
+      this.maxBodyBytes,
+    );
     const tenantId = this.resolveTenantId(requestContext, body.tenantId);
+    const sessionId = this.resolveNewSessionId(body.sessionId);
+    if (await this.sessionStore.get(sessionId, tenantId)) {
+      throw new HttpError(
+        409,
+        'A session with that id already exists.',
+        'session_already_exists',
+      );
+    }
+    const history = normalizeHistoryInput(body.messages ?? [], body.system);
     const conversationOptions = this.buildConversationOptions(body, tenantId);
     const conversation = await this.client.conversation({
       ...conversationOptions,
@@ -325,7 +363,7 @@ export class SessionApi {
       ...(history.system !== undefined && this.allowedClientOverrides.has('system')
         ? { system: history.system }
         : {}),
-      ...(body.sessionId !== undefined ? { sessionId: body.sessionId } : {}),
+      sessionId,
     });
     const snapshot = conversation.serialise();
     await this.sessionStore.set(snapshot.sessionId, snapshot, {
@@ -350,8 +388,18 @@ export class SessionApi {
     url: URL,
     requestContext: SessionApiRequestContext,
   ): Promise<Response> {
-    const body = await parseJsonBody<SessionMessageRequest>(request);
+    const body = await parseJsonBody<SessionMessageRequest>(
+      request,
+      this.maxBodyBytes,
+    );
     const tenantId = this.resolveTenantId(requestContext, body.tenantId);
+    if (!this.allowImplicitSessionCreate) {
+      await this.requireSession(sessionId, tenantId);
+    }
+    const metadata =
+      body.metadata === undefined
+        ? undefined
+        : validateAndCloneMetadata(body.metadata);
     const conversation = await this.client.conversation({
       ...this.buildConversationOptions(body, tenantId),
       sessionId,
@@ -366,12 +414,12 @@ export class SessionApi {
         body.content,
         request.signal,
         body.requestId,
-        body.metadata,
+        metadata,
       );
     }
 
     const response = await conversation.send(body.content, {
-      ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
+      ...(metadata !== undefined ? { metadata } : {}),
       ...(body.requestId !== undefined ? { requestId: body.requestId } : {}),
       signal: request.signal,
     });
@@ -415,10 +463,12 @@ export class SessionApi {
       snapshotToMessages(record.snapshot),
       this.exposeToolResults,
     );
+    const direction = parseDirection(url.searchParams.get('direction'));
     const page = paginateItems(
       history,
       parseCursor(url.searchParams.get('cursor')),
       parseLimit(url.searchParams.get('limit'), 50),
+      direction,
     );
 
     return jsonResponse({
@@ -452,7 +502,11 @@ export class SessionApi {
     request: Request,
     requestContext: SessionApiRequestContext,
   ): Promise<Response> {
-    const body = await parseJsonBody<SessionCompactRequest>(request);
+    const body = await parseJsonBody<SessionCompactRequest>(
+      request,
+      this.maxBodyBytes,
+      true,
+    );
     const tenantId = this.resolveTenantId(requestContext, body.tenantId);
     const record = await this.requireSession(sessionId, tenantId);
     const contextManager =
@@ -507,7 +561,10 @@ export class SessionApi {
     request: Request,
     requestContext: SessionApiRequestContext,
   ): Promise<Response> {
-    const body = await parseJsonBody<SessionForkRequest>(request);
+    const body = await parseJsonBody<SessionForkRequest>(
+      request,
+      this.maxBodyBytes,
+    );
     const tenantId = this.resolveTenantId(requestContext, body.tenantId);
     const record = await this.requireSession(sessionId, tenantId);
     const fullHistory = snapshotToMessages(record.snapshot);
@@ -526,7 +583,14 @@ export class SessionApi {
     const forkedHistory = fullHistory.slice(0, body.fromMessageIndex + 1);
     const forkedParts = splitHistoryForSnapshot(forkedHistory);
     const timestamp = new Date().toISOString();
-    const newSessionId = body.newSessionId ?? createSessionId();
+    const newSessionId = this.resolveNewSessionId(body.newSessionId);
+    if (await this.sessionStore.get(newSessionId, tenantId)) {
+      throw new HttpError(
+        409,
+        'A session with that id already exists.',
+        'session_already_exists',
+      );
+    }
     const resetUsage = body.resetUsage ?? true;
     const forkedSnapshotBase: ConversationSnapshot = {
       ...cloneSnapshot(record.snapshot),
@@ -597,10 +661,12 @@ export class SessionApi {
 
       return true;
     });
+    const direction = parseDirection(url.searchParams.get('direction'));
     const page = paginateItems(
       filtered,
       parseCursor(url.searchParams.get('cursor')),
       parseLimit(url.searchParams.get('limit'), 20),
+      direction,
     );
 
     return jsonResponse({
@@ -1004,6 +1070,25 @@ export class SessionApi {
     return this.withRequestContext(context, execute);
   }
 
+  private resolveNewSessionId(requestedSessionId: unknown): string {
+    if (requestedSessionId === undefined) {
+      const sessionId = createSessionId();
+      validateSessionId(sessionId);
+      return sessionId;
+    }
+
+    if (!this.allowClientSessionIds) {
+      throw new HttpError(
+        400,
+        'Client-supplied session ids are not allowed.',
+        'client_session_id_not_allowed',
+      );
+    }
+
+    validateSessionId(requestedSessionId);
+    return requestedSessionId;
+  }
+
   private resolveTenantId(
     requestContext: SessionApiRequestContext,
     requestedTenantId: string | undefined,
@@ -1019,7 +1104,35 @@ export class SessionApi {
       );
     }
 
+    if (this.tenantResolution === 'single-tenant') {
+      return undefined;
+    }
+
+    if (
+      this.tenantResolution === 'trusted-context' &&
+      requestContext.tenantId === undefined
+    ) {
+      throw new HttpError(
+        403,
+        'Trusted tenant context is required.',
+        'tenant_context_required',
+      );
+    }
+
     return requestContext.tenantId;
+  }
+
+  private assertTenantContext(requestContext: SessionApiRequestContext): void {
+    if (
+      this.tenantResolution === 'trusted-context' &&
+      requestContext.tenantId === undefined
+    ) {
+      throw new HttpError(
+        403,
+        'Trusted tenant context is required.',
+        'tenant_context_required',
+      );
+    }
   }
 }
 
@@ -1035,11 +1148,17 @@ interface MatchedRoute {
 }
 
 class HttpError extends Error {
+  readonly code: string;
   readonly status: number;
 
-  constructor(status: number, message: string) {
+  constructor(
+    status: number,
+    message: string,
+    code: string = `http_${status}`,
+  ) {
     super(message);
     this.name = 'HttpError';
+    this.code = code;
     this.status = status;
   }
 }
@@ -1058,10 +1177,20 @@ function matchRoute(basePath: string, pathname: string): MatchedRoute | null {
   }
 
   const segments = normalizedPath.slice(basePath.length + 1).split('/');
-  const sessionId = decodeURIComponent(segments[0] ?? '');
+  let sessionId: string;
+  try {
+    sessionId = decodeURIComponent(segments[0] ?? '');
+  } catch {
+    throw new HttpError(
+      400,
+      'Session id encoding is invalid.',
+      'invalid_session_id',
+    );
+  }
   if (!sessionId) {
     return null;
   }
+  validateSessionId(sessionId);
 
   if (segments.length === 1) {
     return {
@@ -1119,20 +1248,116 @@ function trimTrailingSlash(pathname: string): string {
   return pathname;
 }
 
-async function parseJsonBody<TValue>(request: Request): Promise<TValue> {
-  const text = await request.text();
-  if (text.trim().length === 0) {
-    return {} as TValue;
-  }
-
-  try {
-    return JSON.parse(text) as TValue;
-  } catch (error) {
+async function parseJsonBody<TValue>(
+  request: Request,
+  maxBodyBytes: number,
+  allowEmpty: boolean = false,
+): Promise<TValue> {
+  const contentType = request.headers
+    .get('content-type')
+    ?.split(';', 1)[0]
+    ?.trim()
+    .toLowerCase();
+  if (
+    contentType !== 'application/json' &&
+    !(contentType?.startsWith('application/') && contentType.endsWith('+json'))
+  ) {
     throw new HttpError(
-      400,
-      `Request body must be valid JSON.${error instanceof Error ? ` ${error.message}` : ''}`,
+      415,
+      'Request content type must be application/json.',
+      'unsupported_media_type',
     );
   }
+
+  const text = await readBoundedBody(request, maxBodyBytes);
+  if (text.trim().length === 0) {
+    if (allowEmpty) {
+      return {} as TValue;
+    }
+    throw new HttpError(
+      400,
+      'Request body must be a JSON object.',
+      'invalid_json_body',
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new HttpError(
+      400,
+      'Request body must be valid JSON.',
+      'invalid_json_body',
+    );
+  }
+
+  if (!isPlainObject(parsed)) {
+    throw new HttpError(
+      400,
+      'Request body must be a JSON object.',
+      'invalid_json_body',
+    );
+  }
+
+  return parsed as TValue;
+}
+
+async function readBoundedBody(
+  request: Request,
+  maxBodyBytes: number,
+): Promise<string> {
+  const contentLength = request.headers.get('content-length');
+  if (
+    contentLength !== null &&
+    Number.isFinite(Number(contentLength)) &&
+    Number(contentLength) > maxBodyBytes
+  ) {
+    throw new HttpError(
+      413,
+      'Request body is too large.',
+      'request_body_too_large',
+    );
+  }
+
+  if (!request.body) {
+    return '';
+  }
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let byteLength = 0;
+  let text = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      byteLength += value.byteLength;
+      if (byteLength > maxBodyBytes) {
+        await reader.cancel();
+        throw new HttpError(
+          413,
+          'Request body is too large.',
+          'request_body_too_large',
+        );
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function parseInclude(searchParams: URLSearchParams, defaults: string[] = []): Set<string> {
@@ -1150,9 +1375,9 @@ function parseInclude(searchParams: URLSearchParams, defaults: string[] = []): S
   return include;
 }
 
-function parseCursor(cursor: null | string): number {
+function parseCursor(cursor: null | string): number | undefined {
   if (!cursor) {
-    return 0;
+    return undefined;
   }
 
   const parsed = Number(cursor);
@@ -1161,6 +1386,22 @@ function parseCursor(cursor: null | string): number {
   }
 
   return parsed;
+}
+
+type PaginationDirection = 'backward' | 'forward';
+
+function parseDirection(direction: null | string): PaginationDirection {
+  if (!direction || direction === 'forward') {
+    return 'forward';
+  }
+  if (direction === 'backward') {
+    return 'backward';
+  }
+  throw new HttpError(
+    400,
+    'direction must be forward or backward.',
+    'invalid_direction',
+  );
 }
 
 function parseLimit(limit: null | string, defaultLimit: number): number {
@@ -1178,15 +1419,27 @@ function parseLimit(limit: null | string, defaultLimit: number): number {
 
 function paginateItems<TItem>(
   items: TItem[],
-  cursor: number,
+  cursor: number | undefined,
   limit: number,
+  direction: PaginationDirection,
 ): SessionPage<TItem> {
-  const pageItems = items.slice(cursor, cursor + limit);
-  const nextCursor = cursor + limit < items.length ? String(cursor + limit) : undefined;
+  if (direction === 'backward') {
+    const end = Math.min(cursor ?? items.length, items.length);
+    const start = Math.max(0, end - limit);
+    return {
+      items: items.slice(start, end),
+      ...(start > 0 ? { nextCursor: String(start) } : {}),
+      ...(end < items.length ? { previousCursor: String(end) } : {}),
+    };
+  }
+
+  const start = Math.min(cursor ?? 0, items.length);
+  const end = Math.min(start + limit, items.length);
 
   return {
-    items: pageItems,
-    ...(nextCursor !== undefined ? { nextCursor } : {}),
+    items: items.slice(start, end),
+    ...(end < items.length ? { nextCursor: String(end) } : {}),
+    ...(start > 0 ? { previousCursor: String(start) } : {}),
   };
 }
 
@@ -1326,6 +1579,38 @@ function createSessionId(): string {
   return `session_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function validateSessionId(sessionId: unknown): asserts sessionId is string {
+  if (
+    typeof sessionId !== 'string' ||
+    !SESSION_ID_PATTERN.test(sessionId) ||
+    sessionId.includes('..')
+  ) {
+    throw new HttpError(
+      400,
+      'Session id has an invalid format.',
+      'invalid_session_id',
+    );
+  }
+}
+
+function resolveMaxBodyBytes(value: number | undefined): number {
+  const resolved = value ?? DEFAULT_MAX_BODY_BYTES;
+  if (!Number.isSafeInteger(resolved) || resolved <= 0) {
+    throw new ProviderCapabilityError(
+      'maxBodyBytes must be a positive safe integer.',
+      {
+        details: {
+          code: 'invalid_session_api_option',
+          constraint: 'positive_safe_integer',
+          option: 'maxBodyBytes',
+        },
+        statusCode: 400,
+      },
+    );
+  }
+  return resolved;
+}
+
 function requireRouteSessionId(route: MatchedRoute): string {
   if (!route.sessionId) {
     throw new HttpError(500, `Route ${route.path} is missing a session id.`);
@@ -1358,6 +1643,7 @@ function streamEventData(
 }
 
 interface PublicSessionApiError {
+  code?: string;
   message: string;
   name: string;
   provider?: CanonicalProvider;
@@ -1368,13 +1654,19 @@ interface PublicSessionApiError {
 function serializePublicError(error: unknown): PublicSessionApiError {
   if (error instanceof HttpError) {
     return {
+      code: error.code,
       message: error.message,
       name: error.name,
     };
   }
 
   if (error instanceof LLMError) {
+    const code =
+      typeof error.details?.code === 'string'
+        ? error.details.code
+        : 'llm_error';
     return {
+      code,
       message: safeLlmErrorMessage(error),
       name: error.name,
       ...(error.provider !== undefined ? { provider: error.provider } : {}),

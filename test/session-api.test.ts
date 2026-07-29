@@ -2,13 +2,21 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { SlidingWindowStrategy } from '../src/context-manager.js';
 import { LLMError, ProviderCapabilityError } from '../src/errors.js';
-import { createSessionApi } from '../src/session-api.js';
+import { createSessionApi as createSessionApiSource } from '../src/session-api.js';
 import { InMemorySessionStore } from '../src/session-store.js';
 import { LLMClient } from '../src/client.js';
 
 import type { ConversationSnapshot } from '../src/conversation.js';
 import type { SessionApiOptions } from '../src/session-api.js';
 import type { JsonObject, StreamChunk } from '../src/types.js';
+
+function createSessionApi(options: SessionApiOptions) {
+  return createSessionApiSource({
+    allowClientSessionIds: true,
+    tenantResolution: 'single-tenant',
+    ...options,
+  });
+}
 
 describe('SessionApi', () => {
   it('requires a session store and allows middleware to short-circuit requests', async () => {
@@ -689,6 +697,7 @@ describe('SessionApi', () => {
         },
       ],
       sessionStore: store,
+      tenantResolution: 'trusted-context',
       withRequestContext,
     });
 
@@ -731,6 +740,7 @@ describe('SessionApi', () => {
         }),
       ],
       sessionStore: store,
+      tenantResolution: 'trusted-context',
     });
 
     const createResponse = await api.handle(
@@ -984,6 +994,7 @@ describe('SessionApi', () => {
       sessionStore: store,
     });
     const api = createSessionApi({
+      allowImplicitSessionCreate: true,
       client,
       middleware: [
         async (request) => {
@@ -992,6 +1003,7 @@ describe('SessionApi', () => {
         },
       ],
       sessionStore: store,
+      tenantResolution: 'trusted-context',
     });
 
     const createResponse = await api.handle(
@@ -1450,6 +1462,610 @@ describe('SessionApi', () => {
     expect(genericErrorResponse.status).toBe(500);
     expect(genericPayload.error.name).toBe('Error');
     expect(genericPayload.error.message).toBe('Internal session API error.');
+  });
+
+  it('enforces content type, JSON shape, and bounded request bodies before mutation', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const snapshot: ConversationSnapshot = {
+      createdAt: '2026-07-30T00:00:00.000Z',
+      messages: [{ content: 'seed', role: 'user' }],
+      sessionId: 'json-boundary',
+      totalCachedTokens: 0,
+      totalCostUSD: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      updatedAt: '2026-07-30T00:00:00.000Z',
+    };
+    await store.set(snapshot.sessionId, snapshot);
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      sessionStore: store,
+    });
+    const conversation = vi.spyOn(client, 'conversation');
+    const get = vi.spyOn(store, 'get');
+    const set = vi.spyOn(store, 'set');
+    const api = createSessionApiSource({
+      client,
+      contextManager: new SlidingWindowStrategy({ maxMessages: 1 }),
+      maxBodyBytes: 64,
+      sessionStore: store,
+      tenantResolution: 'single-tenant',
+    });
+    const routes = [
+      { allowEmpty: false, url: 'https://example.test/sessions' },
+      {
+        allowEmpty: false,
+        url: 'https://example.test/sessions/json-boundary/message',
+      },
+      {
+        allowEmpty: true,
+        url: 'https://example.test/sessions/json-boundary/compact',
+      },
+      {
+        allowEmpty: false,
+        url: 'https://example.test/sessions/json-boundary/fork',
+      },
+    ];
+    const cases: Array<{ code: string; request: Request; status: number }> = [];
+    for (const route of routes) {
+      cases.push(
+        {
+          code: 'invalid_json_body',
+          request: new Request(route.url, {
+            body: '{bad',
+            headers: { 'content-type': 'application/json' },
+            method: 'POST',
+          }),
+          status: 400,
+        },
+        {
+          code: 'unsupported_media_type',
+          request: new Request(route.url, {
+            body: '{}',
+            headers: { 'content-type': 'text/plain' },
+            method: 'POST',
+          }),
+          status: 415,
+        },
+        {
+          code: 'request_body_too_large',
+          request: new Request(route.url, {
+            body: JSON.stringify({ padding: 'x'.repeat(80) }),
+            headers: { 'content-type': 'application/json' },
+            method: 'POST',
+          }),
+          status: 413,
+        },
+        {
+          code: 'invalid_json_body',
+          request: new Request(route.url, {
+            body: '[]',
+            headers: { 'content-type': 'application/json' },
+            method: 'POST',
+          }),
+          status: 400,
+        },
+      );
+      if (!route.allowEmpty) {
+        cases.push({
+          code: 'invalid_json_body',
+          request: new Request(route.url, {
+            body: '   ',
+            headers: { 'content-type': 'application/json' },
+            method: 'POST',
+          }),
+          status: 400,
+        });
+      }
+    }
+
+    for (const testCase of cases) {
+      const response = await api.handle(testCase.request);
+      const payload = (await response.json()) as {
+        error: { code: string };
+      };
+      expect(response.status).toBe(testCase.status);
+      expect(payload.error.code).toBe(testCase.code);
+    }
+
+    expect(conversation).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+    expect(set).not.toHaveBeenCalled();
+
+    const compactEmpty = await api.handle(
+      new Request(
+        'https://example.test/sessions/json-boundary/compact',
+        {
+          headers: { 'content-type': 'application/json' },
+          method: 'POST',
+        },
+      ),
+    );
+    expect(compactEmpty.status).toBe(200);
+
+    const acceptedVendorJson = await api.handle(
+      new Request('https://example.test/sessions', {
+        body: '{}',
+        headers: { 'content-type': 'application/problem+json; charset=utf-8' },
+        method: 'POST',
+      }),
+    );
+    expect(acceptedVendorJson.status).toBe(201);
+  });
+
+  it('rejects invalid message metadata before conversation or session mutation', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const snapshot: ConversationSnapshot = {
+      createdAt: '2026-07-30T00:00:00.000Z',
+      messages: [{ content: 'seed', role: 'user' }],
+      sessionId: 'metadata-boundary',
+      totalCachedTokens: 0,
+      totalCostUSD: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      updatedAt: '2026-07-30T00:00:00.000Z',
+    };
+    await store.set(snapshot.sessionId, snapshot);
+    const initialRecord = await store.get(snapshot.sessionId);
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      sessionStore: store,
+    });
+    const conversation = vi.spyOn(client, 'conversation');
+    const complete = vi.spyOn(client, 'complete');
+    const stream = vi.spyOn(client, 'stream');
+    const set = vi.spyOn(store, 'set');
+    const api = createSessionApiSource({
+      client,
+      sessionStore: store,
+      tenantResolution: 'single-tenant',
+    });
+    const getter = vi.fn(() => 'secret');
+    const accessorMetadata = {};
+    Object.defineProperty(accessorMetadata, 'secret', {
+      enumerable: true,
+      get: getter,
+    });
+    const cyclicMetadata: Record<string, unknown> = {};
+    cyclicMetadata.self = cyclicMetadata;
+    const invalidMetadata = [null, [], accessorMetadata, cyclicMetadata];
+
+    for (const shouldStream of [false, true]) {
+      for (const metadata of invalidMetadata) {
+        const request = new Request(
+          'https://example.test/sessions/metadata-boundary/message',
+          {
+            body: '{}',
+            headers: { 'content-type': 'application/json' },
+            method: 'POST',
+          },
+        );
+        const parse = vi.spyOn(JSON, 'parse').mockReturnValueOnce({
+          content: 'hello',
+          metadata,
+          stream: shouldStream,
+        });
+        const response = await api.handle(request);
+        parse.mockRestore();
+        const payload = (await response.json()) as {
+          error: { code: string };
+        };
+
+        expect(response.status).toBe(400);
+        expect(payload.error.code).toBe('invalid_metadata');
+        expect(response.headers.get('content-type')).toContain(
+          'application/json',
+        );
+      }
+    }
+
+    expect(getter).not.toHaveBeenCalled();
+    expect(conversation).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+    expect(stream).not.toHaveBeenCalled();
+    expect(set).not.toHaveBeenCalled();
+    await expect(store.get(snapshot.sessionId)).resolves.toEqual(initialRecord);
+  });
+
+  it('isolates valid message metadata for complete and streaming requests', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const snapshot: ConversationSnapshot = {
+      createdAt: '2026-07-30T00:00:00.000Z',
+      messages: [{ content: 'seed', role: 'user' }],
+      sessionId: 'metadata-isolation',
+      totalCachedTokens: 0,
+      totalCostUSD: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      updatedAt: '2026-07-30T00:00:00.000Z',
+    };
+    await store.set(snapshot.sessionId, snapshot);
+    let completeMetadata: unknown;
+    let streamMetadata: unknown;
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      responses: [
+        (options) => {
+          completeMetadata = options.metadata;
+          return mockResponse('complete', 0);
+        },
+      ],
+      sessionStore: store,
+      streams: [
+        async function* (options): AsyncGenerator<StreamChunk, void, void> {
+          streamMetadata = options.metadata;
+          yield {
+            finishReason: 'stop',
+            type: 'done',
+            usage: mockResponse('', 0).usage,
+          };
+        },
+      ],
+    });
+    const api = createSessionApiSource({
+      client,
+      sessionStore: store,
+      tenantResolution: 'single-tenant',
+    });
+    const completeNested = { unchanged: true };
+    const completeInput = { nested: completeNested };
+    const completeRequest = new Request(
+      'https://example.test/sessions/metadata-isolation/message',
+      {
+        body: '{}',
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      },
+    );
+    const completeParse = vi.spyOn(JSON, 'parse').mockReturnValueOnce({
+      content: 'complete',
+      metadata: completeInput,
+    });
+    const completeResponse = await api.handle(completeRequest);
+    completeParse.mockRestore();
+    completeNested.unchanged = false;
+
+    const streamNested = { unchanged: true };
+    const streamInput = { nested: streamNested };
+    const streamRequest = new Request(
+      'https://example.test/sessions/metadata-isolation/message',
+      {
+        body: '{}',
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      },
+    );
+    const streamParse = vi.spyOn(JSON, 'parse').mockReturnValueOnce({
+      content: 'stream',
+      metadata: streamInput,
+      stream: true,
+    });
+    const streamResponse = await api.handle(streamRequest);
+    streamParse.mockRestore();
+    await streamResponse.text();
+    streamNested.unchanged = false;
+
+    expect(completeResponse.status).toBe(200);
+    expect(streamResponse.status).toBe(200);
+    expect(completeMetadata).toEqual({ nested: { unchanged: true } });
+    expect(streamMetadata).toEqual({ nested: { unchanged: true } });
+    expect(completeMetadata).not.toBe(completeInput);
+    expect(streamMetadata).not.toBe(streamInput);
+  });
+
+  it('fails trusted tenant resolution closed on every session route before store access', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      sessionStore: store,
+    });
+    const get = vi.spyOn(store, 'get');
+    const list = vi.spyOn(store, 'list');
+    const set = vi.spyOn(store, 'set');
+    const api = createSessionApiSource({ client, sessionStore: store });
+    const responses = await Promise.all([
+      api.handle(new Request('https://example.test/sessions')),
+      api.handle(jsonRequest('https://example.test/sessions', 'POST', {})),
+      api.handle(new Request('https://example.test/sessions/example')),
+      api.handle(
+        new Request('https://example.test/sessions/example', {
+          method: 'DELETE',
+        }),
+      ),
+      api.handle(
+        jsonRequest('https://example.test/sessions/example/message', 'POST', {
+          content: 'hello',
+        }),
+      ),
+      api.handle(
+        new Request('https://example.test/sessions/example/messages'),
+      ),
+      api.handle(
+        jsonRequest(
+          'https://example.test/sessions/example/compact',
+          'POST',
+          {},
+        ),
+      ),
+      api.handle(
+        jsonRequest('https://example.test/sessions/example/fork', 'POST', {
+          fromMessageIndex: 0,
+        }),
+      ),
+    ]);
+
+    expect(responses.map((response) => response.status)).toEqual([
+      403, 403, 403, 403, 403, 403, 403, 403,
+    ]);
+    for (const response of responses) {
+      const payload = (await response.json()) as { error: { code: string } };
+      expect(payload.error.code).toBe('tenant_context_required');
+    }
+    expect(get).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it('uses server-owned ids by default and guards opted-in duplicate ids', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      sessionStore: store,
+    });
+    const defaultApi = createSessionApiSource({
+      client,
+      sessionStore: store,
+      tenantResolution: 'single-tenant',
+    });
+    const rejected = await defaultApi.handle(
+      jsonRequest('https://example.test/sessions', 'POST', {
+        sessionId: 'client-owned',
+      }),
+    );
+    const generated = await defaultApi.handle(
+      jsonRequest('https://example.test/sessions', 'POST', {
+        messages: [{ content: 'seed', role: 'user' }],
+      }),
+    );
+    const generatedPayload = (await generated.json()) as {
+      session: { id: string };
+    };
+
+    expect(rejected.status).toBe(400);
+    expect(generated.status).toBe(201);
+    expect(generatedPayload.session.id).toMatch(
+      /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/,
+    );
+    const rejectedFork = await defaultApi.handle(
+      jsonRequest(
+        `https://example.test/sessions/${generatedPayload.session.id}/fork`,
+        'POST',
+        { fromMessageIndex: 0, newSessionId: 'client-fork' },
+      ),
+    );
+    expect(rejectedFork.status).toBe(400);
+
+    const optedInApi = createSessionApiSource({
+      allowClientSessionIds: true,
+      client,
+      sessionStore: store,
+      tenantResolution: 'single-tenant',
+    });
+    const first = await optedInApi.handle(
+      jsonRequest('https://example.test/sessions', 'POST', {
+        messages: [{ content: 'first', role: 'user' }],
+        sessionId: 'duplicate-id',
+      }),
+    );
+    const second = await optedInApi.handle(
+      jsonRequest('https://example.test/sessions', 'POST', {
+        messages: [{ content: 'second', role: 'user' }],
+        sessionId: 'duplicate-id',
+      }),
+    );
+    const stored = await store.get('duplicate-id');
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(409);
+    expect(stored?.snapshot.messages).toEqual([
+      { content: 'first', role: 'user' },
+    ]);
+    const duplicateFork = await optedInApi.handle(
+      jsonRequest(
+        `https://example.test/sessions/${generatedPayload.session.id}/fork`,
+        'POST',
+        { fromMessageIndex: 0, newSessionId: 'duplicate-id' },
+      ),
+    );
+    expect(duplicateFork.status).toBe(409);
+    expect((await store.get('duplicate-id'))?.snapshot.messages).toEqual([
+      { content: 'first', role: 'user' },
+    ]);
+  });
+
+  it('rejects non-string opted-in create and fork ids without mutation', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const sourceSnapshot: ConversationSnapshot = {
+      createdAt: '2026-07-30T00:00:00.000Z',
+      messages: [{ content: 'source', role: 'user' }],
+      sessionId: 'fork-source',
+      totalCachedTokens: 0,
+      totalCostUSD: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      updatedAt: '2026-07-30T00:00:00.000Z',
+    };
+    await store.set(sourceSnapshot.sessionId, sourceSnapshot);
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      sessionStore: store,
+    });
+    const conversation = vi.spyOn(client, 'conversation');
+    const set = vi.spyOn(store, 'set');
+    const api = createSessionApiSource({
+      allowClientSessionIds: true,
+      client,
+      sessionStore: store,
+      tenantResolution: 'single-tenant',
+    });
+    const invalidIds: unknown[] = [null, 1, true, ['array-id'], {}];
+
+    for (const sessionId of invalidIds) {
+      const response = await api.handle(
+        jsonRequest('https://example.test/sessions', 'POST', { sessionId }),
+      );
+      const payload = (await response.json()) as {
+        error: { code: string };
+      };
+      expect(response.status).toBe(400);
+      expect(payload.error.code).toBe('invalid_session_id');
+    }
+
+    for (const newSessionId of invalidIds) {
+      const response = await api.handle(
+        jsonRequest(
+          'https://example.test/sessions/fork-source/fork',
+          'POST',
+          { fromMessageIndex: 0, newSessionId },
+        ),
+      );
+      const payload = (await response.json()) as {
+        error: { code: string };
+      };
+      expect(response.status).toBe(400);
+      expect(payload.error.code).toBe('invalid_session_id');
+    }
+
+    expect(conversation).not.toHaveBeenCalled();
+    expect(set).not.toHaveBeenCalled();
+    await expect(store.get(sourceSnapshot.sessionId)).resolves.toMatchObject({
+      snapshot: sourceSnapshot,
+    });
+    await expect(store.list()).resolves.toEqual([
+      expect.objectContaining({ sessionId: sourceSnapshot.sessionId }),
+    ]);
+  });
+
+  it('rejects malformed, encoded, and traversal-like route ids with HTTP 400', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      sessionStore: store,
+    });
+    const api = createSessionApi({
+      client,
+      sessionStore: store,
+    });
+
+    for (const id of ['%2F', '%20', '%ZZ', 'a..b', 'colon%3Aid']) {
+      const response = await api.handle(
+        new Request(`https://example.test/sessions/${id}`),
+      );
+      const payload = (await response.json()) as { error: { code: string } };
+      expect(response.status).toBe(400);
+      expect(payload.error.code).toBe('invalid_session_id');
+    }
+  });
+
+  it('returns 404 for unknown complete and streaming messages without consuming work', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      responses: [mockResponse('unused', 0)],
+      sessionStore: store,
+      streams: [
+        [
+          {
+            finishReason: 'stop',
+            type: 'done',
+            usage: mockResponse('', 0).usage,
+          },
+        ],
+      ],
+    });
+    const conversation = vi.spyOn(client, 'conversation');
+    const complete = vi.spyOn(client, 'complete');
+    const stream = vi.spyOn(client, 'stream');
+    const api = createSessionApi({
+      client,
+      sessionStore: store,
+    });
+    const completeResponse = await api.handle(
+      jsonRequest('https://example.test/sessions/missing/message', 'POST', {
+        content: 'hello',
+      }),
+    );
+    const streamResponse = await api.handle(
+      jsonRequest('https://example.test/sessions/missing/message', 'POST', {
+        content: 'hello',
+        stream: true,
+      }),
+    );
+
+    expect(completeResponse.status).toBe(404);
+    expect(streamResponse.status).toBe(404);
+    expect(conversation).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+    expect(stream).not.toHaveBeenCalled();
+    await expect(store.get('missing')).resolves.toBeNull();
+  });
+
+  it('supports chronological backward message pagination and validates direction', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const snapshot: ConversationSnapshot = {
+      createdAt: '2026-07-30T00:00:00.000Z',
+      messages: Array.from({ length: 5 }, (_, index) => ({
+        content: String(index),
+        role: 'user' as const,
+      })),
+      sessionId: 'backward-page',
+      totalCachedTokens: 0,
+      totalCostUSD: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      updatedAt: '2026-07-30T00:00:00.000Z',
+    };
+    await store.set(snapshot.sessionId, snapshot);
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      sessionStore: store,
+    });
+    const api = createSessionApi({ client, sessionStore: store });
+    const response = await api.handle(
+      new Request(
+        'https://example.test/sessions/backward-page/messages?cursor=4&limit=2&direction=backward',
+      ),
+    );
+    const payload = (await response.json()) as {
+      messages: {
+        items: Array<{ content: string }>;
+        nextCursor?: string;
+        previousCursor?: string;
+      };
+    };
+    const invalid = await api.handle(
+      new Request(
+        'https://example.test/sessions/backward-page/messages?direction=sideways',
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(payload.messages.items.map((message) => message.content)).toEqual([
+      '2',
+      '3',
+    ]);
+    expect(payload.messages.nextCursor).toBe('2');
+    expect(payload.messages.previousCursor).toBe('4');
+    expect(invalid.status).toBe(400);
   });
 
   it('redacts LLM error messages and details from external responses', async () => {

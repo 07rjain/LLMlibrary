@@ -32,6 +32,7 @@ try {
   const api = createSessionApi({
     client,
     sessionStore,
+    tenantResolution: 'single-tenant',
   });
   const response = await api.handle(
     new Request('https://example.test/sessions/edge-check', {
