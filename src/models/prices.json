@@ -1,7 +1,7 @@
 {
   "claude-sonnet-4-6": {
     "provider": "anthropic",
-    "contextWindow": 200000,
+    "contextWindow": 1000000,
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
@@ -38,7 +38,7 @@
   },
   "claude-opus-4-6": {
     "provider": "anthropic",
-    "contextWindow": 200000,
+    "contextWindow": 1000000,
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
@@ -75,7 +75,7 @@
   },
   "gpt-5.5": {
     "provider": "openai",
-    "contextWindow": 128000,
+    "contextWindow": 1050000,
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
@@ -134,7 +134,7 @@
   },
   "gpt-5.4": {
     "provider": "openai",
-    "contextWindow": 128000,
+    "contextWindow": 1050000,
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
@@ -145,24 +145,26 @@
   },
   "gpt-5.4-mini": {
     "provider": "openai",
-    "contextWindow": 128000,
+    "contextWindow": 400000,
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
     "inputPrice": 0.75,
     "outputPrice": 4.5,
     "cacheReadPrice": 0.075,
+    "maxInputTokens": 272000,
     "lastUpdated": "2026-07-13"
   },
   "gpt-5.4-nano": {
     "provider": "openai",
-    "contextWindow": 128000,
-    "supportsVision": false,
+    "contextWindow": 400000,
+    "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
     "inputPrice": 0.2,
     "outputPrice": 1.25,
     "cacheReadPrice": 0.02,
+    "maxInputTokens": 272000,
     "lastUpdated": "2026-07-13"
   },
   "gpt-4o": {
@@ -200,7 +202,7 @@
   },
   "gemini-2.5-pro": {
     "provider": "google",
-    "contextWindow": 1000000,
+    "contextWindow": 1048576,
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
@@ -210,7 +212,7 @@
   },
   "gemini-2.5-flash": {
     "provider": "google",
-    "contextWindow": 1000000,
+    "contextWindow": 1048576,
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
@@ -220,7 +222,7 @@
   },
   "gemini-2.5-flash-lite": {
     "provider": "google",
-    "contextWindow": 1000000,
+    "contextWindow": 1048576,
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
@@ -373,7 +375,7 @@
   "gpt-4o-mini-transcribe": {
     "provider": "openai",
     "kind": "transcription",
-    "contextWindow": 0,
+    "contextWindow": 16000,
     "supportsVision": false,
     "supportsTools": false,
     "supportsStreaming": false,
@@ -382,14 +384,14 @@
     "speechPrices": {
       "inputAudioSecondPrice": 0.00005
     },
-    "supportedInputModalities": ["audio"],
+    "supportedInputModalities": ["audio", "text"],
     "supportedOutputModalities": ["text"],
     "lastUpdated": "2026-07-13"
   },
   "gpt-4o-mini-transcribe-2025-12-15": {
     "provider": "openai",
     "kind": "transcription",
-    "contextWindow": 0,
+    "contextWindow": 16000,
     "supportsVision": false,
     "supportsTools": false,
     "supportsStreaming": false,
@@ -398,14 +400,14 @@
     "speechPrices": {
       "inputAudioSecondPrice": 0.00005
     },
-    "supportedInputModalities": ["audio"],
+    "supportedInputModalities": ["audio", "text"],
     "supportedOutputModalities": ["text"],
     "lastUpdated": "2026-07-13"
   },
   "gpt-4o-transcribe": {
     "provider": "openai",
     "kind": "transcription",
-    "contextWindow": 0,
+    "contextWindow": 16000,
     "supportsVision": false,
     "supportsTools": false,
     "supportsStreaming": false,
@@ -414,14 +416,14 @@
     "speechPrices": {
       "inputAudioSecondPrice": 0.0001
     },
-    "supportedInputModalities": ["audio"],
+    "supportedInputModalities": ["audio", "text"],
     "supportedOutputModalities": ["text"],
     "lastUpdated": "2026-07-13"
   },
   "gpt-4o-transcribe-diarize": {
     "provider": "openai",
     "kind": "transcription",
-    "contextWindow": 0,
+    "contextWindow": 16000,
     "supportsVision": false,
     "supportsTools": false,
     "supportsStreaming": false,
@@ -430,7 +432,7 @@
     "speechPrices": {
       "inputAudioSecondPrice": 0.0001
     },
-    "supportedInputModalities": ["audio"],
+    "supportedInputModalities": ["audio", "text"],
     "supportedOutputModalities": ["text"],
     "lastUpdated": "2026-07-13"
   },

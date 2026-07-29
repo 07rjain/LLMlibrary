@@ -8,7 +8,7 @@ export const defaultModelPrices = {
   'claude-sonnet-4-6': {
     cacheReadPrice: 0.3,
     cacheWritePrice: 3.75,
-    contextWindow: 200000,
+    contextWindow: 1000000,
     inputPrice: 3,
     lastUpdated: '2026-07-13',
     outputPrice: 15,
@@ -45,7 +45,7 @@ export const defaultModelPrices = {
   'claude-opus-4-6': {
     cacheReadPrice: 0.5,
     cacheWritePrice: 6.25,
-    contextWindow: 200000,
+    contextWindow: 1000000,
     inputPrice: 5,
     lastUpdated: '2026-07-13',
     outputPrice: 25,
@@ -81,7 +81,7 @@ export const defaultModelPrices = {
   },
   'gpt-5.5': {
     cacheReadPrice: 0.5,
-    contextWindow: 128000,
+    contextWindow: 1050000,
     inputPrice: 5,
     lastUpdated: '2026-06-12',
     outputPrice: 30,
@@ -140,7 +140,7 @@ export const defaultModelPrices = {
   },
   'gpt-5.4': {
     cacheReadPrice: 0.25,
-    contextWindow: 128000,
+    contextWindow: 1050000,
     inputPrice: 2.5,
     lastUpdated: '2026-07-13',
     outputPrice: 15,
@@ -151,9 +151,10 @@ export const defaultModelPrices = {
   },
   'gpt-5.4-mini': {
     cacheReadPrice: 0.075,
-    contextWindow: 128000,
+    contextWindow: 400000,
     inputPrice: 0.75,
     lastUpdated: '2026-07-13',
+    maxInputTokens: 272000,
     outputPrice: 4.5,
     provider: 'openai',
     supportsStreaming: true,
@@ -162,14 +163,15 @@ export const defaultModelPrices = {
   },
   'gpt-5.4-nano': {
     cacheReadPrice: 0.02,
-    contextWindow: 128000,
+    contextWindow: 400000,
     inputPrice: 0.2,
     lastUpdated: '2026-07-13',
+    maxInputTokens: 272000,
     outputPrice: 1.25,
     provider: 'openai',
     supportsStreaming: true,
     supportsTools: true,
-    supportsVision: false,
+    supportsVision: true,
   },
   'gpt-4o': {
     cacheReadPrice: 1.25,
@@ -205,7 +207,7 @@ export const defaultModelPrices = {
     supportsVision: true,
   },
   'gemini-2.5-pro': {
-    contextWindow: 1000000,
+    contextWindow: 1048576,
     inputPrice: 1.25,
     lastUpdated: '2026-07-13',
     outputPrice: 10,
@@ -215,7 +217,7 @@ export const defaultModelPrices = {
     supportsVision: true,
   },
   'gemini-2.5-flash': {
-    contextWindow: 1000000,
+    contextWindow: 1048576,
     inputPrice: 0.3,
     lastUpdated: '2026-07-13',
     outputPrice: 2.5,
@@ -225,7 +227,7 @@ export const defaultModelPrices = {
     supportsVision: true,
   },
   'gemini-2.5-flash-lite': {
-    contextWindow: 1000000,
+    contextWindow: 1048576,
     inputPrice: 0.1,
     lastUpdated: '2026-07-13',
     outputPrice: 0.4,
@@ -377,7 +379,7 @@ export const defaultModelPrices = {
     supportsVision: false,
   },
   'gpt-4o-mini-transcribe': {
-    contextWindow: 0,
+    contextWindow: 16000,
     inputPrice: 0,
     kind: 'transcription',
     lastUpdated: '2026-07-13',
@@ -386,14 +388,14 @@ export const defaultModelPrices = {
     speechPrices: {
       inputAudioSecondPrice: 0.00005,
     },
-    supportedInputModalities: ['audio'],
+    supportedInputModalities: ['audio', 'text'],
     supportedOutputModalities: ['text'],
     supportsStreaming: false,
     supportsTools: false,
     supportsVision: false,
   },
   'gpt-4o-mini-transcribe-2025-12-15': {
-    contextWindow: 0,
+    contextWindow: 16000,
     inputPrice: 0,
     kind: 'transcription',
     lastUpdated: '2026-07-13',
@@ -402,14 +404,14 @@ export const defaultModelPrices = {
     speechPrices: {
       inputAudioSecondPrice: 0.00005,
     },
-    supportedInputModalities: ['audio'],
+    supportedInputModalities: ['audio', 'text'],
     supportedOutputModalities: ['text'],
     supportsStreaming: false,
     supportsTools: false,
     supportsVision: false,
   },
   'gpt-4o-transcribe': {
-    contextWindow: 0,
+    contextWindow: 16000,
     inputPrice: 0,
     kind: 'transcription',
     lastUpdated: '2026-07-13',
@@ -418,14 +420,14 @@ export const defaultModelPrices = {
     speechPrices: {
       inputAudioSecondPrice: 0.0001,
     },
-    supportedInputModalities: ['audio'],
+    supportedInputModalities: ['audio', 'text'],
     supportedOutputModalities: ['text'],
     supportsStreaming: false,
     supportsTools: false,
     supportsVision: false,
   },
   'gpt-4o-transcribe-diarize': {
-    contextWindow: 0,
+    contextWindow: 16000,
     inputPrice: 0,
     kind: 'transcription',
     lastUpdated: '2026-07-13',
@@ -434,7 +436,7 @@ export const defaultModelPrices = {
     speechPrices: {
       inputAudioSecondPrice: 0.0001,
     },
-    supportedInputModalities: ['audio'],
+    supportedInputModalities: ['audio', 'text'],
     supportedOutputModalities: ['text'],
     supportsStreaming: false,
     supportsTools: false,

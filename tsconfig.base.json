@@ -5,6 +5,7 @@
     "moduleResolution": "Bundler",
     "baseUrl": ".",
     "paths": {
+      "unified-llm-client/models": ["src/models/index.ts"],
       "unified-llm-client/*": ["src/*"]
     },
     "lib": ["ES2022", "DOM", "DOM.Iterable"],

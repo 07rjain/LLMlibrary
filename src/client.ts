@@ -7,7 +7,7 @@ import {
   RateLimitError,
 } from 'unified-llm-client/errors';
 import { validateEmbeddingRequest } from './embedding-validation.js';
-import { ModelRegistry } from './models/registry.js';
+import { ModelRegistry } from 'unified-llm-client/models';
 import { Conversation, type ConversationRoute } from './conversation.js';
 import { AnthropicAdapter } from './providers/anthropic.js';
 import { GeminiAdapter } from './providers/gemini.js';
@@ -24,7 +24,10 @@ import { calcSpeechCostUSD } from './utils/cost.js';
 import { estimateTokens } from './utils/token-estimator.js';
 import { exportSpeechUsageSummary, exportUsageSummary } from './usage.js';
 
-import type { ModelRegistryOptions, ModelPriceOverrides } from './models/index.js';
+import type {
+  ModelRegistryOptions,
+  ModelPriceOverrides,
+} from 'unified-llm-client/models';
 import type { ConversationOptions, ConversationSnapshot } from './conversation.js';
 import type {
   GeminiCachedContent,

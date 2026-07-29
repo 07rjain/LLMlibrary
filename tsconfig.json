@@ -2,6 +2,7 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
+      "unified-llm-client/models": ["src/models/index.ts"],
       "unified-llm-client/*": ["src/*"]
     }
   },

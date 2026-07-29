@@ -3,7 +3,7 @@ export * from './chunking.js';
 export * from './context-manager.js';
 export * from './conversation.js';
 export * from 'unified-llm-client/errors';
-export * from './models/index.js';
+export * from 'unified-llm-client/models';
 export * from './providers/anthropic.js';
 export * from './providers/gemini.js';
 export * from './providers/openai.js';

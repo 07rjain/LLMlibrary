@@ -1,4 +1,4 @@
-import { ModelRegistry } from '../models/registry.js';
+import { ModelRegistry } from 'unified-llm-client/models';
 
 import type {
   ModelInfo,

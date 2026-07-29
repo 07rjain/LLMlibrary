@@ -4,6 +4,8 @@ export default defineConfig({
   resolve: {
     alias: {
       'unified-llm-client/errors': new URL('./src/errors.ts', import.meta.url).pathname,
+      'unified-llm-client/models': new URL('./src/models/index.ts', import.meta.url)
+        .pathname,
     },
   },
   test: {

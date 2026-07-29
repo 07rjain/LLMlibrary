@@ -1,5 +1,5 @@
 import { ProviderCapabilityError } from 'unified-llm-client/errors';
-import { defaultModelPrices } from './models/prices.js';
+import { defaultModelPrices } from 'unified-llm-client/models';
 
 import type {
   EmbeddingInputItem,
