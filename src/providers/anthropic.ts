@@ -22,6 +22,7 @@ import type {
   CanonicalToolChoice,
   JsonObject,
   JsonValue,
+  AnthropicThinkingEffort,
   AnthropicThinkingOptions,
   ProviderOptions,
   RemoteModelInfo,
@@ -325,6 +326,27 @@ export class AnthropicAdapter {
   private assertCapabilities(
     options: AnthropicCompletionOptions & { stream?: boolean },
   ): void {
+    const effort = options.providerOptions?.anthropic?.effort as unknown;
+    if (effort !== undefined) {
+      assertAnthropicThinkingEffort(effort, options.model);
+      const model = this.modelRegistry.get(options.model);
+      const supportedEfforts = model.supportedReasoningEfforts;
+
+      if (!supportedEfforts?.includes(effort)) {
+        throw new ProviderCapabilityError(
+          `Model "${options.model}" does not support Anthropic reasoning effort "${effort}".`,
+          {
+            details: {
+              effort,
+              supportedReasoningEfforts: supportedEfforts ?? [],
+            },
+            model: options.model,
+            provider: model.provider,
+          },
+        );
+      }
+    }
+
     if (options.tools && options.tools.length > 0) {
       this.modelRegistry.assertCapability(options.model, 'supportsTools', 'tool calling');
     }
@@ -380,7 +402,16 @@ export function translateAnthropicRequest(
     body.temperature = options.temperature;
   }
 
-  const outputConfig = buildAnthropicOutputConfig(options.responseFormat);
+  let outputConfig = buildAnthropicOutputConfig(options.responseFormat);
+  const effort = anthropicOptions?.effort as unknown;
+  if (effort !== undefined) {
+    assertAnthropicThinkingEffort(effort, options.model);
+    outputConfig = {
+      ...outputConfig,
+      effort,
+    };
+  }
+
   if (outputConfig !== undefined) {
     body.output_config = outputConfig;
   }
@@ -405,11 +436,34 @@ export function translateAnthropicRequest(
     );
   }
 
-  if (anthropicOptions?.effort) {
-    body.effort = anthropicOptions.effort;
-  }
-
   return body;
+}
+
+const ANTHROPIC_THINKING_EFFORTS: readonly AnthropicThinkingEffort[] = [
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+];
+
+function assertAnthropicThinkingEffort(
+  effort: unknown,
+  model: string,
+): asserts effort is AnthropicThinkingEffort {
+  if (
+    typeof effort !== 'string' ||
+    !ANTHROPIC_THINKING_EFFORTS.includes(effort as AnthropicThinkingEffort)
+  ) {
+    throw new ProviderCapabilityError('Invalid Anthropic reasoning effort.', {
+      details: {
+        effort,
+        supportedReasoningEfforts: ANTHROPIC_THINKING_EFFORTS,
+      },
+      model,
+      provider: 'anthropic',
+    });
+  }
 }
 
 function translateAnthropicThinking(

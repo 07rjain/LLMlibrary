@@ -90,6 +90,7 @@ describe('ModelRegistry', () => {
       provider: 'anthropic',
       cacheReadPrice: 0.5,
       cacheWritePrice: 6.25,
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     });
     expect(registry.get('gemini-3.6-flash')).toMatchObject({
       contextWindow: 1048576,
@@ -112,6 +113,44 @@ describe('ModelRegistry', () => {
       provider: 'google',
       cacheReadPrice: 0.025,
     });
+  });
+
+  it('seeds Anthropic effort subsets and leaves unsupported models fail-closed', () => {
+    const registry = new ModelRegistry();
+
+    for (const model of ['claude-sonnet-4-6', 'claude-opus-4-6']) {
+      expect(registry.get(model).supportedReasoningEfforts).toEqual([
+        'low',
+        'medium',
+        'high',
+        'max',
+      ]);
+    }
+    for (const model of ['claude-opus-5', 'claude-fable-5']) {
+      expect(registry.get(model).supportedReasoningEfforts).toEqual([
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+      ]);
+    }
+    for (const model of ['claude-haiku-4-5', 'claude-haiku-4-5-20251001']) {
+      expect(registry.get(model).supportedReasoningEfforts).toBeUndefined();
+    }
+
+    registry.register({
+      contextWindow: 64000,
+      id: 'custom-anthropic',
+      inputPrice: 1,
+      lastUpdated: '2026-07-29',
+      outputPrice: 2,
+      provider: 'anthropic',
+      supportsStreaming: true,
+      supportsTools: false,
+      supportsVision: false,
+    });
+    expect(registry.get('custom-anthropic').supportedReasoningEfforts).toBeUndefined();
   });
 
   it('returns a model and validates capabilities', () => {

@@ -110,6 +110,11 @@ describe('Anthropic adapter', () => {
       maxTokens: 64,
       messages: [{ content: 'Return the answer.', role: 'user' }],
       model: 'claude-sonnet-4-6',
+      providerOptions: {
+        anthropic: {
+          effort: 'high',
+        },
+      },
       responseFormat: {
         schema: {
           properties: {
@@ -124,6 +129,7 @@ describe('Anthropic adapter', () => {
 
     expect(request).toMatchObject({
       output_config: {
+        effort: 'high',
         format: {
           schema: {
             additionalProperties: false,
@@ -137,6 +143,7 @@ describe('Anthropic adapter', () => {
         },
       },
     });
+    expect(request).not.toHaveProperty('effort');
   });
 
   it('rejects Anthropic json_object responseFormat without a schema', () => {
@@ -196,12 +203,70 @@ describe('Anthropic adapter', () => {
     });
 
     expect(request).toMatchObject({
-      effort: 'medium',
+      output_config: {
+        effort: 'medium',
+      },
       thinking: {
         display: 'omitted',
         type: 'adaptive',
       },
     });
+    expect(request).not.toHaveProperty('effort');
+  });
+
+  it.each(['low', 'medium', 'high', 'xhigh', 'max'] as const)(
+    'maps Anthropic %s effort under output_config',
+    effort => {
+      const request = translateAnthropicRequest({
+        maxTokens: 64,
+        messages: [{ content: 'Think carefully.', role: 'user' }],
+        model: 'claude-opus-5',
+        providerOptions: {
+          anthropic: {
+            effort,
+          },
+        },
+      });
+
+      expect(request.output_config).toEqual({ effort });
+      expect(request).not.toHaveProperty('effort');
+    },
+  );
+
+  it.each(['adaptive', 'ultra', '', null, 1, true])(
+    'rejects invalid Anthropic effort value %j at runtime',
+    effort => {
+      expect(() =>
+        translateAnthropicRequest({
+          maxTokens: 64,
+          messages: [{ content: 'Think carefully.', role: 'user' }],
+          model: 'claude-opus-5',
+          providerOptions: {
+            anthropic: {
+              effort: effort as never,
+            },
+          },
+        }),
+      ).toThrowError(
+        expect.objectContaining({
+          details: expect.objectContaining({
+            effort,
+            supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+          }),
+        }),
+      );
+    },
+  );
+
+  it('omits output_config when neither format nor effort is configured', () => {
+    const request = translateAnthropicRequest({
+      maxTokens: 64,
+      messages: [{ content: 'Hello.', role: 'user' }],
+      model: 'claude-sonnet-4-6',
+    });
+
+    expect(request).not.toHaveProperty('output_config');
+    expect(request).not.toHaveProperty('effort');
   });
 
   it('maps Anthropic manual thinking budget to budget_tokens', () => {
@@ -893,6 +958,247 @@ describe('Anthropic adapter', () => {
     }
 
     expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported Anthropic effort levels and models before complete or stream fetches', async () => {
+    const registry = new ModelRegistry();
+    registry.register({
+      contextWindow: 32000,
+      id: 'custom-effort-unseeded',
+      inputPrice: 1,
+      lastUpdated: '2026-07-29',
+      outputPrice: 2,
+      provider: 'anthropic',
+      supportsStreaming: true,
+      supportsTools: true,
+      supportsVision: false,
+    });
+    registry.register({
+      contextWindow: 32000,
+      id: 'custom-effort-empty',
+      inputPrice: 1,
+      lastUpdated: '2026-07-29',
+      outputPrice: 2,
+      provider: 'anthropic',
+      supportedReasoningEfforts: [],
+      supportsStreaming: true,
+      supportsTools: true,
+      supportsVision: false,
+    });
+    registry.register({
+      contextWindow: 32000,
+      id: 'custom-effort-high-only',
+      inputPrice: 1,
+      lastUpdated: '2026-07-29',
+      outputPrice: 2,
+      provider: 'anthropic',
+      supportedReasoningEfforts: ['high'],
+      supportsStreaming: true,
+      supportsTools: true,
+      supportsVision: false,
+    });
+    const fetchImplementation = vi.fn();
+    const adapter = new AnthropicAdapter({
+      apiKey: 'anthropic-key',
+      fetchImplementation,
+      modelRegistry: registry,
+    });
+    const unsupported = [
+      { effort: 'low' as const, model: 'claude-haiku-4-5' },
+      { effort: 'low' as const, model: 'claude-haiku-4-5-20251001' },
+      { effort: 'xhigh' as const, model: 'claude-sonnet-4-6' },
+      { effort: 'low' as const, model: 'custom-effort-unseeded' },
+      { effort: 'low' as const, model: 'custom-effort-empty' },
+      { effort: 'low' as const, model: 'custom-effort-high-only' },
+      { effort: 'low' as const, model: 'unregistered-discovered-model' },
+    ];
+
+    for (const { effort, model } of unsupported) {
+      const request = {
+        maxTokens: 64,
+        messages: [{ content: 'Think carefully.', role: 'user' as const }],
+        model,
+        providerOptions: {
+          anthropic: {
+            effort,
+          },
+        },
+      };
+
+      await expect(adapter.complete(request)).rejects.toBeInstanceOf(
+        ProviderCapabilityError,
+      );
+      await expect(adapter.stream(request).next()).rejects.toBeInstanceOf(
+        ProviderCapabilityError,
+      );
+    }
+
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it('captures supported effort requests for complete and stream without beta headers', async () => {
+    const stream = makeSSEStream([
+      {
+        message: {
+          content: [],
+          id: 'msg_effort_stream',
+          model: 'claude-opus-5',
+          role: 'assistant',
+          stop_reason: null,
+          usage: {
+            input_tokens: 2,
+            output_tokens: 0,
+          },
+        },
+        type: 'message_start',
+      },
+      {
+        delta: {
+          stop_reason: 'end_turn',
+        },
+        type: 'message_delta',
+        usage: {
+          output_tokens: 1,
+        },
+      },
+      {
+        type: 'message_stop',
+      },
+    ]);
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            content: [{ text: 'Done', type: 'text' }],
+            id: 'msg_effort_complete',
+            model: 'claude-sonnet-4-6',
+            role: 'assistant',
+            stop_reason: 'end_turn',
+            usage: {
+              input_tokens: 2,
+              output_tokens: 1,
+            },
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(stream, { status: 200 }));
+    const adapter = new AnthropicAdapter({
+      apiKey: 'anthropic-key',
+      fetchImplementation,
+    });
+
+    await adapter.complete({
+      maxTokens: 64,
+      messages: [{ content: 'Think carefully.', role: 'user' }],
+      model: 'claude-sonnet-4-6',
+      providerOptions: {
+        anthropic: {
+          effort: 'max',
+        },
+      },
+    });
+    for await (const chunk of adapter.stream({
+      maxTokens: 64,
+      messages: [{ content: 'Think carefully.', role: 'user' }],
+      model: 'claude-opus-5',
+      providerOptions: {
+        anthropic: {
+          effort: 'xhigh',
+        },
+      },
+    })) {
+      expect(chunk).toBeDefined();
+    }
+
+    const completeInit = fetchImplementation.mock.calls[0]?.[1];
+    const streamInit = fetchImplementation.mock.calls[1]?.[1];
+    expect(JSON.parse(String(completeInit?.body))).toMatchObject({
+      output_config: { effort: 'max' },
+    });
+    expect(JSON.parse(String(completeInit?.body))).not.toHaveProperty('effort');
+    expect(JSON.parse(String(streamInit?.body))).toMatchObject({
+      output_config: { effort: 'xhigh' },
+      stream: true,
+    });
+    expect(JSON.parse(String(streamInit?.body))).not.toHaveProperty('effort');
+    expect(completeInit?.headers).not.toHaveProperty('anthropic-beta');
+    expect(streamInit?.headers).not.toHaveProperty('anthropic-beta');
+  });
+
+  it('honors explicitly registered custom effort subsets', async () => {
+    const registry = new ModelRegistry();
+    registry.register({
+      contextWindow: 32000,
+      id: 'custom-effort-model',
+      inputPrice: 1,
+      lastUpdated: '2026-07-29',
+      outputPrice: 2,
+      provider: 'anthropic',
+      supportedReasoningEfforts: ['medium'],
+      supportsStreaming: true,
+      supportsTools: true,
+      supportsVision: false,
+    });
+    const fetchImplementation = vi.fn(async (_input, init) => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        output_config: { effort: 'medium' },
+        thinking: {
+          budget_tokens: 10,
+          type: 'enabled',
+        },
+      });
+      return new Response(
+        JSON.stringify({
+          content: [{ text: 'Done', type: 'text' }],
+          id: 'msg_custom_effort',
+          model: 'custom-effort-model',
+          role: 'assistant',
+          stop_reason: 'end_turn',
+          usage: {
+            input_tokens: 2,
+            output_tokens: 1,
+          },
+        }),
+        { status: 200 },
+      );
+    });
+    const adapter = new AnthropicAdapter({
+      apiKey: 'anthropic-key',
+      fetchImplementation,
+      modelRegistry: registry,
+    });
+
+    await expect(
+      adapter.complete({
+        maxTokens: 64,
+        messages: [{ content: 'Think carefully.', role: 'user' }],
+        model: 'custom-effort-model',
+        providerOptions: {
+          anthropic: {
+            effort: 'medium',
+            thinking: {
+              budgetTokens: 10,
+              type: 'enabled',
+            },
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ text: 'Done' });
+    await expect(
+      adapter.complete({
+        maxTokens: 64,
+        messages: [{ content: 'Think carefully.', role: 'user' }],
+        model: 'custom-effort-model',
+        providerOptions: {
+          anthropic: {
+            effort: 'high',
+          },
+        },
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
   });
 
   it('streams text and tool-call events', async () => {

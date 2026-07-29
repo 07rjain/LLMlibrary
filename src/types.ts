@@ -38,7 +38,12 @@ export interface OpenAIReasoningOptions {
   summary?: 'auto' | 'concise' | 'detailed';
 }
 
-export type AnthropicThinkingEffort = 'high' | 'low' | 'medium';
+export type AnthropicThinkingEffort =
+  | 'high'
+  | 'low'
+  | 'max'
+  | 'medium'
+  | 'xhigh';
 
 export interface AnthropicThinkingOptions {
   budgetTokens?: number;
@@ -606,6 +611,7 @@ export interface ModelInfo {
   maxInputTokens?: number;
   outputPrice: number;
   provider: CanonicalProvider;
+  supportedReasoningEfforts?: readonly AnthropicThinkingEffort[];
   supportedInputModalities?: Array<'audio' | 'document' | 'image' | 'text' | 'video'>;
   speechPrices?: SpeechPriceBook;
   supportedOutputModalities?: Array<'audio' | 'text'>;

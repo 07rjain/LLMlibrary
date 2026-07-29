@@ -1,18 +1,19 @@
 # Reasoning Efforts Report
 
-Date: 2026-06-20
+Date: 2026-07-29
 
 ## Implementation Status
 
 The first implementation slice from this report has now been applied:
 
 - `providerOptions.openai.reasoning` maps to OpenAI Responses `reasoning` and optional `include: ["reasoning.encrypted_content"]`.
-- `providerOptions.anthropic.thinking` and `providerOptions.anthropic.effort` map to Anthropic Messages API thinking controls, with local validation that manual `budgetTokens` stay below `maxTokens`.
+- `providerOptions.anthropic.thinking` maps to Anthropic Messages API `thinking`, with local validation of manual `budgetTokens`.
+- `providerOptions.anthropic.effort` maps to `output_config.effort`, merges with structured-output `format`, and is validated against per-model registry metadata before transport.
 - `providerOptions.google.thinking` maps to Gemini `generationConfig.thinkingConfig`.
 - `UsageMetrics.reasoningTokens` now reports OpenAI reasoning-token counts and Gemini thoughts-token counts when the provider returns them.
 - Session API conversation config accepts and persists `providerOptions`, so HTTP-created conversations can use the same provider-specific reasoning controls.
 
-Still intentionally out of scope: a top-level canonical `reasoning.effort`, parsing reasoning summaries or thought blocks into `response.text`, OpenAI encrypted reasoning replay, Anthropic thinking-signature persistence, and model-registry validation for every provider/model thinking mode.
+Still intentionally out of scope: a top-level canonical `reasoning.effort`, parsing reasoning summaries or thought blocks into `response.text`, OpenAI encrypted reasoning replay, Anthropic thinking-signature persistence, adaptive-thinking capability gating, and model-registry validation for every other provider/model thinking mode.
 
 ## Executive Summary
 
@@ -183,12 +184,32 @@ Current impact on this repo:
 - We can pass `thinking` request config safely before we parse thinking response content.
 - If we expose thinking summaries later, we need canonical representation for summarized thinking blocks or response metadata.
 
-Recommended Anthropic request mapping for first implementation:
+Current Anthropic request mapping:
 
 ```ts
 body.thinking = providerOptions.anthropic.thinking;
-body.effort = providerOptions.anthropic.effort;
+body.output_config = {
+  ...buildAnthropicOutputConfig(responseFormat),
+  effort: providerOptions.anthropic.effort,
+};
 ```
+
+`effort` is never a top-level Messages API field. Its accepted values are
+`low | medium | high | xhigh | max`. It can be used without `thinking`; adaptive
+thinking remains a separate model capability.
+
+The built-in registry currently declares these subsets:
+
+- `claude-sonnet-4-6`, `claude-opus-4-6`: `low`, `medium`, `high`, `max`
+- `claude-opus-5`, `claude-fable-5`: `low`, `medium`, `high`, `xhigh`, `max`
+- Haiku 4.5 entries: no effort support
+
+Custom models must explicitly register `supportedReasoningEfforts`. Missing or
+empty metadata fails closed before `complete()` or `stream()` performs a fetch.
+Provider model discovery does not infer effort support.
+
+Keep the effort level stable across cache-sensitive conversation turns. Changing
+it invalidates Anthropic message cache entries for the request.
 
 Provider-specific type should closely mirror Anthropic's API and use API field names at the boundary:
 
@@ -219,7 +240,7 @@ Do not blindly map canonical `reasoning.effort` to every Anthropic model because
 - manual `budget_tokens` is not accepted by all models,
 - adaptive thinking may already be on,
 - `thinking: { type: "disabled" }` may be invalid for some models,
-- `effort` is coupled to adaptive thinking rather than manual budget mode.
+- supported effort levels vary by model.
 
 Anthropic implementation details:
 
@@ -330,7 +351,7 @@ export interface AnthropicThinkingOptions {
 
 export interface AnthropicProviderOptions {
   cacheControl?: CacheControl;
-  effort?: Exclude<ReasoningEffort, 'none' | 'minimal' | 'xhigh'>;
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   thinking?: AnthropicThinkingOptions;
 }
 
@@ -348,8 +369,7 @@ export interface GoogleProviderOptions {
 
 Open questions before implementing canonical mapping:
 
-- Whether Anthropic's public `effort` accepted values exactly match `low | medium | high` or have additional values for newer models. Verify against the Messages API reference before implementation.
-- Whether to include OpenAI-only `xhigh` in the canonical type or keep it under `OpenAIReasoningOptions` only.
+- How provider-specific `xhigh` and `max` levels should map, if at all, into a canonical cross-provider type.
 - Whether top-level `reasoning.summary` should map to OpenAI summaries, Anthropic `display: "summarized"`, and Gemini `includeThoughts`, or whether those are too semantically different.
 - Whether "off" should exist canonically. It is not portable: Gemini 3 uses `minimal`, Gemini 2.5 Pro cannot disable thinking, and some Claude models reject disabling.
 
@@ -439,7 +459,9 @@ Anthropic:
 
 - `translateAnthropicRequest()` maps `{ type: 'enabled', budgetTokens: 1024 }` to `{ type: 'enabled', budget_tokens: 1024 }`.
 - `translateAnthropicRequest()` passes `display: 'summarized' | 'omitted'`.
-- `translateAnthropicRequest()` passes `effort` only when explicitly set.
+- `translateAnthropicRequest()` nests validated `effort` under `output_config`.
+- Effort and JSON schema output retain both `output_config.effort` and `output_config.format`.
+- Unsupported models/levels fail before complete or stream transport.
 - Manual thinking with `budgetTokens >= maxTokens` throws a local validation error.
 - No thinking fields are emitted when no options are supplied.
 
@@ -479,7 +501,7 @@ Then add canonical `reasoning.effort` as a second PR after deciding exact cross-
 - Do not merge OpenAI reasoning summaries, Anthropic thinking summaries, or Gemini thought summaries into `response.text`.
 - Do not implement encrypted reasoning state replay yet.
 - Do not preserve Anthropic thinking signatures or Gemini thought signatures in canonical conversation history yet.
-- Do not add model-registry validation for every provider/model reasoning mode.
+- Do not add model-registry validation for every other provider/model reasoning mode.
 - Do not add top-level canonical `reasoning.effort` until provider-specific support is stable.
 
 ## Risks

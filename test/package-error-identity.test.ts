@@ -54,6 +54,66 @@ const anthropicError = await capture(() =>
 );
 assert.equal(anthropicError.details.constraint, 'non_negative');
 
+const effortRequest = anthropic.translateAnthropicRequest({
+  model: 'claude-opus-5',
+  messages: [{ role: 'user', content: 'x' }],
+  maxTokens: 64,
+  providerOptions: {
+    anthropic: {
+      effort: 'xhigh',
+    },
+  },
+  responseFormat: {
+    type: 'json_schema',
+    schema: {
+      type: 'object',
+      properties: {
+        answer: { type: 'string' },
+      },
+      required: ['answer'],
+    },
+  },
+});
+assert.equal('effort' in effortRequest, false);
+assert.equal(effortRequest.output_config.effort, 'xhigh');
+assert.equal(effortRequest.output_config.format.type, 'json_schema');
+
+const invalidEffortError = await capture(() =>
+  anthropic.translateAnthropicRequest({
+    model: 'claude-opus-5',
+    messages: [{ role: 'user', content: 'x' }],
+    maxTokens: 64,
+    providerOptions: {
+      anthropic: {
+        effort: 'ultra',
+      },
+    },
+  }),
+);
+assert.equal(invalidEffortError.details.effort, 'ultra');
+
+let unsupportedEffortFetches = 0;
+const unsupportedEffortAdapter = new anthropic.AnthropicAdapter({
+  apiKey: 'test',
+  fetchImplementation: async () => {
+    unsupportedEffortFetches += 1;
+    throw new Error('unexpected fetch');
+  },
+});
+const unsupportedEffortOptions = {
+  model: 'claude-haiku-4-5',
+  messages: [{ role: 'user', content: 'x' }],
+  maxTokens: 64,
+  providerOptions: {
+    anthropic: {
+      effort: 'low',
+    },
+  },
+};
+await capture(() => unsupportedEffortAdapter.complete(unsupportedEffortOptions));
+await capture(() => unsupportedEffortAdapter.stream(unsupportedEffortOptions).next());
+assert.equal(unsupportedEffortFetches, 0);
+
 await capture(() =>
   gemini.translateGeminiRequest({
     model: 'gemini-3.5-flash',
@@ -167,6 +227,66 @@ const assert = require('node:assert/strict');
     }),
   );
   assert.equal(anthropicError.details.constraint, 'non_negative');
+
+  const effortRequest = anthropic.translateAnthropicRequest({
+    model: 'claude-opus-5',
+    messages: [{ role: 'user', content: 'x' }],
+    maxTokens: 64,
+    providerOptions: {
+      anthropic: {
+        effort: 'xhigh',
+      },
+    },
+    responseFormat: {
+      type: 'json_schema',
+      schema: {
+        type: 'object',
+        properties: {
+          answer: { type: 'string' },
+        },
+        required: ['answer'],
+      },
+    },
+  });
+  assert.equal('effort' in effortRequest, false);
+  assert.equal(effortRequest.output_config.effort, 'xhigh');
+  assert.equal(effortRequest.output_config.format.type, 'json_schema');
+
+  const invalidEffortError = await capture(() =>
+    anthropic.translateAnthropicRequest({
+      model: 'claude-opus-5',
+      messages: [{ role: 'user', content: 'x' }],
+      maxTokens: 64,
+      providerOptions: {
+        anthropic: {
+          effort: 'ultra',
+        },
+      },
+    }),
+  );
+  assert.equal(invalidEffortError.details.effort, 'ultra');
+
+  let unsupportedEffortFetches = 0;
+  const unsupportedEffortAdapter = new anthropic.AnthropicAdapter({
+    apiKey: 'test',
+    fetchImplementation: async () => {
+      unsupportedEffortFetches += 1;
+      throw new Error('unexpected fetch');
+    },
+  });
+  const unsupportedEffortOptions = {
+    model: 'claude-haiku-4-5',
+    messages: [{ role: 'user', content: 'x' }],
+    maxTokens: 64,
+    providerOptions: {
+      anthropic: {
+        effort: 'low',
+      },
+    },
+  };
+  await capture(() => unsupportedEffortAdapter.complete(unsupportedEffortOptions));
+  await capture(() => unsupportedEffortAdapter.stream(unsupportedEffortOptions).next());
+  assert.equal(unsupportedEffortFetches, 0);
 
   await capture(() =>
     gemini.translateGeminiRequest({
