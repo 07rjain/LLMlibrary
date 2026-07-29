@@ -3477,6 +3477,64 @@ describe('InMemorySessionStore', () => {
     expect(updated.meta.messageCount).toBe(1);
     expect(updated.meta.totalCostUSD).toBe(2);
   });
+
+  it('validates conversation metadata before state or client mutation', async () => {
+    const complete = vi.fn();
+    const stream = vi.fn();
+    const client: ConversationClient = { complete, stream };
+    const conversation = new Conversation(client);
+    const getter = vi.fn(() => 'secret');
+    const metadata = {};
+    Object.defineProperty(metadata, 'secret', {
+      enumerable: true,
+      get: getter,
+    });
+
+    await expect(
+      conversation.send('hello', {
+        metadata: metadata as Record<string, never>,
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    expect(() =>
+      conversation.sendStream('hello', {
+        metadata: { invalid: Symbol('no') } as unknown as Record<string, never>,
+      }),
+    ).toThrow(ProviderCapabilityError);
+
+    expect(conversation.history).toEqual([]);
+    expect(complete).not.toHaveBeenCalled();
+    expect(stream).not.toHaveBeenCalled();
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it('isolates valid conversation metadata from later caller mutation', async () => {
+    let capturedMetadata: unknown;
+    const client: ConversationClient = {
+      complete: vi.fn(async (options) => {
+        capturedMetadata = options.metadata;
+        return {
+          content: [],
+          finishReason: 'stop' as const,
+          model: 'mock-model',
+          provider: 'mock' as const,
+          raw: {},
+          text: '',
+          toolCalls: [],
+          usage: usage(0, 0, 0),
+        };
+      }),
+      stream: vi.fn(),
+    };
+    const conversation = new Conversation(client);
+    const nested = { enabled: true };
+    const metadata = { nested };
+
+    await conversation.send('hello', { metadata });
+    nested.enabled = false;
+
+    expect(capturedMetadata).toEqual({ nested: { enabled: true } });
+    expect(capturedMetadata).not.toBe(metadata);
+  });
 });
 
 function buildTool(

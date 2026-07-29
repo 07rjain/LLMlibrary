@@ -8,6 +8,7 @@ import {
   createCancelableStream,
   throwIfAborted,
 } from './stream-control.js';
+import { validateAndCloneMetadata } from './json-metadata.js';
 import { formatCost } from './utils/cost.js';
 
 import type { ContextManager } from './context-manager.js';
@@ -300,6 +301,10 @@ export class Conversation {
     input: CanonicalMessage['content'],
     options: ConversationRequestOptions = {},
   ): Promise<CanonicalResponse> {
+    const metadata =
+      options.metadata === undefined
+        ? undefined
+        : validateAndCloneMetadata(options.metadata);
     const userMessage = buildUserMessage(input);
     const initialMessages = [...this.messages, userMessage];
     const route = this.resolveConversationRoute(initialMessages);
@@ -308,7 +313,7 @@ export class Conversation {
       nextMessages,
       options.signal,
       options.requestId,
-      options.metadata,
+      metadata,
       route,
     );
 
@@ -321,6 +326,10 @@ export class Conversation {
     input: CanonicalMessage['content'],
     options: ConversationRequestOptions = {},
   ): CancelableStream<StreamChunk> {
+    const metadata =
+      options.metadata === undefined
+        ? undefined
+        : validateAndCloneMetadata(options.metadata);
     return createCancelableStream(
       async function* (
         this: Conversation,
@@ -334,7 +343,7 @@ export class Conversation {
           nextMessages,
           signal,
           options.requestId,
-          options.metadata,
+          metadata,
           route,
         );
         await this.finalizeExecution(result);

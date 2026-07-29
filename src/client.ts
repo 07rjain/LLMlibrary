@@ -7,6 +7,7 @@ import {
   RateLimitError,
 } from 'unified-llm-client/errors';
 import { validateEmbeddingRequest } from './embedding-validation.js';
+import { validateAndCloneMetadata } from './json-metadata.js';
 import { ModelRegistry } from 'unified-llm-client/models';
 import { Conversation, type ConversationRoute } from './conversation.js';
 import { AnthropicAdapter } from './providers/anthropic.js';
@@ -340,7 +341,8 @@ export class LLMClient {
 
   /** Executes a single non-streaming completion request. */
   async complete(options: LLMRequestOptions): Promise<CanonicalResponse> {
-    const plan = this.resolveRequestPlan(options);
+    const requestOptions = withValidatedMetadata(options);
+    const plan = this.resolveRequestPlan(requestOptions);
     const startedAt = Date.now();
     const attemptedRoutes: string[] = [];
 
@@ -359,7 +361,7 @@ export class LLMClient {
               durationMs: Date.now() - startedAt,
               finishReason: response.finishReason,
               model: response.model,
-              options,
+              options: requestOptions,
               provider: response.provider,
               usage: response.usage,
               ...(joinRoutingDecision(attemptedRoutes)
@@ -378,7 +380,7 @@ export class LLMClient {
             durationMs: Date.now() - startedAt,
             finishReason: response.finishReason,
             model: response.model,
-            options,
+            options: requestOptions,
             provider: response.provider,
             usage: response.usage,
             ...(joinRoutingDecision(attemptedRoutes)
@@ -526,7 +528,8 @@ export class LLMClient {
 
   /** Executes a streaming completion request and yields canonical chunks. */
   stream(options: LLMRequestOptions): CancelableStream<StreamChunk> {
-    const plan = this.resolveRequestPlan(options, { stream: true });
+    const requestOptions = withValidatedMetadata(options);
+    const plan = this.resolveRequestPlan(requestOptions, { stream: true });
     const startedAt = Date.now();
 
     return createCancelableStream(
@@ -534,7 +537,7 @@ export class LLMClient {
         this.streamWithFallback(
           plan,
           {
-            ...options,
+            ...requestOptions,
             signal,
           },
           startedAt,
@@ -1514,7 +1517,7 @@ class MockLLMClient extends LLMClient {
   }
 
   override async complete(options: LLMRequestOptions): Promise<CanonicalResponse> {
-    const resolved = this.resolveMockRequest(options);
+    const resolved = this.resolveMockRequest(withValidatedMetadata(options));
     const next = this.responseQueue.shift();
 
     if (!next) {
@@ -1574,16 +1577,19 @@ class MockLLMClient extends LLMClient {
   }
 
   override stream(options: LLMRequestOptions): CancelableStream<StreamChunk> {
+    const requestOptions = withValidatedMetadata(options);
     return createCancelableStream(
       async function* (
         this: MockLLMClient,
       ): AsyncGenerator<StreamChunk, void, void> {
-        const resolved = this.resolveMockRequest(options);
+        const resolved = this.resolveMockRequest(requestOptions);
         const next = this.streamQueue.shift();
         let sequence = 0;
         const decorate = (chunk: StreamChunk): StreamChunk => ({
           ...chunk,
-          ...(options.requestId !== undefined ? { requestId: options.requestId } : {}),
+          ...(requestOptions.requestId !== undefined
+            ? { requestId: requestOptions.requestId }
+            : {}),
           sequence: ++sequence,
           timestamp: new Date().toISOString(),
           version: 2,
@@ -1628,7 +1634,7 @@ class MockLLMClient extends LLMClient {
           yield decorate(chunk);
         }
       }.bind(this),
-      options.signal,
+      requestOptions.signal,
     );
   }
 
@@ -1848,6 +1854,15 @@ function buildUsageEvent(input: {
     ...(input.options.sessionId !== undefined ? { sessionId: input.options.sessionId } : {}),
     ...(input.options.tenantId !== undefined ? { tenantId: input.options.tenantId } : {}),
   };
+}
+
+function withValidatedMetadata(options: LLMRequestOptions): LLMRequestOptions {
+  return options.metadata === undefined
+    ? options
+    : {
+        ...options,
+        metadata: validateAndCloneMetadata(options.metadata),
+      };
 }
 
 function estimateBillableReasoningTokens(options: {

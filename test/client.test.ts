@@ -2857,6 +2857,173 @@ describe('LLMClient', () => {
     expect(first.models.get('gpt-4o').inputPrice).toBe(99);
     expect(second.models.get('gpt-4o').inputPrice).not.toBe(99);
   });
+
+  it('rejects non-JSON metadata before mock queue mutation or streaming dispatch', async () => {
+    const getter = vi.fn(() => 'secret');
+    const accessorMetadata = {};
+    Object.defineProperty(accessorMetadata, 'secret', {
+      enumerable: true,
+      get: getter,
+    });
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const symbolKey = { ok: true };
+    Object.defineProperty(symbolKey, Symbol('hidden'), {
+      enumerable: true,
+      value: 'secret',
+    });
+    let deep: Record<string, unknown> = {};
+    for (let index = 0; index < 34; index += 1) {
+      deep = { nested: deep };
+    }
+    const sparseArray = Array(1);
+    const customArray = [1];
+    Object.defineProperty(customArray, 'extra', {
+      enumerable: true,
+      value: 'invalid',
+    });
+    const hiddenArray = [1];
+    Object.defineProperty(hiddenArray, '0', {
+      enumerable: false,
+      value: 1,
+    });
+    const customPrototypeArray = [1];
+    Object.setPrototypeOf(customPrototypeArray, null);
+    const invalidMetadata: unknown[] = [
+      { value: undefined },
+      { value: 1n },
+      { value: Symbol('invalid') },
+      { value: () => undefined },
+      { value: Number.NaN },
+      { value: Number.POSITIVE_INFINITY },
+      cyclic,
+      { value: new Date() },
+      accessorMetadata,
+      symbolKey,
+      deep,
+      { value: sparseArray },
+      { value: customArray },
+      { value: hiddenArray },
+      { value: customPrototypeArray },
+    ];
+    const responseFactory = vi.fn();
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      responses: [responseFactory],
+      streams: [[]],
+    });
+
+    for (const metadata of invalidMetadata) {
+      await expect(
+        client.complete({
+          messages: [{ content: 'hello', role: 'user' }],
+          metadata: metadata as Record<string, never>,
+        }),
+      ).rejects.toMatchObject({
+        details: expect.objectContaining({
+          code: 'invalid_metadata',
+          option: 'metadata',
+        }),
+        name: 'ProviderCapabilityError',
+        statusCode: 400,
+      });
+    }
+
+    const adversarialKey = `bad\n\u202e${'x'.repeat(2_000)}`;
+    const pathError = await client
+      .complete({
+        messages: [{ content: 'hello', role: 'user' }],
+        metadata: {
+          [adversarialKey]: 1n,
+        } as unknown as Record<string, never>,
+      })
+      .catch((error: unknown) => error);
+    expect(pathError).toBeInstanceOf(ProviderCapabilityError);
+    const errorPath = (pathError as ProviderCapabilityError).details?.path;
+    expect(errorPath).toEqual(expect.any(String));
+    expect((errorPath as string).length).toBeLessThanOrEqual(256);
+    expect(errorPath).not.toContain('\n');
+    expect(errorPath).not.toContain('\u202e');
+    expect(errorPath).toMatch(/^metadata\.bad\?/);
+    expect(errorPath).toMatch(/\.\.\.$/);
+
+    expect(() =>
+      client.stream({
+        messages: [{ content: 'hello', role: 'user' }],
+        metadata: { invalid: 1n } as unknown as Record<string, never>,
+      }),
+    ).toThrow(ProviderCapabilityError);
+    expect(responseFactory).not.toHaveBeenCalled();
+    expect(getter).not.toHaveBeenCalled();
+
+    const fetchImplementation = vi.fn();
+    const providerClient = new LLMClient({
+      fetchImplementation,
+      openaiApiKey: 'test-key',
+    });
+    await expect(
+      providerClient.complete({
+        messages: [{ content: 'hello', role: 'user' }],
+        metadata: { invalid: 1n } as unknown as Record<string, never>,
+        model: 'gpt-4o-mini',
+        provider: 'openai',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it('accepts JSON metadata and snapshots it before request consumers observe it', async () => {
+    let capturedMetadata: unknown;
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      responses: [
+        (options) => {
+          capturedMetadata = options.metadata;
+          return {
+            content: [],
+            finishReason: 'stop',
+            model: options.model,
+            provider: options.provider,
+            raw: {},
+            text: '',
+            toolCalls: [],
+            usage: {
+              cachedTokens: 0,
+              cost: '$0.00',
+              costUSD: 0,
+              inputTokens: 0,
+              outputTokens: 0,
+            },
+          };
+        },
+      ],
+    });
+    const nested = { enabled: true };
+    const metadata = Object.assign(
+      Object.create(null) as Record<string, unknown>,
+      {
+        count: 1,
+        nested,
+        values: [null, 'ok', 2],
+      },
+    );
+
+    await client.complete({
+      messages: [{ content: 'hello', role: 'user' }],
+      metadata: metadata as unknown as Record<string, never>,
+    });
+    nested.enabled = false;
+    metadata.count = 99;
+
+    expect(capturedMetadata).toEqual({
+      count: 1,
+      nested: { enabled: true },
+      values: [null, 'ok', 2],
+    });
+    expect(capturedMetadata).not.toBe(metadata);
+  });
 });
 
 class MockPool {
