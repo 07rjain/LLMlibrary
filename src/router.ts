@@ -1,6 +1,6 @@
 import { ProviderCapabilityError } from 'unified-llm-client/errors';
 
-import type { ModelRegistry } from './models/registry.js';
+import type { ModelRegistry } from 'unified-llm-client/models';
 import type {
   CanonicalMessage,
   CanonicalProvider,
@@ -72,12 +72,25 @@ export interface ResolvedModelRoute {
   ruleName?: string;
 }
 
+const ROUTE_PROVIDERS = [
+  'anthropic',
+  'openai',
+  'google',
+  'mistral',
+  'cohere',
+  'groq',
+  'bedrock',
+  'azure-openai',
+  'ollama',
+  'mock',
+] as const;
+
 export class ModelRouter {
   private readonly rules: ModelRouteRule[];
   private readonly seed: string;
 
   constructor(options: ModelRouterOptions = {}) {
-    this.rules = [...(options.rules ?? [])];
+    this.rules = snapshotRules(options.rules ?? []);
     this.seed = options.seed ?? 'default';
   }
 
@@ -185,9 +198,16 @@ function selectWeightedVariant(
   seed: string,
 ): WeightedRouteVariant {
   const totalWeight = rule.variants?.reduce((total, variant) => total + variant.weight, 0) ?? 0;
-  if (!rule.variants || totalWeight <= 0) {
+  if (!rule.variants || !Number.isFinite(totalWeight) || totalWeight <= 0) {
     throw new ProviderCapabilityError(
       `Model router rule "${rule.name ?? 'unnamed'}" has invalid variant weights.`,
+      {
+        details: {
+          constraint: 'finite_positive_total',
+          option: 'variants',
+        },
+        statusCode: 400,
+      },
     );
   }
 
@@ -364,4 +384,147 @@ function hashStringToUnitInterval(input: string): number {
   }
 
   return ((hash >>> 0) + 1) / 4294967297;
+}
+
+function snapshotRules(rules: unknown): ModelRouteRule[] {
+  if (!Array.isArray(rules)) {
+    throw routeValidationError('rules', 'array', rules);
+  }
+
+  return rules.map((rule, ruleIndex) => {
+    const ruleOption = `rules[${ruleIndex}]`;
+    if (!isPlainObject(rule)) {
+      throw routeValidationError(ruleOption, 'plain_object', rule);
+    }
+    if (rule.name !== undefined) {
+      assertRouteString(rule.name, `${ruleOption}.name`);
+    }
+
+    const snapshot: ModelRouteRule = {};
+    if (rule.name !== undefined) {
+      snapshot.name = rule.name as string;
+    }
+    if (rule.match !== undefined) {
+      if (typeof rule.match === 'function') {
+        snapshot.match = rule.match as (context: RouterContext) => boolean;
+      } else if (isPlainObject(rule.match)) {
+        snapshot.match = { ...rule.match } as RouterContextFilter;
+      } else {
+        throw routeValidationError(`${ruleOption}.match`, 'function_or_plain_object', rule.match);
+      }
+    }
+    if (rule.target !== undefined) {
+      snapshot.target = snapshotTarget(rule.target, `${ruleOption}.target`);
+    }
+    if (rule.fallback !== undefined) {
+      if (!Array.isArray(rule.fallback)) {
+        throw routeValidationError(`${ruleOption}.fallback`, 'array', rule.fallback);
+      }
+      snapshot.fallback = rule.fallback.map((target, index) =>
+        snapshotTarget(target, `${ruleOption}.fallback[${index}]`),
+      );
+    }
+    if (rule.variants !== undefined) {
+      if (!Array.isArray(rule.variants) || rule.variants.length === 0) {
+        throw routeValidationError(
+          `${ruleOption}.variants`,
+          'non_empty_array',
+          rule.variants,
+        );
+      }
+      let totalWeight = 0;
+      snapshot.variants = rule.variants.map((variant, index) => {
+        const option = `${ruleOption}.variants[${index}]`;
+        if (!isPlainObject(variant)) {
+          throw routeValidationError(option, 'plain_object', variant);
+        }
+        const target = snapshotTarget(variant, option) as ModelRouteTarget;
+        const weight = variant.weight;
+        if (typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0) {
+          throw routeValidationError(`${option}.weight`, 'finite_positive_number', weight);
+        }
+        totalWeight += weight;
+        return { ...target, weight };
+      });
+      if (!Number.isFinite(totalWeight) || totalWeight <= 0) {
+        throw routeValidationError(
+          `${ruleOption}.variants`,
+          'finite_positive_total',
+          totalWeight,
+        );
+      }
+    }
+    return snapshot;
+  });
+}
+
+function snapshotTarget(value: unknown, option: string): ModelRouteTarget | string {
+  if (typeof value === 'string') {
+    assertRouteString(value, option);
+    return value;
+  }
+  if (!isPlainObject(value)) {
+    throw routeValidationError(option, 'model_string_or_plain_object', value);
+  }
+  assertRouteString(value.model, `${option}.model`);
+  const target: ModelRouteTarget = { model: value.model };
+  if (value.name !== undefined) {
+    assertRouteString(value.name, `${option}.name`);
+    target.name = value.name;
+  }
+  if (value.provider !== undefined) {
+    if (
+      typeof value.provider !== 'string' ||
+      !(ROUTE_PROVIDERS as readonly string[]).includes(value.provider)
+    ) {
+      throw routeValidationError(
+        `${option}.provider`,
+        'supported_provider',
+        value.provider,
+      );
+    }
+    target.provider = value.provider as CanonicalProvider;
+  }
+  return target;
+}
+
+function assertRouteString(value: unknown, option: string): asserts value is string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw routeValidationError(option, 'non_empty_string', value);
+  }
+}
+
+function routeValidationError(
+  option: string,
+  constraint: string,
+  value: unknown,
+): ProviderCapabilityError {
+  return new ProviderCapabilityError(`Invalid model router option "${option}".`, {
+    details: {
+      constraint,
+      option,
+      ...(value !== undefined ? { value: safeRouteDetail(value) } : {}),
+    },
+    statusCode: 400,
+  });
+}
+
+function safeRouteDetail(value: unknown): unknown {
+  if (
+    value === null ||
+    typeof value === 'boolean' ||
+    typeof value === 'number' ||
+    typeof value === 'string'
+  ) {
+    return value;
+  }
+  return Array.isArray(value) ? 'array' : typeof value;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }

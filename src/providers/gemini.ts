@@ -6,7 +6,17 @@ import {
   RateLimitError,
 } from 'unified-llm-client/errors';
 import { validateEmbeddingRequest } from '../embedding-validation.js';
-import { ModelRegistry } from '../models/registry.js';
+import { ModelRegistry } from 'unified-llm-client/models';
+import {
+  discoveryError,
+  isPlainObject,
+  readModelDiscoveryPage,
+  readOptionalFiniteNumber,
+  readOptionalString,
+  readOptionalStringArray,
+  readPaginationCursor,
+  readRequiredModelId,
+} from '../model-discovery.js';
 import { geminiUsageToCanonical, usageWithCost } from '../utils/cost.js';
 import { parseSSE } from '../utils/parse-sse.js';
 import { withRetry } from '../utils/retry.js';
@@ -161,20 +171,6 @@ interface GeminiEmbedContentResponse {
   embedding?: GeminiEmbeddingPayload;
   embeddings?: GeminiEmbeddingPayload[];
   usageMetadata?: GeminiUsageMetadata;
-}
-
-interface GeminiModelPayload {
-  description?: string;
-  displayName?: string;
-  inputTokenLimit?: number;
-  name: string;
-  outputTokenLimit?: number;
-  supportedGenerationMethods?: string[];
-}
-
-interface GeminiModelListPayload {
-  models?: GeminiModelPayload[];
-  nextPageToken?: string;
 }
 
 export interface GeminiCachedContent {
@@ -493,6 +489,7 @@ export class GeminiAdapter {
   async listModels(): Promise<RemoteModelInfo[]> {
     const models: RemoteModelInfo[] = [];
     let pageToken: string | undefined;
+    const seenCursors = new Set<string>();
 
     while (true) {
       const searchParams = new URLSearchParams({
@@ -521,31 +518,51 @@ export class GeminiAdapter {
         throw await mapGeminiError(response);
       }
 
-      const payload = (await response.json()) as GeminiModelListPayload;
-      for (const model of payload.models ?? []) {
+      const { page, records } = await readModelDiscoveryPage(
+        response,
+        'google',
+        'models',
+      );
+      for (const model of records) {
+        const providerId = readRequiredModelId(model, 'name');
+        if (!providerId || !isPlainObject(model)) {
+          continue;
+        }
+        const displayName = readOptionalString(model, 'displayName');
+        const inputTokenLimit = readOptionalFiniteNumber(model, 'inputTokenLimit');
+        const outputTokenLimit = readOptionalFiniteNumber(model, 'outputTokenLimit');
+        const supportedActions = readOptionalStringArray(
+          model,
+          'supportedGenerationMethods',
+        );
         models.push({
-          ...(model.displayName ? { displayName: model.displayName } : {}),
-          id: normalizeGeminiModelId(model.name),
-          ...(model.inputTokenLimit !== undefined
-            ? { inputTokenLimit: model.inputTokenLimit }
-            : {}),
-          ...(model.outputTokenLimit !== undefined
-            ? { outputTokenLimit: model.outputTokenLimit }
-            : {}),
+          ...(displayName ? { displayName } : {}),
+          id: normalizeGeminiModelId(providerId),
+          ...(inputTokenLimit !== undefined ? { inputTokenLimit } : {}),
+          ...(outputTokenLimit !== undefined ? { outputTokenLimit } : {}),
           provider: 'google',
-          providerId: model.name,
+          providerId,
           raw: model,
-          ...(model.supportedGenerationMethods
-            ? { supportedActions: model.supportedGenerationMethods }
-            : {}),
+          ...(supportedActions ? { supportedActions } : {}),
         });
       }
 
-      if (!payload.nextPageToken) {
+      if (!Object.prototype.hasOwnProperty.call(page, 'nextPageToken')) {
         return models;
       }
 
-      pageToken = payload.nextPageToken;
+      if (page.nextPageToken === undefined) {
+        return models;
+      }
+      if (page.nextPageToken === null) {
+        throw discoveryError('google', 'nextPageToken', 'non_empty_string');
+      }
+      pageToken = readPaginationCursor(
+        page.nextPageToken,
+        seenCursors,
+        'google',
+        'nextPageToken',
+      );
     }
   }
 

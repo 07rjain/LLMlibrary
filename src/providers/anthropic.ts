@@ -5,7 +5,15 @@ import {
   ProviderError,
   RateLimitError,
 } from 'unified-llm-client/errors';
-import { ModelRegistry } from '../models/registry.js';
+import { ModelRegistry } from 'unified-llm-client/models';
+import {
+  discoveryError,
+  isPlainObject,
+  readModelDiscoveryPage,
+  readOptionalString,
+  readPaginationCursor,
+  readRequiredModelId,
+} from '../model-discovery.js';
 import { anthropicUsageToCanonical, usageWithCost } from '../utils/cost.js';
 import { parseSSE } from '../utils/parse-sse.js';
 import { withRetry } from '../utils/retry.js';
@@ -123,19 +131,6 @@ interface AnthropicErrorBody {
     type?: string;
   };
   type?: 'error';
-}
-
-interface AnthropicModelPayload {
-  created_at?: string;
-  display_name?: string;
-  id: string;
-  type?: string;
-}
-
-interface AnthropicModelListPayload {
-  data?: AnthropicModelPayload[];
-  has_more?: boolean;
-  last_id?: string;
 }
 
 interface AnthropicSSEEvent {
@@ -275,6 +270,7 @@ export class AnthropicAdapter {
   async listModels(): Promise<RemoteModelInfo[]> {
     const models: RemoteModelInfo[] = [];
     let afterId: string | undefined;
+    const seenCursors = new Set<string>();
 
     while (true) {
       const searchParams = new URLSearchParams({
@@ -303,23 +299,40 @@ export class AnthropicAdapter {
         throw await mapAnthropicError(response);
       }
 
-      const payload = (await response.json()) as AnthropicModelListPayload;
-      for (const model of payload.data ?? []) {
+      const { page, records } = await readModelDiscoveryPage(
+        response,
+        'anthropic',
+        'data',
+      );
+      for (const model of records) {
+        const id = readRequiredModelId(model, 'id');
+        if (!id || !isPlainObject(model)) {
+          continue;
+        }
+        const createdAt = readOptionalString(model, 'created_at');
+        const displayName = readOptionalString(model, 'display_name');
         models.push({
-          ...(model.created_at ? { createdAt: model.created_at } : {}),
-          ...(model.display_name ? { displayName: model.display_name } : {}),
-          id: model.id,
+          ...(createdAt ? { createdAt } : {}),
+          ...(displayName ? { displayName } : {}),
+          id,
           provider: 'anthropic',
           raw: model,
         });
       }
 
-      const lastId = payload.last_id ?? payload.data?.at(-1)?.id;
-      if (!payload.has_more || !lastId) {
+      if (typeof page.has_more !== 'boolean') {
+        throw discoveryError('anthropic', 'has_more', 'boolean');
+      }
+      if (!page.has_more) {
         return models;
       }
 
-      afterId = lastId;
+      afterId = readPaginationCursor(
+        page.last_id,
+        seenCursors,
+        'anthropic',
+        'last_id',
+      );
     }
   }
 

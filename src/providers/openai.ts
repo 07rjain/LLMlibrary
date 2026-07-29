@@ -5,7 +5,14 @@ import {
   ProviderError,
   RateLimitError,
 } from 'unified-llm-client/errors';
-import { ModelRegistry } from '../models/registry.js';
+import { ModelRegistry } from 'unified-llm-client/models';
+import {
+  isPlainObject,
+  readModelDiscoveryPage,
+  readOptionalFiniteNumber,
+  readOptionalString,
+  readRequiredModelId,
+} from '../model-discovery.js';
 import {
   openaiUsageToCanonical,
   speechUsageWithCost,
@@ -166,18 +173,6 @@ interface OpenAIResponsePayload {
 
 interface OpenAIErrorBody {
   error?: OpenAIResponseErrorPayload;
-}
-
-interface OpenAIModelPayload {
-  created?: number;
-  id: string;
-  object: string;
-  owned_by?: string;
-}
-
-interface OpenAIModelListPayload {
-  data?: OpenAIModelPayload[];
-  object?: string;
 }
 
 interface OpenAIResponseOutputTextDeltaEvent {
@@ -390,18 +385,27 @@ export class OpenAIAdapter {
       throw await mapOpenAIError(response);
     }
 
-    const payload = (await response.json()) as OpenAIModelListPayload;
-    return (payload.data ?? []).map((model) => {
-      const createdAt = normalizeUnixTimestamp(model.created);
-      return {
+    const { records } = await readModelDiscoveryPage(response, 'openai', 'data');
+    const models: RemoteModelInfo[] = [];
+    for (const model of records) {
+      const id = readRequiredModelId(model, 'id');
+      if (!id || !isPlainObject(model)) {
+        continue;
+      }
+      const createdAt = normalizeUnixTimestamp(
+        readOptionalFiniteNumber(model, 'created'),
+      );
+      const ownedBy = readOptionalString(model, 'owned_by');
+      models.push({
         ...(createdAt ? { createdAt } : {}),
-        displayName: model.id,
-        id: model.id,
-        ...(model.owned_by ? { ownedBy: model.owned_by } : {}),
+        displayName: id,
+        id,
+        ...(ownedBy ? { ownedBy } : {}),
         provider: 'openai',
         raw: model,
-      };
-    });
+      });
+    }
+    return models;
   }
 
   async speak(options: OpenAIAdapterSpeechOptions): Promise<SpeechResponse> {
