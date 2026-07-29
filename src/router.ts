@@ -1,4 +1,4 @@
-import { ProviderCapabilityError } from './errors.js';
+import { ProviderCapabilityError } from 'unified-llm-client/errors';
 
 import type { ModelRegistry } from './models/registry.js';
 import type {

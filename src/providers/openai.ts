@@ -4,7 +4,7 @@ import {
   ProviderCapabilityError,
   ProviderError,
   RateLimitError,
-} from '../errors.js';
+} from 'unified-llm-client/errors';
 import { ModelRegistry } from '../models/registry.js';
 import {
   openaiUsageToCanonical,

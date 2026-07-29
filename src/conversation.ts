@@ -1,4 +1,8 @@
-import { BudgetExceededError, MaxToolRoundsError, ProviderError } from './errors.js';
+import {
+  BudgetExceededError,
+  MaxToolRoundsError,
+  ProviderError,
+} from 'unified-llm-client/errors';
 import {
   buildAbortError,
   createCancelableStream,

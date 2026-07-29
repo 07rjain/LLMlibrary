@@ -1,5 +1,5 @@
 import { SlidingWindowStrategy, type ContextManager } from './context-manager.js';
-import { LLMError, ProviderCapabilityError } from './errors.js';
+import { LLMError, ProviderCapabilityError } from 'unified-llm-client/errors';
 import { sanitizeForLogging } from './redaction.js';
 
 import type { LLMClient } from './client.js';

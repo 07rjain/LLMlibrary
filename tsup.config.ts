@@ -21,6 +21,7 @@ export default defineConfig({
   },
   format: ['esm', 'cjs'],
   minify: false,
+  external: ['unified-llm-client/errors'],
   platform: 'neutral',
   sourcemap: true,
   splitting: false,

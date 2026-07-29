@@ -1,4 +1,4 @@
-import { ProviderCapabilityError } from '../errors.js';
+import { ProviderCapabilityError } from 'unified-llm-client/errors';
 import { isProductionRuntime } from '../runtime.js';
 
 import { defaultModelPrices } from './prices.js';

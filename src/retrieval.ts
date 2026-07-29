@@ -1,4 +1,4 @@
-import { LLMError } from './errors.js';
+import { LLMError } from 'unified-llm-client/errors';
 import { loadPgPoolConstructor } from './node-pg-loader.js';
 import { getEnvironmentVariable } from './runtime.js';
 import { estimateTokens } from './utils/token-estimator.js';

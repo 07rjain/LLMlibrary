@@ -1,6 +1,11 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      'unified-llm-client/errors': new URL('./src/errors.ts', import.meta.url).pathname,
+    },
+  },
   test: {
     coverage: {
       exclude: [

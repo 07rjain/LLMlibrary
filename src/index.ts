@@ -2,7 +2,7 @@ export * from './client.js';
 export * from './chunking.js';
 export * from './context-manager.js';
 export * from './conversation.js';
-export * from './errors.js';
+export * from 'unified-llm-client/errors';
 export * from './models/index.js';
 export * from './providers/anthropic.js';
 export * from './providers/gemini.js';

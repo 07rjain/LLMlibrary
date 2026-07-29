@@ -1,4 +1,4 @@
-import { LLMError } from './errors.js';
+import { LLMError } from 'unified-llm-client/errors';
 import { formatRetrievedContext } from './retrieval.js';
 
 import type { LLMRequestOptions } from './client.js';
