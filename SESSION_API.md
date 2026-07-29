@@ -127,6 +127,7 @@ Options:
 
 - Provide `maxMessages` and/or `maxTokens` in the body to use a one-off `SlidingWindowStrategy`
 - Or configure `contextManager` when constructing `SessionApi`
+- Invalid `maxMessages` or `maxTokens` values return HTTP `400` (`ProviderCapabilityError`) without changing the stored session
 
 ### `POST /sessions/{id}/fork`
 
