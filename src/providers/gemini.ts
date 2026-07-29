@@ -5,6 +5,7 @@ import {
   ProviderError,
   RateLimitError,
 } from 'unified-llm-client/errors';
+import { validateEmbeddingRequest } from '../embedding-validation.js';
 import { ModelRegistry } from '../models/registry.js';
 import { geminiUsageToCanonical, usageWithCost } from '../utils/cost.js';
 import { parseSSE } from '../utils/parse-sse.js';
@@ -23,7 +24,6 @@ import type {
   CanonicalToolCall,
   CanonicalToolChoice,
   CanonicalToolSchema,
-  EmbeddingInput,
   EmbeddingInputItem,
   EmbeddingProviderOptions,
   EmbeddingPurpose,
@@ -299,13 +299,13 @@ export class GeminiAdapter {
   }
 
   async embed(options: GeminiEmbeddingOptions): Promise<EmbeddingResponse> {
-    const requests = normalizeGeminiEmbeddingInput(options.input);
-    if (requests.length === 0) {
-      throw new ProviderError('Gemini embedding requests require at least one input item.', {
-        model: options.model,
-        provider: 'google',
-      });
-    }
+    const model = normalizeGeminiModelId(options.model);
+    const modelInfo = this.modelRegistry.assertModelKind(model, 'embedding');
+    const requests = validateEmbeddingRequest(options, {
+      model,
+      modelInfo,
+      provider: 'google',
+    });
 
     const embeddings: EmbeddingResponse['embeddings'] = [];
     let lastPayload: GeminiEmbedContentResponse | undefined;
@@ -316,7 +316,7 @@ export class GeminiAdapter {
       const response = await withRetry(
         async () =>
           this.fetchImplementation(
-            `${this.baseUrl}/v1beta/models/${encodeURIComponent(normalizeGeminiModelId(options.model))}:embedContent`,
+            `${this.baseUrl}/v1beta/models/${encodeURIComponent(model)}:embedContent`,
             buildRequestInit(
               {
                 body: JSON.stringify(translateGeminiEmbeddingRequest(options, input)),
@@ -354,7 +354,7 @@ export class GeminiAdapter {
     }
 
     const usage = buildGeminiEmbeddingUsage(
-      this.modelRegistry.get(options.model),
+      modelInfo,
       observedPromptTokens ? { promptTokenCount: totalPromptTokens } : undefined,
     );
 
@@ -718,6 +718,10 @@ export function translateGeminiEmbeddingRequest(
   >,
   input: EmbeddingInputItem,
 ): Record<string, unknown> {
+  validateEmbeddingRequest({ ...options, input }, {
+    model: normalizeGeminiModelId(options.model),
+    provider: 'google',
+  });
   const body: Record<string, unknown> = {
     content: translateGeminiEmbeddingContent(input, options.providerOptions?.google),
   };
@@ -1384,40 +1388,6 @@ function normalizeGeminiFinishReason(
     case null:
       return 'stop';
   }
-}
-
-function normalizeGeminiEmbeddingInput(
-  input: EmbeddingInput,
-): EmbeddingInputItem[] {
-  if (typeof input === 'string') {
-    return [input];
-  }
-
-  if (!Array.isArray(input)) {
-    return [input];
-  }
-
-  if (input.length === 0) {
-    return [];
-  }
-
-  if (isCanonicalPartArray(input)) {
-    return [input];
-  }
-
-  return input;
-}
-
-function isCanonicalPartArray(input: EmbeddingInput): input is CanonicalPart[] {
-  return (
-    Array.isArray(input) &&
-    input.every(
-      (value) =>
-        typeof value === 'object' &&
-        value !== null &&
-        'type' in value,
-    )
-  );
 }
 
 function mapEmbeddingPurposeToGeminiTaskType(

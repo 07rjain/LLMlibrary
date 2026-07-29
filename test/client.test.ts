@@ -531,6 +531,207 @@ describe('LLMClient', () => {
     ).rejects.toBeInstanceOf(ProviderCapabilityError);
   });
 
+  it.each([
+    ['empty string', ''],
+    ['whitespace string', '   '],
+    ['empty array', []],
+    ['null input', null],
+    ['undefined input', undefined],
+    ['mixed empty batch', ['valid', '']],
+    ['mixed null batch', ['valid', null]],
+    ['malformed part', [{ text: 'missing type' }]],
+    ['null part', [{ text: 'valid', type: 'text' }, null]],
+    ['empty text part', [{ text: ' ', type: 'text' }]],
+  ])('rejects invalid embedding input: %s', async (_label, input) => {
+    const fetchImplementation = vi.fn();
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      fetchImplementation,
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.embed({ input } as never),
+    ).rejects.toMatchObject({
+      details: {
+        option: 'input',
+      },
+      name: 'ProviderCapabilityError',
+      statusCode: 400,
+    });
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it('accepts every public embedding purpose and preserves valid batch indexes', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(
+        JSON.stringify({
+          embedding: {
+            values: [bodies.length],
+          },
+        }),
+        { status: 200 },
+      );
+    });
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      fetchImplementation,
+      geminiApiKey: 'gemini-key',
+    });
+    const purposes = [
+      ['retrieval_document', 'RETRIEVAL_DOCUMENT'],
+      ['retrieval_query', 'RETRIEVAL_QUERY'],
+      ['semantic_similarity', 'SEMANTIC_SIMILARITY'],
+      ['classification', 'CLASSIFICATION'],
+      ['clustering', 'CLUSTERING'],
+    ] as const;
+
+    for (const [purpose, taskType] of purposes) {
+      await client.embed({ input: 'valid', purpose });
+      expect(bodies.at(-1)?.taskType).toBe(taskType);
+    }
+
+    const batch = await client.embed({ input: ['first', 'second'] });
+    expect(batch.embeddings).toEqual([
+      { index: 0, values: [6] },
+      { index: 1, values: [7] },
+    ]);
+  });
+
+  it.each([
+    ['unknown'],
+    [null],
+    [{ unexpected: true }],
+  ])('rejects invalid embedding purpose %# before dispatch', async (purpose) => {
+    const fetchImplementation = vi.fn();
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      fetchImplementation,
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.embed({
+        input: 'valid',
+        purpose,
+      } as never),
+    ).rejects.toMatchObject({
+      details: {
+        constraint: 'supported_embedding_purpose',
+        option: 'purpose',
+      },
+      name: 'ProviderCapabilityError',
+      statusCode: 400,
+    });
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it.each([127, 3073, 0, -1, 1.5, Number.NaN, Infinity, -Infinity])(
+    'rejects invalid embedding dimensions %s before dispatch',
+    async (dimensions) => {
+      const fetchImplementation = vi.fn();
+      const client = new LLMClient({
+        defaultEmbeddingModel: 'gemini-embedding-2',
+        fetchImplementation,
+        geminiApiKey: 'gemini-key',
+      });
+
+      await expect(
+        client.embed({ dimensions, input: 'valid' }),
+      ).rejects.toMatchObject({
+        details: {
+          option: 'dimensions',
+        },
+        name: 'ProviderCapabilityError',
+        statusCode: 400,
+      });
+      expect(fetchImplementation).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([128, 512, 768, 1024, 1536, 3072])(
+    'accepts supported embedding dimensions %s',
+    async (dimensions) => {
+      const fetchImplementation = vi.fn(async () =>
+        new Response(JSON.stringify({ embedding: { values: [dimensions] } }), {
+          status: 200,
+        }),
+      );
+      const client = new LLMClient({
+        defaultEmbeddingModel: 'gemini-embedding-2',
+        fetchImplementation,
+        geminiApiKey: 'gemini-key',
+      });
+
+      const response = await client.embed({ dimensions, input: 'valid' });
+
+      expect(response.embeddings[0]?.values).toEqual([dimensions]);
+      expect(fetchImplementation).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('honors custom embedding bounds and allows metadata-absent dimensions', async () => {
+    const fetchImplementation = vi.fn(async () =>
+      new Response(JSON.stringify({ embedding: { values: [1] } }), {
+        status: 200,
+      }),
+    );
+    const client = new LLMClient({
+      fetchImplementation,
+      geminiApiKey: 'gemini-key',
+    });
+    const baseModel = {
+      contextWindow: 8192,
+      inputPrice: 0,
+      kind: 'embedding' as const,
+      lastUpdated: '2026-07-29',
+      outputPrice: 0,
+      provider: 'google' as const,
+      supportedInputModalities: ['text'] as const,
+      supportsStreaming: false,
+      supportsTools: false,
+      supportsVision: false,
+    };
+    client.models.register({
+      ...baseModel,
+      embeddingDimensions: { default: 3, max: 4, min: 2 },
+      id: 'custom-bounded-embedding',
+      supportedInputModalities: ['text'],
+    });
+    client.models.register({
+      ...baseModel,
+      id: 'custom-unbounded-embedding',
+      supportedInputModalities: ['text'],
+    });
+
+    await expect(
+      client.embed({
+        dimensions: 1,
+        input: 'valid',
+        model: 'custom-bounded-embedding',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    await expect(
+      client.embed({
+        dimensions: 5,
+        input: 'valid',
+        model: 'custom-bounded-embedding',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    await expect(
+      client.embed({
+        dimensions: 1,
+        input: 'valid',
+        model: 'custom-unbounded-embedding',
+      }),
+    ).resolves.toMatchObject({
+      embeddings: [{ index: 0, values: [1] }],
+    });
+    expect(fetchImplementation).toHaveBeenCalledOnce();
+  });
+
   it('provides deterministic queued embeddings through LLMClient.mock()', async () => {
     const client = LLMClient.mock({
       defaultEmbeddingModel: 'gemini-embedding-2',
@@ -550,6 +751,37 @@ describe('LLMClient', () => {
 
     expect(response.embeddings[0]?.values).toEqual([0.5, 0.6]);
     expect(response.provider).toBe('mock');
+  });
+
+  it('validates mock embeddings without consuming the queued response', async () => {
+    const client = LLMClient.mock({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      embeddings: [
+        {
+          embeddings: [{ index: 0, values: [0.9] }],
+          model: 'gemini-embedding-2',
+          provider: 'mock',
+          raw: { queued: true },
+        },
+      ],
+    });
+
+    await expect(client.embed({ input: '' })).rejects.toBeInstanceOf(
+      ProviderCapabilityError,
+    );
+    await expect(
+      client.embed({ input: 'valid', purpose: 'unknown' as never }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    await expect(
+      client.embed({ dimensions: 0, input: 'valid' }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+
+    const response = await client.embed({
+      dimensions: 3,
+      input: 'valid',
+    });
+    expect(response.embeddings[0]?.values).toEqual([0.9]);
+    expect(response.raw).toEqual({ queued: true });
   });
 
   it('provides deterministic queued speech responses through LLMClient.mock()', async () => {

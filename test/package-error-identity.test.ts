@@ -99,6 +99,37 @@ const invalidEffortError = await capture(() =>
 );
 assert.equal(invalidEffortError.details.effort, 'ultra');
 
+const clientEmbeddingError = await capture(() =>
+  new clientModule.LLMClient().embed({ input: null }),
+);
+assert.equal(clientEmbeddingError.statusCode, 400);
+assert.equal(clientEmbeddingError.details.option, 'input');
+
+const translatorEmbeddingError = await capture(() =>
+  gemini.translateGeminiEmbeddingRequest(
+    { model: 'gemini-embedding-2', purpose: 'unknown' },
+    'valid',
+  ),
+);
+assert.equal(translatorEmbeddingError.details.option, 'purpose');
+
+let invalidEmbeddingFetches = 0;
+const embeddingAdapter = new gemini.GeminiAdapter({
+  apiKey: 'test',
+  fetchImplementation: async () => {
+    invalidEmbeddingFetches += 1;
+    throw new Error('unexpected fetch');
+  },
+});
+await capture(() =>
+  embeddingAdapter.embed({
+    dimensions: 127,
+    input: 'valid',
+    model: 'gemini-embedding-2',
+  }),
+);
+assert.equal(invalidEmbeddingFetches, 0);
+
 let unsupportedEffortFetches = 0;
 const unsupportedEffortAdapter = new anthropic.AnthropicAdapter({
   apiKey: 'test',
@@ -241,6 +272,37 @@ const assert = require('node:assert/strict');
     }),
   );
   assert.equal(anthropicError.details.constraint, 'non_negative');
+
+  const clientEmbeddingError = await capture(() =>
+    new clientModule.LLMClient().embed({ input: null }),
+  );
+  assert.equal(clientEmbeddingError.statusCode, 400);
+  assert.equal(clientEmbeddingError.details.option, 'input');
+
+  const translatorEmbeddingError = await capture(() =>
+    gemini.translateGeminiEmbeddingRequest(
+      { model: 'gemini-embedding-2', purpose: 'unknown' },
+      'valid',
+    ),
+  );
+  assert.equal(translatorEmbeddingError.details.option, 'purpose');
+
+  let invalidEmbeddingFetches = 0;
+  const embeddingAdapter = new gemini.GeminiAdapter({
+    apiKey: 'test',
+    fetchImplementation: async () => {
+      invalidEmbeddingFetches += 1;
+      throw new Error('unexpected fetch');
+    },
+  });
+  await capture(() =>
+    embeddingAdapter.embed({
+      dimensions: 127,
+      input: 'valid',
+      model: 'gemini-embedding-2',
+    }),
+  );
+  assert.equal(invalidEmbeddingFetches, 0);
 
   const effortRequest = anthropic.translateAnthropicRequest({
     model: 'claude-opus-5',

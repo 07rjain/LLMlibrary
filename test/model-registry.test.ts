@@ -166,6 +166,12 @@ describe('ModelRegistry', () => {
     expect(registry.assertModelKind('gemini-embedding-2', 'embedding').kind).toBe(
       'embedding',
     );
+    expect(registry.get('gemini-embedding-2').embeddingDimensions).toEqual({
+      default: 3072,
+      max: 3072,
+      min: 128,
+      recommended: [768, 1536, 3072],
+    });
   });
 
   it('defaults legacy models to completion kind and rejects mismatched kinds', () => {

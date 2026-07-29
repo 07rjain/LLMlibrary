@@ -518,6 +518,151 @@ describe('Gemini adapter', () => {
     ).toThrow(ProviderCapabilityError);
   });
 
+  it.each([
+    ['empty string', ''],
+    ['empty array', []],
+    ['null input', null],
+    ['undefined input', undefined],
+    ['mixed empty batch', ['valid', '']],
+    ['mixed null batch', ['valid', null]],
+    ['malformed part', [{ type: 'text' }]],
+  ])('rejects invalid direct embedding input before fetch: %s', async (_label, input) => {
+    const fetchImplementation = vi.fn();
+    const adapter = new GeminiAdapter({
+      apiKey: 'gemini-key',
+      fetchImplementation,
+    });
+
+    await expect(
+      adapter.embed({
+        input,
+        model: 'gemini-embedding-2',
+      } as never),
+    ).rejects.toMatchObject({
+      details: { option: 'input' },
+      name: 'ProviderCapabilityError',
+      statusCode: 400,
+    });
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it.each([127, 3073, 0, -1, 1.5, Number.NaN, Infinity, -Infinity])(
+    'rejects direct embedding dimensions %s before fetch',
+    async (dimensions) => {
+      const fetchImplementation = vi.fn();
+      const adapter = new GeminiAdapter({
+        apiKey: 'gemini-key',
+        fetchImplementation,
+      });
+
+      await expect(
+        adapter.embed({
+          dimensions,
+          input: 'valid',
+          model: 'gemini-embedding-2',
+        }),
+      ).rejects.toMatchObject({
+        details: { option: 'dimensions' },
+        name: 'ProviderCapabilityError',
+        statusCode: 400,
+      });
+      expect(fetchImplementation).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([127, 3073, 0, -1, 1.5, Number.NaN, Infinity, -Infinity])(
+    'rejects translator embedding dimensions %s',
+    (dimensions) => {
+      expect(() =>
+        translateGeminiEmbeddingRequest(
+          { dimensions, model: 'gemini-embedding-2' },
+          'valid',
+        ),
+      ).toThrow(ProviderCapabilityError);
+    },
+  );
+
+  it.each([128, 512, 768, 1024, 1536, 3072])(
+    'accepts translator embedding dimensions %s',
+    (dimensions) => {
+      expect(
+        translateGeminiEmbeddingRequest(
+          { dimensions, model: 'gemini-embedding-2' },
+          'valid',
+        ),
+      ).toMatchObject({ outputDimensionality: dimensions });
+    },
+  );
+
+  it.each([
+    '',
+    null,
+    undefined,
+    [],
+    [{ text: ' ', type: 'text' }],
+    [{ type: 'unknown' }],
+  ])('rejects invalid translator embedding input %#', (input) => {
+    expect(() =>
+      translateGeminiEmbeddingRequest(
+        { model: 'gemini-embedding-2' },
+        input as never,
+      ),
+    ).toThrow(ProviderCapabilityError);
+  });
+
+  it('rejects invalid purposes in the direct adapter and public translator', async () => {
+    const fetchImplementation = vi.fn();
+    const adapter = new GeminiAdapter({
+      apiKey: 'gemini-key',
+      fetchImplementation,
+    });
+
+    await expect(
+      adapter.embed({
+        input: 'valid',
+        model: 'gemini-embedding-2',
+        purpose: 'unknown',
+      } as never),
+    ).rejects.toMatchObject({
+      details: {
+        constraint: 'supported_embedding_purpose',
+        option: 'purpose',
+      },
+      name: 'ProviderCapabilityError',
+      statusCode: 400,
+    });
+    expect(fetchImplementation).not.toHaveBeenCalled();
+
+    expect(() =>
+      translateGeminiEmbeddingRequest(
+        {
+          dimensions: 0,
+          model: 'gemini-embedding-2',
+          purpose: 'unknown',
+        } as never,
+        'valid',
+      ),
+    ).toThrow(ProviderCapabilityError);
+  });
+
+  it.each([
+    ['retrieval_document', 'RETRIEVAL_DOCUMENT'],
+    ['retrieval_query', 'RETRIEVAL_QUERY'],
+    ['semantic_similarity', 'SEMANTIC_SIMILARITY'],
+    ['classification', 'CLASSIFICATION'],
+    ['clustering', 'CLUSTERING'],
+  ] as const)('maps embedding purpose %s to %s', (purpose, taskType) => {
+    expect(
+      translateGeminiEmbeddingRequest(
+        {
+          model: 'gemini-embedding-2',
+          purpose,
+        },
+        'valid',
+      ),
+    ).toMatchObject({ taskType });
+  });
+
   it('translates Gemini cache creation payloads', () => {
     const request = translateGeminiCacheCreateRequest({
       displayName: 'Support FAQ',

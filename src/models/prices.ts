@@ -294,6 +294,7 @@ export const defaultModelPrices = {
     embeddingDimensions: {
       default: 3072,
       max: 3072,
+      min: 128,
       recommended: [768, 1536, 3072],
     },
     inputPrice: 0.2,
