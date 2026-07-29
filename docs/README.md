@@ -171,6 +171,8 @@ const embedding = await client.embed({
 });
 ```
 
+Embedding inputs must contain at least one non-empty string or canonical content-part array. Supported `purpose` values are `retrieval_document`, `retrieval_query`, `semantic_similarity`, `classification`, and `clustering`. `gemini-embedding-2` accepts integer dimensions from 128 through 3072; its recommended sizes are 768, 1536, and 3072. Invalid requests fail locally with `ProviderCapabilityError` before provider dispatch. Its `details` provide machine-readable `option` and `constraint` fields, plus an optional zero-based `itemIndex`; use these fields instead of parsing the generic error message.
+
 `PostgresKnowledgeStore` enforces strict retrieval filters before it will run a dense or lexical search:
 
 - `tenantId`

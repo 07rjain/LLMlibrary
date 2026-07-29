@@ -419,6 +419,8 @@ console.log(embedding.usage?.inputTokens);
 
 `client.embed()` is separate from `complete()` and `conversation()`. Embedding and generation can use different providers in the same application flow.
 
+Embedding inputs must contain at least one non-empty string or canonical content-part array. `purpose`, when provided, must be `retrieval_document`, `retrieval_query`, `semantic_similarity`, `classification`, or `clustering`. For `gemini-embedding-2`, `dimensions` may be any integer from 128 through 3072; 768, 1536, and 3072 are recommendations rather than an allowlist. Invalid requests fail locally with `ProviderCapabilityError` before provider dispatch. Its `details` provide machine-readable `option` and `constraint` fields, plus an optional zero-based `itemIndex`; use these fields instead of parsing the generic error message.
+
 ## Retrieval Helpers
 
 The package also ships optional app-layer retrieval helpers. They do not hide retrieval inside `LLMClient`; they help you compose retrieval before generation.
