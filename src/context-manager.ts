@@ -1,3 +1,6 @@
+import { ProviderCapabilityError } from 'unified-llm-client/errors';
+
+import { sanitizeForLogging } from './redaction.js';
 import { estimateMessageTokens } from './utils/token-estimator.js';
 
 import type { CanonicalMessage, CanonicalProvider } from './types.js';
@@ -44,6 +47,40 @@ export interface SlidingWindowStrategyOptions {
   tokenEstimator?: (messages: CanonicalMessage[]) => number;
 }
 
+type ContextValidationOption =
+  | 'keepLastMessages'
+  | 'maxMessages'
+  | 'maxTokens'
+  | 'tokenEstimator';
+
+function assertContextOption(
+  option: ContextValidationOption,
+  value: unknown,
+  integer: boolean,
+  allowUndefined = true,
+): void {
+  if (
+    (allowUndefined && value === undefined) ||
+    (typeof value === 'number' &&
+      Number.isFinite(value) &&
+      value >= 0 &&
+      (!integer || Number.isInteger(value)))
+  ) {
+    return;
+  }
+
+  const constraint = `finite_non_negative_${integer ? 'integer' : 'number'}`;
+
+  throw new ProviderCapabilityError(`Invalid ${option}.`, {
+    details: {
+      constraint,
+      option,
+      value: sanitizeForLogging(String(value)),
+    },
+    statusCode: 400,
+  });
+}
+
 /**
  * Drops the oldest removable messages when message-count or token estimates
  * exceed the configured budget.
@@ -70,6 +107,8 @@ export class SlidingWindowStrategy implements ContextManager {
   private readonly tokenEstimator: (messages: CanonicalMessage[]) => number;
 
   constructor(options: SlidingWindowStrategyOptions = {}) {
+    assertContextOption('maxMessages', options.maxMessages, true);
+    assertContextOption('maxTokens', options.maxTokens, true);
     this.maxMessages = options.maxMessages;
     this.maxTokens = options.maxTokens;
     this.onTrim = options.onTrim;
@@ -123,7 +162,15 @@ export class SlidingWindowStrategy implements ContextManager {
       ? [{ content: system, pinned: true, role: 'system' }, ...messages]
       : messages;
 
-    return this.tokenEstimator(effectiveMessages);
+    const estimatedTokens: unknown = this.tokenEstimator(effectiveMessages);
+    if (
+      typeof estimatedTokens !== 'number' ||
+      !Number.isFinite(estimatedTokens) ||
+      estimatedTokens < 0
+    ) {
+      assertContextOption('tokenEstimator', estimatedTokens, false, false);
+    }
+    return estimatedTokens as number;
   }
 
   private resolveMaxTokens(context: ContextManagerContext): number | undefined {
@@ -182,7 +229,8 @@ export class SummarisationStrategy implements ContextManager {
 
   constructor(options: SummarisationStrategyOptions) {
     this.baseStrategy = new SlidingWindowStrategy(options);
-    this.keepLastMessages = Math.max(0, options.keepLastMessages ?? 2);
+    assertContextOption('keepLastMessages', options.keepLastMessages, true);
+    this.keepLastMessages = options.keepLastMessages ?? 2;
     this.summarizer = options.summarizer;
     this.summaryMetadata = options.summaryMetadata;
   }

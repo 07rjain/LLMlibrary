@@ -40,6 +40,13 @@ async function capture(operation) {
   }
 }
 
+const contextError = await capture(() =>
+  new root.SlidingWindowStrategy({ maxMessages: Number.NaN }),
+);
+assert.equal(contextError.statusCode, 400);
+assert.equal(contextError.details.option, 'maxMessages');
+assert.equal(contextError.details.constraint, 'finite_non_negative_integer');
+
 const anthropicError = await capture(() =>
   anthropic.translateAnthropicRequest({
     model: 'claude-haiku-4-5',
@@ -213,6 +220,13 @@ const assert = require('node:assert/strict');
       return error;
     }
   }
+
+  const contextError = await capture(() =>
+    new root.SlidingWindowStrategy({ maxMessages: Number.NaN }),
+  );
+  assert.equal(contextError.statusCode, 400);
+  assert.equal(contextError.details.option, 'maxMessages');
+  assert.equal(contextError.details.constraint, 'finite_non_negative_integer');
 
   const anthropicError = await capture(() =>
     anthropic.translateAnthropicRequest({

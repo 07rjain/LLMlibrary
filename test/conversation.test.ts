@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { LLMClient } from '../src/client.js';
 import { SlidingWindowStrategy, SummarisationStrategy } from '../src/context-manager.js';
 import { Conversation } from '../src/conversation.js';
-import { BudgetExceededError, MaxToolRoundsError } from '../src/errors.js';
+import {
+  BudgetExceededError,
+  MaxToolRoundsError,
+  ProviderCapabilityError,
+} from '../src/errors.js';
 import { ModelRouter } from '../src/router.js';
 import { InMemorySessionStore } from '../src/session-store.js';
 
@@ -2292,6 +2296,29 @@ describe('Conversation', () => {
     );
   });
 
+  it('rejects invalid token estimates before dispatching to a provider', async () => {
+    const complete = vi.fn();
+    const conversation = new Conversation(
+      {
+        complete,
+        stream: vi.fn(),
+      },
+      {
+        contextManager: new SlidingWindowStrategy({
+          maxTokens: 1,
+          tokenEstimator: () => Number.NaN,
+        }),
+        messages: [{ content: 'Older context', role: 'assistant' }],
+        sessionId: 'invalid-estimator',
+      },
+    );
+
+    await expect(conversation.send('Latest')).rejects.toBeInstanceOf(
+      ProviderCapabilityError,
+    );
+    expect(complete).not.toHaveBeenCalled();
+  });
+
   it('applies a context manager before requests and preserves structured assistant content', async () => {
     const trim = vi.fn((messages: CanonicalMessage[]) => messages.slice(1));
     const complete = vi.fn(async (): Promise<CanonicalResponse> => ({
@@ -2942,6 +2969,141 @@ describe('Conversation stream event contract', () => {
 });
 
 describe('SlidingWindowStrategy', () => {
+  it('validates discrete maxMessages and maxTokens limits', () => {
+    const valid = [0, 1, 2, 10_000];
+    const invalid = [
+      -1,
+      1.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ];
+
+    for (const option of ['maxMessages', 'maxTokens'] as const) {
+      for (const value of valid) {
+        expect(() => new SlidingWindowStrategy({ [option]: value })).not.toThrow();
+      }
+      for (const value of invalid) {
+        expect(() => new SlidingWindowStrategy({ [option]: value })).toThrow(
+          ProviderCapabilityError,
+        );
+      }
+      for (const value of ['1', null]) {
+        expect(
+          () =>
+            new SlidingWindowStrategy({
+              [option]: value,
+            } as unknown as ConstructorParameters<typeof SlidingWindowStrategy>[0]),
+        ).toThrow(ProviderCapabilityError);
+      }
+    }
+  });
+
+  it('reports sanitized structured validation details', () => {
+    let error: unknown;
+    try {
+      new SlidingWindowStrategy({ maxMessages: Number.NaN });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(ProviderCapabilityError);
+    expect(error).toEqual(
+      expect.objectContaining({
+        details: {
+          constraint: 'finite_non_negative_integer',
+          option: 'maxMessages',
+          value: 'NaN',
+        },
+        statusCode: 400,
+      }),
+    );
+  });
+
+  it('validates token estimator results from shouldTrim and trim', () => {
+    const messages: CanonicalMessage[] = [{ content: 'Latest', role: 'user' }];
+    const invalid = [
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      undefined,
+      '1',
+      null,
+      1n,
+      Promise.resolve(1),
+    ];
+
+    for (const estimatedTokens of invalid) {
+      const strategy = new SlidingWindowStrategy({
+        maxTokens: 1,
+        tokenEstimator: () => estimatedTokens as number,
+      });
+      expect(() => strategy.shouldTrim(messages, {})).toThrow(
+        ProviderCapabilityError,
+      );
+      expect(() => strategy.trim(messages, {})).toThrow(ProviderCapabilityError);
+    }
+
+    for (const estimatedTokens of [0, 0.5]) {
+      const strategy = new SlidingWindowStrategy({
+        maxTokens: 1,
+        tokenEstimator: () => estimatedTokens,
+      });
+      expect(strategy.shouldTrim(messages, {})).toBe(false);
+      expect(strategy.trim(messages, {})).toEqual(messages);
+    }
+  });
+
+  it('preserves the exact token estimator exception', () => {
+    const sentinel = new Error('estimator sentinel');
+    const strategy = new SlidingWindowStrategy({
+      maxTokens: 1,
+      tokenEstimator: () => {
+        throw sentinel;
+      },
+    });
+    const messages: CanonicalMessage[] = [{ content: 'Latest', role: 'user' }];
+
+    for (const operation of [
+      () => strategy.shouldTrim(messages, {}),
+      () => strategy.trim(messages, {}),
+    ]) {
+      let error: unknown;
+      try {
+        operation();
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBe(sentinel);
+    }
+  });
+
+  it('validates the final onTrim estimate before invoking the callback', () => {
+    const onTrim = vi.fn();
+    const tokenEstimator = vi
+      .fn()
+      .mockReturnValueOnce(2)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(Number.NaN);
+    const strategy = new SlidingWindowStrategy({
+      maxTokens: 1,
+      onTrim,
+      tokenEstimator,
+    });
+
+    expect(() =>
+      strategy.trim(
+        [
+          { content: 'Old', role: 'assistant' },
+          { content: 'Latest', role: 'user' },
+        ],
+        {},
+      ),
+    ).toThrow(ProviderCapabilityError);
+    expect(onTrim).not.toHaveBeenCalled();
+  });
+
   it('uses the model context window after reserving output and tool schema tokens', () => {
     const strategy = new SlidingWindowStrategy({
       tokenEstimator: (messages) => messages.length * 10,
@@ -3063,6 +3225,68 @@ describe('SlidingWindowStrategy', () => {
 });
 
 describe('SummarisationStrategy', () => {
+  it('validates keepLastMessages and keeps the default at two', async () => {
+    for (const keepLastMessages of [0, 1, 2, 99, 1_000_000_000]) {
+      expect(
+        () =>
+          new SummarisationStrategy({
+            keepLastMessages,
+            summarizer: vi.fn(),
+          }),
+      ).not.toThrow();
+    }
+
+    for (const keepLastMessages of [
+      -1,
+      1.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      '1' as unknown as number,
+      null as unknown as number,
+    ]) {
+      const summarizer = vi.fn();
+      expect(
+        () =>
+          new SummarisationStrategy({
+            keepLastMessages,
+            summarizer,
+          }),
+      ).toThrow(ProviderCapabilityError);
+      expect(summarizer).not.toHaveBeenCalled();
+    }
+
+    const summarizer = vi.fn(async () => 'Default summary');
+    const strategy = new SummarisationStrategy({
+      maxMessages: 4,
+      summarizer,
+    });
+    const messages: CanonicalMessage[] = [
+      { content: 'Old user', role: 'user' },
+      { content: 'Old assistant', role: 'assistant' },
+      { content: 'Middle user', role: 'user' },
+      { content: 'Recent assistant', role: 'assistant' },
+      { content: 'Latest user', role: 'user' },
+    ];
+
+    await strategy.trim(messages, {});
+    expect(summarizer).toHaveBeenCalledWith(messages.slice(0, 2), {});
+  });
+
+  it('inherits token-estimator validation before invoking the summarizer', async () => {
+    const summarizer = vi.fn(async () => 'Summary');
+    const strategy = new SummarisationStrategy({
+      maxTokens: 1,
+      summarizer,
+      tokenEstimator: () => Number.NaN,
+    });
+
+    await expect(
+      strategy.trim([{ content: 'Latest', role: 'user' }], {}),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    expect(summarizer).not.toHaveBeenCalled();
+  });
+
   it('summarises tool-call and tool-result exchanges atomically', async () => {
     const summarizer = vi.fn(async () => 'Atomic summary');
     const strategy = new SummarisationStrategy({

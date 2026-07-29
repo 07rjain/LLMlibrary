@@ -1301,6 +1301,108 @@ describe('SessionApi', () => {
     expect(missingDeleteResponse.status).toBe(404);
   });
 
+  it('rejects invalid compact limits with HTTP 400 without changing the snapshot', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      sessionStore: store,
+    });
+    const snapshot: ConversationSnapshot = {
+      createdAt: '2026-07-29T00:00:00.000Z',
+      messages: [
+        { content: 'Old context', role: 'assistant' },
+        { content: 'Latest question', role: 'user' },
+      ],
+      sessionId: 'invalid-compact-limits',
+      totalCachedTokens: 0,
+      totalCostUSD: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      updatedAt: '2026-07-29T00:00:00.000Z',
+    };
+    await store.set(snapshot.sessionId, snapshot);
+    const before = await store.get(snapshot.sessionId);
+    const set = vi.spyOn(store, 'set');
+    const api = createSessionApi({ client, sessionStore: store });
+
+    for (const body of [
+      { maxMessages: -1 },
+      { maxMessages: 1.5 },
+      { maxMessages: null },
+      { maxTokens: -1 },
+      { maxTokens: 1.5 },
+      { maxTokens: '1' },
+    ]) {
+      const response = await api.handle(
+        jsonRequest(
+          `https://example.test/sessions/${snapshot.sessionId}/compact`,
+          'POST',
+          body,
+        ),
+      );
+      const payload = (await response.json()) as {
+        error: { name: string; statusCode: number };
+      };
+
+      expect(response.status).toBe(400);
+      expect(payload.error).toEqual(
+        expect.objectContaining({
+          name: 'ProviderCapabilityError',
+          statusCode: 400,
+        }),
+      );
+    }
+
+    expect(set).not.toHaveBeenCalled();
+    expect(await store.get(snapshot.sessionId)).toEqual(before);
+  });
+
+  it('fails compact closed when the configured token estimator is invalid', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      sessionStore: store,
+    });
+    const snapshot: ConversationSnapshot = {
+      createdAt: '2026-07-29T00:00:00.000Z',
+      messages: [
+        { content: 'Old context', role: 'assistant' },
+        { content: 'Latest question', role: 'user' },
+      ],
+      sessionId: 'invalid-compact-estimator',
+      totalCachedTokens: 0,
+      totalCostUSD: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      updatedAt: '2026-07-29T00:00:00.000Z',
+    };
+    await store.set(snapshot.sessionId, snapshot);
+    const before = await store.get(snapshot.sessionId);
+    const set = vi.spyOn(store, 'set');
+    const api = createSessionApi({
+      client,
+      contextManager: new SlidingWindowStrategy({
+        maxTokens: 1,
+        tokenEstimator: () => Number.NaN,
+      }),
+      sessionStore: store,
+    });
+
+    const response = await api.handle(
+      jsonRequest(
+        `https://example.test/sessions/${snapshot.sessionId}/compact`,
+        'POST',
+        {},
+      ),
+    );
+
+    expect(response.status).toBe(400);
+    expect(set).not.toHaveBeenCalled();
+    expect(await store.get(snapshot.sessionId)).toEqual(before);
+  });
+
   it('maps unknown and generic errors to 500 responses', async () => {
     const store = new InMemorySessionStore<ConversationSnapshot>();
     const client = LLMClient.mock({
