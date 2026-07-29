@@ -135,6 +135,11 @@ console.log(modelInfo?.supportsTools);
 
 This is useful when you want to expose model choices in an admin UI or enforce capability checks before sending a request.
 
+Custom model registration requires an explicit `kind` plus valid provider,
+pricing, context, capability, and kind-relevant modality metadata. Runtime price
+overrides accept finite non-negative numbers (including zero) and are applied
+atomically only after the complete override batch validates.
+
 ## 8. Discover Live Provider Models
 
 If you need the provider's current remote catalog instead of the checked-in registry, call `client.models.listRemote({ provider })`.
@@ -148,7 +153,13 @@ console.log(remoteOpenAIModels[0]?.id);
 console.log(remoteOpenAIModels[0]?.ownedBy);
 ```
 
-This is discovery-only. It does not automatically make newly discovered models routable through `complete()`, `stream()`, `speak()`, or `transcribe()`. If you want to use an unshipped model with this library today, register it explicitly with `client.models.register(...)` first.
+This is discovery-only. Malformed rows are skipped, while invalid JSON, invalid
+page envelopes, or missing/repeated pagination cursors reject with a
+non-retryable `ProviderError` carrying status 502. Discovery does not
+automatically make newly discovered models routable through `complete()`,
+`stream()`, `speak()`, or `transcribe()`. If you want to use an unshipped model
+with this library today, register it explicitly with
+`client.models.register(...)` first.
 
 ## 9. Use Speech APIs
 

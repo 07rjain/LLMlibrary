@@ -17,6 +17,7 @@ import {
   AuthenticationError,
   BudgetExceededError,
   ProviderCapabilityError,
+  ProviderError,
 } from '../src/errors.js';
 import { LLMClient } from '../src/client.js';
 import { ModelRouter } from '../src/router.js';
@@ -96,6 +97,7 @@ describe('LLMClient', () => {
       contextWindow: 64000,
       id: 'custom-model',
       inputPrice: 1,
+      kind: 'completion',
       lastUpdated: '2026-04-15',
       outputPrice: 2,
       provider: 'mock',
@@ -323,6 +325,155 @@ describe('LLMClient', () => {
         supportedActions: ['embedContent'],
       },
     ]);
+  });
+
+  it('skips malformed remote model rows while preserving valid row order', async () => {
+    const cases = [
+      {
+        options: { openaiApiKey: 'key' },
+        payload: {
+          data: [{ created: 1, id: 'first-openai' }, {}, { id: 'second-openai' }],
+        },
+        provider: 'openai' as const,
+      },
+      {
+        options: { anthropicApiKey: 'key' },
+        payload: {
+          data: [{ id: 'first-anthropic' }, null, { id: 'second-anthropic' }],
+          has_more: false,
+        },
+        provider: 'anthropic' as const,
+      },
+      {
+        options: { geminiApiKey: 'key' },
+        payload: {
+          models: [
+            { name: 'models/first-google' },
+            {},
+            { name: 'models/second-google' },
+          ],
+        },
+        provider: 'google' as const,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const fetchImplementation = vi.fn(async () =>
+        new Response(JSON.stringify(testCase.payload), { status: 200 }),
+      );
+      const client = new LLMClient({
+        ...testCase.options,
+        fetchImplementation,
+      });
+
+      await expect(
+        client.models.listRemote({ provider: testCase.provider }),
+      ).resolves.toMatchObject([
+        { id: `first-${testCase.provider}`, provider: testCase.provider },
+        { id: `second-${testCase.provider}`, provider: testCase.provider },
+      ]);
+    }
+  });
+
+  it('surfaces invalid discovery JSON and envelopes as sanitized 502 errors', async () => {
+    const cases = [
+      { options: { openaiApiKey: 'key' }, provider: 'openai' as const },
+      { options: { anthropicApiKey: 'key' }, provider: 'anthropic' as const },
+      { options: { geminiApiKey: 'key' }, provider: 'google' as const },
+    ];
+
+    for (const testCase of cases) {
+      for (const body of ['{', JSON.stringify({ unexpected: [] })]) {
+        const client = new LLMClient({
+          ...testCase.options,
+          fetchImplementation: vi.fn(async () => new Response(body, { status: 200 })),
+        });
+        const error = await client.models
+          .listRemote({ provider: testCase.provider })
+          .catch((caught: unknown) => caught);
+
+        expect(error).toBeInstanceOf(ProviderError);
+        expect(error).toMatchObject({
+          provider: testCase.provider,
+          retryable: false,
+          statusCode: 502,
+        });
+        expect((error as ProviderError).details).toEqual({
+          constraint: expect.any(String),
+          option: expect.any(String),
+        });
+      }
+    }
+  });
+
+  it('rejects missing and repeated discovery cursors without looping', async () => {
+    const missingAnthropicCursor = new LLMClient({
+      anthropicApiKey: 'key',
+      fetchImplementation: vi.fn(async () =>
+        new Response(JSON.stringify({ data: [{ id: 'one' }], has_more: true })),
+      ),
+    });
+    await expect(
+      missingAnthropicCursor.models.listRemote({ provider: 'anthropic' }),
+    ).rejects.toMatchObject({
+      details: { constraint: 'non_empty_string', option: 'last_id' },
+      statusCode: 502,
+    });
+
+    const invalidAnthropicState = new LLMClient({
+      anthropicApiKey: 'key',
+      fetchImplementation: vi.fn(async () =>
+        new Response(JSON.stringify({ data: [] })),
+      ),
+    });
+    await expect(
+      invalidAnthropicState.models.listRemote({ provider: 'anthropic' }),
+    ).rejects.toMatchObject({
+      details: { constraint: 'boolean', option: 'has_more' },
+      statusCode: 502,
+    });
+
+    const invalidGoogleCursor = new LLMClient({
+      fetchImplementation: vi.fn(async () =>
+        new Response(JSON.stringify({ models: [], nextPageToken: 123 })),
+      ),
+      geminiApiKey: 'key',
+    });
+    await expect(
+      invalidGoogleCursor.models.listRemote({ provider: 'google' }),
+    ).rejects.toMatchObject({
+      details: { constraint: 'non_empty_string', option: 'nextPageToken' },
+      statusCode: 502,
+    });
+
+    for (const testCase of [
+      {
+        options: { anthropicApiKey: 'key' },
+        page: { data: [], has_more: true, last_id: 'repeat' },
+        provider: 'anthropic' as const,
+      },
+      {
+        options: { geminiApiKey: 'key' },
+        page: { models: [], nextPageToken: 'repeat' },
+        provider: 'google' as const,
+      },
+    ]) {
+      const fetchImplementation = vi.fn(async () =>
+        new Response(JSON.stringify(testCase.page), { status: 200 }),
+      );
+      const client = new LLMClient({
+        ...testCase.options,
+        fetchImplementation,
+      });
+
+      await expect(
+        client.models.listRemote({ provider: testCase.provider }),
+      ).rejects.toMatchObject({
+        details: { constraint: 'unique_pagination_cursor' },
+        statusCode: 502,
+      });
+      expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    }
   });
 
   it('throws when remote model discovery is requested without provider credentials', async () => {
@@ -1514,6 +1665,7 @@ describe('LLMClient', () => {
       contextWindow: 8192,
       id: 'custom-openai',
       inputPrice: 1,
+      kind: 'completion',
       lastUpdated: '2026-04-15',
       outputPrice: 1,
       provider: 'openai',
@@ -1787,6 +1939,7 @@ describe('LLMClient', () => {
       contextWindow: 64000,
       id: 'mock-llm',
       inputPrice: 1,
+      kind: 'completion',
       lastUpdated: '2026-04-15',
       outputPrice: 2,
       provider: 'mock',

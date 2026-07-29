@@ -27,6 +27,8 @@ const gemini = await import('unified-llm-client/providers/gemini');
 const openai = await import('unified-llm-client/providers/openai');
 
 assert.equal(errors.ProviderCapabilityError, root.ProviderCapabilityError);
+assert.equal(models.ModelRegistry, root.ModelRegistry);
+assert.equal(models.defaultModelPrices, root.defaultModelPrices);
 
 async function capture(operation) {
   try {
@@ -177,6 +179,26 @@ await capture(() =>
 );
 
 await capture(() => new models.ModelRegistry().get('missing-model'));
+const registryValidationError = await capture(() =>
+  new models.ModelRegistry().register({
+    id: 'invalid-registration',
+    provider: 'mock',
+    contextWindow: 1000,
+    inputPrice: 0,
+    outputPrice: 0,
+    lastUpdated: '2026-07-30',
+    supportsStreaming: false,
+    supportsTools: false,
+    supportsVision: false,
+  }),
+);
+assert.equal(registryValidationError.statusCode, 400);
+assert.equal(registryValidationError.details.option, 'kind');
+const routerValidationError = await capture(() =>
+  new root.ModelRouter({ rules: [{ variants: [] }] }),
+);
+assert.equal(routerValidationError.statusCode, 400);
+assert.equal(routerValidationError.details.constraint, 'non_empty_array');
 await capture(() =>
   new clientModule.LLMClient().complete({
     model: 'missing-model',
@@ -239,6 +261,8 @@ const assert = require('node:assert/strict');
   const openai = require('unified-llm-client/providers/openai');
 
   assert.equal(errors.ProviderCapabilityError, root.ProviderCapabilityError);
+  assert.equal(models.ModelRegistry, root.ModelRegistry);
+  assert.equal(models.defaultModelPrices, root.defaultModelPrices);
 
   async function capture(operation) {
     try {
@@ -389,6 +413,26 @@ const assert = require('node:assert/strict');
   );
 
   await capture(() => new models.ModelRegistry().get('missing-model'));
+  const registryValidationError = await capture(() =>
+    new models.ModelRegistry().register({
+      id: 'invalid-registration',
+      provider: 'mock',
+      contextWindow: 1000,
+      inputPrice: 0,
+      outputPrice: 0,
+      lastUpdated: '2026-07-30',
+      supportsStreaming: false,
+      supportsTools: false,
+      supportsVision: false,
+    }),
+  );
+  assert.equal(registryValidationError.statusCode, 400);
+  assert.equal(registryValidationError.details.option, 'kind');
+  const routerValidationError = await capture(() =>
+    new root.ModelRouter({ rules: [{ variants: [] }] }),
+  );
+  assert.equal(routerValidationError.statusCode, 400);
+  assert.equal(routerValidationError.details.constraint, 'non_empty_array');
   await capture(() =>
     new clientModule.LLMClient().complete({
       model: 'missing-model',

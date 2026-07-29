@@ -1,9 +1,96 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { ProviderCapabilityError } from '../src/errors.js';
+import { defaultModelPrices } from '../src/models/prices.js';
 import { ModelRegistry } from '../src/models/registry.js';
+import pricesJson from '../src/models/prices.json';
 
 describe('ModelRegistry', () => {
+  const validCompletion = {
+    contextWindow: 64000,
+    id: 'custom-model',
+    inputPrice: 1,
+    kind: 'completion' as const,
+    lastUpdated: '2026-07-30',
+    outputPrice: 2,
+    provider: 'mock' as const,
+    supportsStreaming: true,
+    supportsTools: false,
+    supportsVision: false,
+  };
+
+  it('keeps the typed and JSON seeds identical with kind-aware metadata', () => {
+    expect(defaultModelPrices).toEqual(pricesJson);
+
+    const registry = new ModelRegistry(undefined, { emitStalenessWarning: false });
+    expect(registry.get('gpt-5.5').contextWindow).toBe(1_050_000);
+    expect(registry.get('gpt-5.4').contextWindow).toBe(1_050_000);
+    expect(registry.get('gpt-5.4-mini')).toMatchObject({
+      contextWindow: 400_000,
+      maxInputTokens: 272_000,
+    });
+    expect(registry.get('gpt-5.4-nano')).toMatchObject({
+      contextWindow: 400_000,
+      maxInputTokens: 272_000,
+      supportsVision: true,
+    });
+    expect(registry.get('claude-sonnet-4-6').contextWindow).toBe(1_000_000);
+    expect(registry.get('claude-opus-4-6').contextWindow).toBe(1_000_000);
+    for (const id of [
+      'gpt-4o-mini-transcribe',
+      'gpt-4o-mini-transcribe-2025-12-15',
+      'gpt-4o-transcribe',
+      'gpt-4o-transcribe-diarize',
+    ]) {
+      expect(registry.get(id)).toMatchObject({
+        contextWindow: 16_000,
+        kind: 'transcription',
+        supportedInputModalities: ['audio', 'text'],
+      });
+    }
+    expect(registry.get('whisper-1')).toMatchObject({
+      contextWindow: 0,
+      kind: 'transcription',
+    });
+    expect(
+      registry
+        .list()
+        .filter((model) => model.kind !== 'transcription')
+        .every((model) => model.contextWindow > 0),
+    ).toBe(true);
+  });
+
+  it('clones nested metadata on get and list return paths', () => {
+    const registry = new ModelRegistry(undefined, { emitStalenessWarning: false });
+    const retrievedEmbedding = registry.get('gemini-embedding-2');
+    retrievedEmbedding.embeddingDimensions!.recommended!.push(512);
+    retrievedEmbedding.supportedInputModalities!.push('video');
+
+    const listedSpeech = registry
+      .list()
+      .find((model) => model.id === 'gpt-4o-mini-tts')!;
+    listedSpeech.speechPrices!.requestPrice = 99;
+    listedSpeech.supportedOutputModalities!.push('text');
+
+    expect(registry.get('gemini-embedding-2').embeddingDimensions).toEqual({
+      default: 3072,
+      max: 3072,
+      min: 128,
+      recommended: [768, 1536, 3072],
+    });
+    expect(registry.get('gemini-embedding-2').supportedInputModalities).toEqual([
+      'audio',
+      'document',
+      'image',
+      'text',
+    ]);
+    expect(registry.get('gpt-4o-mini-tts').speechPrices).toEqual({
+      outputAudioSecondPrice: 0.00025,
+      textInputTokenPrice: 0.6,
+    });
+    expect(registry.get('gpt-4o-mini-tts').supportedOutputModalities).toEqual(['audio']);
+  });
+
   it('lists seeded models', () => {
     const registry = new ModelRegistry();
     const modelIds = registry.list().map((model) => model.id);
@@ -143,6 +230,7 @@ describe('ModelRegistry', () => {
       contextWindow: 64000,
       id: 'custom-anthropic',
       inputPrice: 1,
+      kind: 'completion',
       lastUpdated: '2026-07-29',
       outputPrice: 2,
       provider: 'anthropic',
@@ -161,7 +249,7 @@ describe('ModelRegistry', () => {
       registry.assertCapability('gpt-4o', 'supportsTools', 'tool calling').id,
     ).toBe('gpt-4o');
     expect(() =>
-      registry.assertCapability('gpt-5.4-nano', 'supportsVision', 'vision'),
+      registry.assertCapability('gpt-4o-mini-tts', 'supportsVision', 'vision'),
     ).toThrow(ProviderCapabilityError);
     expect(registry.assertModelKind('gemini-embedding-2', 'embedding').kind).toBe(
       'embedding',
@@ -207,6 +295,7 @@ describe('ModelRegistry', () => {
       contextWindow: 64000,
       id: 'custom-openai',
       inputPrice: 1,
+      kind: 'completion',
       lastUpdated: '2026-04-15',
       outputPrice: 2,
       provider: 'openai',
@@ -231,6 +320,7 @@ describe('ModelRegistry', () => {
       contextWindow: 64000,
       id: 'custom-model',
       inputPrice: 1,
+      kind: 'completion',
       lastUpdated: '2026-04-15',
       outputPrice: 2,
       provider: 'mock',
@@ -245,6 +335,117 @@ describe('ModelRegistry', () => {
     });
 
     expect(registry.get('custom-model').inputPrice).toBe(1.5);
+  });
+
+  it('rejects incomplete registrations before replacing an existing record', () => {
+    const registry = new ModelRegistry(undefined, { emitStalenessWarning: false });
+    registry.register(validCompletion);
+
+    const invalidModels = [
+      { ...validCompletion, id: ' ' },
+      { ...validCompletion, provider: 'unknown' },
+      { ...validCompletion, kind: undefined },
+      { ...validCompletion, inputPrice: Number.NaN },
+      { ...validCompletion, outputPrice: -1 },
+      { ...validCompletion, contextWindow: 0 },
+      { ...validCompletion, supportsTools: undefined },
+      { ...validCompletion, lastUpdated: 'not-a-date' },
+      { ...validCompletion, lastUpdated: '2026-02-31' },
+    ];
+
+    for (const invalid of invalidModels) {
+      expect(() => registry.register(invalid as never)).toThrow(ProviderCapabilityError);
+    }
+    expect(registry.get(validCompletion.id)).toMatchObject(validCompletion);
+  });
+
+  it('accepts kind-relevant custom metadata and zero prices', () => {
+    const registry = new ModelRegistry(undefined, { emitStalenessWarning: false });
+    for (const model of [
+      validCompletion,
+      {
+        ...validCompletion,
+        id: 'custom-embedding',
+        inputPrice: 0,
+        kind: 'embedding' as const,
+        outputPrice: 0,
+        supportedInputModalities: ['text'] as Array<'text'>,
+      },
+      {
+        ...validCompletion,
+        id: 'custom-speech',
+        inputPrice: 0,
+        kind: 'speech' as const,
+        outputPrice: 0,
+        speechPrices: { requestPrice: 0 },
+        supportedInputModalities: ['text'] as Array<'text'>,
+        supportedOutputModalities: ['audio'] as Array<'audio'>,
+      },
+      {
+        ...validCompletion,
+        contextWindow: 0,
+        id: 'custom-transcription',
+        kind: 'transcription' as const,
+        supportedInputModalities: ['audio'] as Array<'audio'>,
+        supportedOutputModalities: ['text'] as Array<'text'>,
+      },
+    ]) {
+      expect(registry.register(model).id).toBe(model.id);
+    }
+  });
+
+  it('validates price overrides atomically, including nested units', () => {
+    const registry = new ModelRegistry(undefined, { emitStalenessWarning: false });
+    const beforeGpt = registry.get('gpt-4o');
+    const beforeSpeech = registry.get('gpt-4o-mini-tts');
+
+    for (const value of [-1, Number.NaN, Infinity, -Infinity, '1']) {
+      expect(() =>
+        registry.updatePrices({
+          'gpt-4o': { inputPrice: value as never },
+        }),
+      ).toThrow(ProviderCapabilityError);
+    }
+    expect(() =>
+      registry.updatePrices({
+        'gpt-4o': { provider: 'anthropic' } as never,
+      }),
+    ).toThrow(ProviderCapabilityError);
+    expect(() =>
+      registry.updatePrices({
+        'gpt-4o': { cacheReadPrice: 'free' as never },
+      }),
+    ).toThrow(ProviderCapabilityError);
+    expect(() =>
+      registry.updatePrices({
+        'gpt-4o-mini-tts': {
+          speechPrices: { outputAudioSecondPrice: Infinity },
+        },
+      }),
+    ).toThrow(ProviderCapabilityError);
+    expect(() =>
+      registry.updatePrices({
+        'gpt-4o': { inputPrice: 0 },
+        'gpt-4o-mini-tts': {
+          speechPrices: { outputAudioSecondPrice: Number.NaN },
+        },
+      }),
+    ).toThrow(ProviderCapabilityError);
+    expect(registry.get('gpt-4o')).toEqual(beforeGpt);
+    expect(registry.get('gpt-4o-mini-tts')).toEqual(beforeSpeech);
+
+    registry.updatePrices({
+      'gpt-4o': { cacheReadPrice: 0, inputPrice: 0, outputPrice: 0 },
+      'gpt-4o-mini-tts': { speechPrices: { requestPrice: 0 } },
+    });
+    expect(registry.get('gpt-4o')).toMatchObject({
+      cacheReadPrice: 0,
+      inputPrice: 0,
+      outputPrice: 0,
+    });
+    expect(registry.get('gpt-4o-mini-tts').speechPrices).toEqual({
+      requestPrice: 0,
+    });
   });
 
   it('warns when price metadata is stale', () => {

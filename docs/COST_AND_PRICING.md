@@ -26,6 +26,10 @@ Updated: 2026-04-25
 - `pnpm pricecheck` enforces a tighter 45-day freshness target for automated maintenance.
 - `.github/workflows/prices-drift.yml` runs that check weekly so stale pricing does not silently linger.
 - Newly released remote models discovered through `client.models.listRemote({ provider })` are not automatically priced or routable until they are explicitly registered.
+- `client.updatePrices()` accepts finite non-negative numeric prices, including
+  zero/free pricing, and validates nested cache and speech billing units. A
+  mixed valid/invalid override batch is rejected atomically without changing
+  any model record.
 
 ## Accuracy Expectations
 

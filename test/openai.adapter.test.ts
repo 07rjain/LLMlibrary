@@ -2057,6 +2057,7 @@ describe('OpenAI adapter', () => {
       contextWindow: 32000,
       id: 'mock-openai-no-capabilities',
       inputPrice: 1,
+      kind: 'completion',
       lastUpdated: '2026-04-15',
       outputPrice: 2,
       provider: 'openai',

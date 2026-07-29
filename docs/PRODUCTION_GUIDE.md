@@ -39,6 +39,12 @@ Common reasons to add a router:
 - Define fallback chains during provider outages
 - Run deterministic weighted experiments
 
+Weighted `variants` must be a non-empty array. Every variant needs a non-empty
+model ID and a finite weight greater than zero; positive fractional weights are
+supported and normalized by their total. The router snapshots rule structures
+at construction, so later mutations to caller-owned variant arrays do not
+change routing behavior.
+
 ## Use Budget Policies Intentionally
 
 Both request-level and conversation-level calls accept budget controls.

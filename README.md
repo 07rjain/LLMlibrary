@@ -390,7 +390,12 @@ console.log(googleModels[0]?.id);
 console.log(googleModels[0]?.supportedActions);
 ```
 
-`listRemote()` is discovery-only. It does not auto-register those models into the local routing registry, so `complete()` and `stream()` still require either a known built-in model or a manual `client.models.register(...)` step.
+`listRemote()` is discovery-only. It preserves valid provider records in order and skips malformed rows; invalid JSON, invalid page envelopes, and unsafe pagination state reject with a non-retryable `ProviderError` (HTTP status 502). It does not auto-register those models into the local routing registry, so `complete()` and `stream()` still require either a known built-in model or a manual `client.models.register(...)` step.
+
+Custom registrations must explicitly declare `kind` and provide valid provider,
+pricing, context-window, capability, and kind-relevant modality metadata.
+Registration and `updatePrices()` validation happens before registry mutation, so
+an invalid replacement or mixed override batch leaves existing records unchanged.
 
 ## Embeddings
 

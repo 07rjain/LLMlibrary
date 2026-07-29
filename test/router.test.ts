@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { ProviderCapabilityError } from '../src/errors.js';
 import { ModelRegistry } from '../src/models/registry.js';
 import { ModelRouter } from '../src/router.js';
 
@@ -311,14 +312,6 @@ describe('ModelRouter', () => {
   });
 
   it('throws on invalid route definitions', () => {
-    const invalidWeights = new ModelRouter({
-      rules: [
-        {
-          name: 'bad-weights',
-          variants: [{ model: 'gpt-4o', weight: 0 }],
-        },
-      ],
-    });
     const invalidProvider = new ModelRouter({
       rules: [
         {
@@ -332,16 +325,15 @@ describe('ModelRouter', () => {
     });
 
     expect(() =>
-      invalidWeights.resolve(
-        {
-          maxTokens: 128,
-          messages: [{ content: 'Hello', role: 'user' }],
-        },
-        {
-          modelRegistry,
-        },
-      ),
-    ).toThrow('invalid variant weights');
+      new ModelRouter({
+        rules: [
+          {
+            name: 'bad-weights',
+            variants: [{ model: 'gpt-4o', weight: 0 }],
+          },
+        ],
+      }),
+    ).toThrow(ProviderCapabilityError);
     expect(() =>
       invalidProvider.resolve(
         {
@@ -353,6 +345,54 @@ describe('ModelRouter', () => {
         },
       ),
     ).toThrow('belongs to provider');
+  });
+
+  it.each([
+    ['empty variants', []],
+    ['negative weight', [{ model: 'gpt-4o', weight: -1 }]],
+    ['NaN weight', [{ model: 'gpt-4o', weight: Number.NaN }]],
+    ['infinite weight', [{ model: 'gpt-4o', weight: Infinity }]],
+    [
+      'overflowing total',
+      [
+        { model: 'gpt-4o', weight: Number.MAX_VALUE },
+        { model: 'gpt-4o-mini', weight: Number.MAX_VALUE },
+      ],
+    ],
+    ['missing model', [{ weight: 1 }]],
+    ['blank model', [{ model: ' ', weight: 1 }]],
+    ['invalid provider', [{ model: 'gpt-4o', provider: 'invalid', weight: 1 }]],
+    ['malformed entry', [null]],
+  ])('rejects %s before route selection', (_label, variants) => {
+    expect(
+      () =>
+        new ModelRouter({
+          rules: [{ variants: variants as never }],
+        }),
+    ).toThrow(ProviderCapabilityError);
+  });
+
+  it('accepts positive fractional weights and snapshots caller-owned variants', () => {
+    const variants = [
+      { model: 'gpt-4o', weight: 0.25 },
+      { model: 'gpt-4o-mini', weight: 0.75 },
+    ];
+    const router = new ModelRouter({
+      rules: [{ name: 'fractional', variants }],
+      seed: 'stable',
+    });
+    const context = {
+      maxTokens: 64,
+      messages: [{ content: 'hello', role: 'user' as const }],
+      sessionId: 'session-1',
+    };
+    const first = router.resolve(context, { modelRegistry });
+
+    variants[0]!.model = 'missing-model';
+    variants[0]!.weight = -10;
+    variants.length = 0;
+
+    expect(router.resolve(context, { modelRegistry })).toEqual(first);
   });
 
   it('throws when a direct requested provider does not match the model provider', () => {
