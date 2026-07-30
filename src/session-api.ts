@@ -1,6 +1,10 @@
-import { SlidingWindowStrategy, type ContextManager } from './context-manager.js';
+import {
+  SlidingWindowStrategy,
+  type ContextManager,
+} from './context-manager.js';
 import { LLMError, ProviderCapabilityError } from 'unified-llm-client/errors';
 import { validateAndCloneMetadata } from './json-metadata.js';
+import { validateAndCloneCanonicalMessages } from './message-validation.js';
 import { sanitizeForLogging } from './redaction.js';
 
 import type { LLMClient } from './client.js';
@@ -212,14 +216,17 @@ export class SessionApi {
     | undefined;
 
   constructor(options: SessionApiOptions) {
-    const sessionStore = options.sessionStore ?? options.client.getSessionStore();
+    const sessionStore =
+      options.sessionStore ?? options.client.getSessionStore();
     if (!sessionStore) {
       throw new ProviderCapabilityError(
         'SessionApi requires a session store. Configure sessionStore on LLMClient or pass sessionStore directly.',
       );
     }
 
-    this.allowedClientOverrides = resolveClientOverridePolicy(options.allowClientOverrides);
+    this.allowedClientOverrides = resolveClientOverridePolicy(
+      options.allowClientOverrides,
+    );
     this.allowClientSessionIds = options.allowClientSessionIds ?? false;
     this.allowImplicitSessionCreate =
       options.allowImplicitSessionCreate ?? false;
@@ -283,7 +290,10 @@ export class SessionApi {
         return this.handleCreateSession(request, requestContext);
       }
 
-      throw new HttpError(405, `Method ${request.method} is not allowed on ${route.path}.`);
+      throw new HttpError(
+        405,
+        `Method ${request.method} is not allowed on ${route.path}.`,
+      );
     }
 
     if (route.type === 'session') {
@@ -296,7 +306,10 @@ export class SessionApi {
         return this.handleDeleteSession(sessionId, url, requestContext);
       }
 
-      throw new HttpError(405, `Method ${request.method} is not allowed on ${route.path}.`);
+      throw new HttpError(
+        405,
+        `Method ${request.method} is not allowed on ${route.path}.`,
+      );
     }
 
     if (route.type === 'messages') {
@@ -305,7 +318,10 @@ export class SessionApi {
         return this.handleGetSessionMessages(sessionId, url, requestContext);
       }
 
-      throw new HttpError(405, `Method ${request.method} is not allowed on ${route.path}.`);
+      throw new HttpError(
+        405,
+        `Method ${request.method} is not allowed on ${route.path}.`,
+      );
     }
 
     if (route.type === 'message') {
@@ -314,7 +330,10 @@ export class SessionApi {
         return this.handleSendMessage(sessionId, request, url, requestContext);
       }
 
-      throw new HttpError(405, `Method ${request.method} is not allowed on ${route.path}.`);
+      throw new HttpError(
+        405,
+        `Method ${request.method} is not allowed on ${route.path}.`,
+      );
     }
 
     if (route.type === 'compact') {
@@ -323,7 +342,10 @@ export class SessionApi {
         return this.handleCompactSession(sessionId, request, requestContext);
       }
 
-      throw new HttpError(405, `Method ${request.method} is not allowed on ${route.path}.`);
+      throw new HttpError(
+        405,
+        `Method ${request.method} is not allowed on ${route.path}.`,
+      );
     }
 
     if (route.type === 'fork') {
@@ -332,7 +354,10 @@ export class SessionApi {
         return this.handleForkSession(sessionId, request, requestContext);
       }
 
-      throw new HttpError(405, `Method ${request.method} is not allowed on ${route.path}.`);
+      throw new HttpError(
+        405,
+        `Method ${request.method} is not allowed on ${route.path}.`,
+      );
     }
 
     throw new HttpError(404, `Unsupported session API route ${route.path}.`);
@@ -360,7 +385,8 @@ export class SessionApi {
     const conversation = await this.client.conversation({
       ...conversationOptions,
       messages: history.messages,
-      ...(history.system !== undefined && this.allowedClientOverrides.has('system')
+      ...(history.system !== undefined &&
+      this.allowedClientOverrides.has('system')
         ? { system: history.system }
         : {}),
       sessionId,
@@ -369,14 +395,19 @@ export class SessionApi {
     await this.sessionStore.set(snapshot.sessionId, snapshot, {
       createdAt: snapshot.createdAt,
       ...(snapshot.model !== undefined ? { model: snapshot.model } : {}),
-      ...(snapshot.provider !== undefined ? { provider: snapshot.provider } : {}),
+      ...(snapshot.provider !== undefined
+        ? { provider: snapshot.provider }
+        : {}),
       ...(tenantId !== undefined ? { tenantId } : {}),
     });
 
     const record = await this.requireSession(snapshot.sessionId, tenantId);
     return jsonResponse(
       {
-        session: await this.buildSessionView(record, new Set(['cost', 'messages'])),
+        session: await this.buildSessionView(
+          record,
+          new Set(['cost', 'messages']),
+        ),
       },
       201,
     );
@@ -404,7 +435,8 @@ export class SessionApi {
       ...this.buildConversationOptions(body, tenantId),
       sessionId,
     });
-    const shouldStream = body.stream ?? url.searchParams.get('stream') === 'true';
+    const shouldStream =
+      body.stream ?? url.searchParams.get('stream') === 'true';
 
     if (shouldStream) {
       return this.streamSessionMessage(
@@ -512,8 +544,12 @@ export class SessionApi {
     const contextManager =
       body.maxMessages !== undefined || body.maxTokens !== undefined
         ? new SlidingWindowStrategy({
-            ...(body.maxMessages !== undefined ? { maxMessages: body.maxMessages } : {}),
-            ...(body.maxTokens !== undefined ? { maxTokens: body.maxTokens } : {}),
+            ...(body.maxMessages !== undefined
+              ? { maxMessages: body.maxMessages }
+              : {}),
+            ...(body.maxTokens !== undefined
+              ? { maxTokens: body.maxTokens }
+              : {}),
           })
         : this.contextManager;
 
@@ -528,31 +564,50 @@ export class SessionApi {
       ...(record.snapshot.maxContextTokens !== undefined
         ? { maxContextTokens: record.snapshot.maxContextTokens }
         : {}),
-      ...(record.snapshot.model !== undefined ? { model: record.snapshot.model } : {}),
-      ...(record.snapshot.provider !== undefined ? { provider: record.snapshot.provider } : {}),
-      ...(record.snapshot.system !== undefined ? { system: record.snapshot.system } : {}),
+      ...(record.snapshot.model !== undefined
+        ? { model: record.snapshot.model }
+        : {}),
+      ...(record.snapshot.provider !== undefined
+        ? { provider: record.snapshot.provider }
+        : {}),
+      ...(record.snapshot.system !== undefined
+        ? { system: record.snapshot.system }
+        : {}),
     };
     const beforeCount = record.snapshot.messages.length;
-    const trimmedMessages = (await contextManager.trim(
-      record.snapshot.messages,
-      trimContext,
-    )) as ConversationSnapshot['messages'];
+    const trimmedMessages = validateAndCloneCanonicalMessages(
+      await contextManager.trim(
+        validateAndCloneCanonicalMessages(record.snapshot.messages),
+        { ...trimContext },
+      ),
+    );
     const updatedSnapshot: ConversationSnapshot = {
       ...cloneSnapshot(record.snapshot),
       messages: trimmedMessages,
       updatedAt: new Date().toISOString(),
     };
-    const updatedRecord = await this.sessionStore.set(sessionId, updatedSnapshot, {
-      createdAt: updatedSnapshot.createdAt,
-      ...(updatedSnapshot.model !== undefined ? { model: updatedSnapshot.model } : {}),
-      ...(updatedSnapshot.provider !== undefined ? { provider: updatedSnapshot.provider } : {}),
-      ...(tenantId !== undefined ? { tenantId } : {}),
-    });
+    const updatedRecord = await this.sessionStore.set(
+      sessionId,
+      updatedSnapshot,
+      {
+        createdAt: updatedSnapshot.createdAt,
+        ...(updatedSnapshot.model !== undefined
+          ? { model: updatedSnapshot.model }
+          : {}),
+        ...(updatedSnapshot.provider !== undefined
+          ? { provider: updatedSnapshot.provider }
+          : {}),
+        ...(tenantId !== undefined ? { tenantId } : {}),
+      },
+    );
 
     return jsonResponse({
       compacted: updatedSnapshot.messages.length < beforeCount,
       removedCount: beforeCount - updatedSnapshot.messages.length,
-      session: await this.buildSessionView(updatedRecord, new Set(['cost', 'messages'])),
+      session: await this.buildSessionView(
+        updatedRecord,
+        new Set(['cost', 'messages']),
+      ),
     });
   }
 
@@ -573,7 +628,10 @@ export class SessionApi {
       throw new HttpError(400, 'fromMessageIndex must be an integer.');
     }
 
-    if (body.fromMessageIndex < 0 || body.fromMessageIndex >= fullHistory.length) {
+    if (
+      body.fromMessageIndex < 0 ||
+      body.fromMessageIndex >= fullHistory.length
+    ) {
       throw new HttpError(
         400,
         `fromMessageIndex must be between 0 and ${Math.max(fullHistory.length - 1, 0)}.`,
@@ -619,19 +677,30 @@ export class SessionApi {
       delete forkedSnapshot.system;
     }
 
-    const forkedRecord = await this.sessionStore.set(newSessionId, forkedSnapshot, {
-      createdAt: timestamp,
-      ...(forkedSnapshot.model !== undefined ? { model: forkedSnapshot.model } : {}),
-      ...(forkedSnapshot.provider !== undefined ? { provider: forkedSnapshot.provider } : {}),
-      ...(tenantId !== undefined ? { tenantId } : {}),
-    });
+    const forkedRecord = await this.sessionStore.set(
+      newSessionId,
+      forkedSnapshot,
+      {
+        createdAt: timestamp,
+        ...(forkedSnapshot.model !== undefined
+          ? { model: forkedSnapshot.model }
+          : {}),
+        ...(forkedSnapshot.provider !== undefined
+          ? { provider: forkedSnapshot.provider }
+          : {}),
+        ...(tenantId !== undefined ? { tenantId } : {}),
+      },
+    );
 
     return jsonResponse(
       {
         forkedFromMessageIndex: body.fromMessageIndex,
         forkedFromSessionId: sessionId,
         resetUsage,
-        session: await this.buildSessionView(forkedRecord, new Set(['cost', 'messages'])),
+        session: await this.buildSessionView(
+          forkedRecord,
+          new Set(['cost', 'messages']),
+        ),
       },
       201,
     );
@@ -685,9 +754,15 @@ export class SessionApi {
       messageCount: record.meta.messageCount,
       updatedAt: record.meta.updatedAt,
       ...(record.meta.model !== undefined ? { model: record.meta.model } : {}),
-      ...(record.meta.provider !== undefined ? { provider: record.meta.provider } : {}),
-      ...(record.meta.tenantId !== undefined ? { tenantId: record.meta.tenantId } : {}),
-      ...(record.snapshot.system !== undefined ? { system: record.snapshot.system } : {}),
+      ...(record.meta.provider !== undefined
+        ? { provider: record.meta.provider }
+        : {}),
+      ...(record.meta.tenantId !== undefined
+        ? { tenantId: record.meta.tenantId }
+        : {}),
+      ...(record.snapshot.system !== undefined
+        ? { system: record.snapshot.system }
+        : {}),
     };
 
     if (include.has('messages')) {
@@ -708,7 +783,10 @@ export class SessionApi {
     }
 
     if (include.has('usage')) {
-      view.usage = await this.safeGetUsage(record.meta.sessionId, record.meta.tenantId);
+      view.usage = await this.safeGetUsage(
+        record.meta.sessionId,
+        record.meta.tenantId,
+      );
     }
 
     return view;
@@ -724,31 +802,48 @@ export class SessionApi {
     // model/provider/system, etc.).
     const merged: SessionConversationConfig = { ...this.conversationDefaults };
     for (const field of CONVERSATION_CONFIG_FIELDS) {
-      if (config[field] !== undefined && this.allowedClientOverrides.has(field)) {
+      if (
+        config[field] !== undefined &&
+        this.allowedClientOverrides.has(field)
+      ) {
         assignConfigField(merged, config, field);
       }
     }
 
     return {
-      ...(merged.budgetUsd !== undefined ? { budgetUsd: merged.budgetUsd } : {}),
+      ...(merged.budgetUsd !== undefined
+        ? { budgetUsd: merged.budgetUsd }
+        : {}),
       ...(merged.maxContextTokens !== undefined
         ? { maxContextTokens: merged.maxContextTokens }
         : {}),
-      ...(merged.maxTokens !== undefined ? { maxTokens: merged.maxTokens } : {}),
-      ...(merged.maxToolRounds !== undefined ? { maxToolRounds: merged.maxToolRounds } : {}),
+      ...(merged.maxTokens !== undefined
+        ? { maxTokens: merged.maxTokens }
+        : {}),
+      ...(merged.maxToolRounds !== undefined
+        ? { maxToolRounds: merged.maxToolRounds }
+        : {}),
       ...(merged.model !== undefined ? { model: merged.model } : {}),
       ...(merged.provider !== undefined ? { provider: merged.provider } : {}),
       ...(merged.providerOptions !== undefined
         ? { providerOptions: merged.providerOptions }
         : {}),
-      ...(merged.responseFormat !== undefined ? { responseFormat: merged.responseFormat } : {}),
+      ...(merged.responseFormat !== undefined
+        ? { responseFormat: merged.responseFormat }
+        : {}),
       ...(merged.system !== undefined ? { system: merged.system } : {}),
-      ...(merged.toolChoice !== undefined ? { toolChoice: merged.toolChoice } : {}),
+      ...(merged.toolChoice !== undefined
+        ? { toolChoice: merged.toolChoice }
+        : {}),
       ...(merged.toolExecutionTimeoutMs !== undefined
         ? { toolExecutionTimeoutMs: merged.toolExecutionTimeoutMs }
         : {}),
-      ...(merged.toolValidation !== undefined ? { toolValidation: merged.toolValidation } : {}),
-      ...(this.contextManager !== undefined ? { contextManager: this.contextManager } : {}),
+      ...(merged.toolValidation !== undefined
+        ? { toolValidation: merged.toolValidation }
+        : {}),
+      ...(this.contextManager !== undefined
+        ? { contextManager: this.contextManager }
+        : {}),
       ...(tenantId !== undefined ? { tenantId } : {}),
       ...(this.tools !== undefined ? { tools: this.tools } : {}),
     };
@@ -861,7 +956,9 @@ export class SessionApi {
                 encoder.encode(
                   formatSseEvent(
                     'response.error',
-                    streamEventData(chunk, { ...serializeStreamError(chunk.error) }),
+                    streamEventData(chunk, {
+                      ...serializeStreamError(chunk.error),
+                    }),
                   ),
                 ),
               );
@@ -915,7 +1012,10 @@ export class SessionApi {
             if (chunk.type === 'reasoning-start') {
               controller.enqueue(
                 encoder.encode(
-                  formatSseEvent('response.reasoning.started', streamEventData(chunk)),
+                  formatSseEvent(
+                    'response.reasoning.started',
+                    streamEventData(chunk),
+                  ),
                 ),
               );
               continue;
@@ -936,7 +1036,10 @@ export class SessionApi {
             if (chunk.type === 'reasoning-end') {
               controller.enqueue(
                 encoder.encode(
-                  formatSseEvent('response.reasoning.completed', streamEventData(chunk)),
+                  formatSseEvent(
+                    'response.reasoning.completed',
+                    streamEventData(chunk),
+                  ),
                 ),
               );
               continue;
@@ -963,7 +1066,10 @@ export class SessionApi {
               encoder.encode(
                 formatSseEvent('response.completed', {
                   finishReason: chunk.finishReason,
-                  session: await this.buildSessionView(record, new Set(['cost', 'messages'])),
+                  session: await this.buildSessionView(
+                    record,
+                    new Set(['cost', 'messages']),
+                  ),
                   usage: chunk.usage,
                   ...streamEventData(chunk),
                 }),
@@ -977,7 +1083,8 @@ export class SessionApi {
               encoder.encode(
                 formatSseEvent('response.error', {
                   ...errorPayload,
-                  ...(requestId !== undefined && errorPayload.requestId === undefined
+                  ...(requestId !== undefined &&
+                  errorPayload.requestId === undefined
                     ? { requestId }
                     : {}),
                 }),
@@ -1237,7 +1344,9 @@ function matchRoute(basePath: string, pathname: string): MatchedRoute | null {
 }
 
 function normalizeBasePath(basePath: string): string {
-  return trimTrailingSlash(basePath.startsWith('/') ? basePath : `/${basePath}`);
+  return trimTrailingSlash(
+    basePath.startsWith('/') ? basePath : `/${basePath}`,
+  );
 }
 
 function trimTrailingSlash(pathname: string): string {
@@ -1360,7 +1469,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-function parseInclude(searchParams: URLSearchParams, defaults: string[] = []): Set<string> {
+function parseInclude(
+  searchParams: URLSearchParams,
+  defaults: string[] = [],
+): Set<string> {
   const include = new Set<string>(defaults);
 
   for (const value of searchParams.getAll('include')) {
@@ -1455,7 +1567,9 @@ function normalizeHistoryInput(
     firstMessage?.role === 'system' && typeof firstMessage.content === 'string'
       ? firstMessage.content
       : undefined;
-  const nonSystemMessages = messages.filter((message) => message.role !== 'system');
+  const nonSystemMessages = messages.filter(
+    (message) => message.role !== 'system',
+  );
 
   return {
     messages: nonSystemMessages.map(cloneMessage),
@@ -1467,9 +1581,14 @@ function normalizeHistoryInput(
   };
 }
 
-function snapshotToMessages(snapshot: ConversationSnapshot): CanonicalMessage[] {
+function snapshotToMessages(
+  snapshot: ConversationSnapshot,
+): CanonicalMessage[] {
   return snapshot.system
-    ? [{ content: snapshot.system, pinned: true, role: 'system' }, ...snapshot.messages.map(cloneMessage)]
+    ? [
+        { content: snapshot.system, pinned: true, role: 'system' },
+        ...snapshot.messages.map(cloneMessage),
+      ]
     : snapshot.messages.map(cloneMessage);
 }
 
@@ -1478,7 +1597,10 @@ function splitHistoryForSnapshot(messages: CanonicalMessage[]): {
   system?: string;
 } {
   const [firstMessage, ...rest] = messages;
-  if (firstMessage?.role === 'system' && typeof firstMessage.content === 'string') {
+  if (
+    firstMessage?.role === 'system' &&
+    typeof firstMessage.content === 'string'
+  ) {
     return {
       messages: rest.map(cloneMessage),
       system: firstMessage.content,
@@ -1572,7 +1694,10 @@ function projectMessagesForClient(
 }
 
 function createSessionId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+  if (
+    typeof crypto !== 'undefined' &&
+    typeof crypto.randomUUID === 'function'
+  ) {
     return crypto.randomUUID();
   }
 
@@ -1619,8 +1744,12 @@ function requireRouteSessionId(route: MatchedRoute): string {
   return route.sessionId;
 }
 
-function stripSystemFromSnapshot(snapshot: ConversationSnapshot): ConversationSnapshot {
-  const next = cloneSnapshot(snapshot) as ConversationSnapshot & { system?: string };
+function stripSystemFromSnapshot(
+  snapshot: ConversationSnapshot,
+): ConversationSnapshot {
+  const next = cloneSnapshot(snapshot) as ConversationSnapshot & {
+    system?: string;
+  };
   delete next.system;
   return next;
 }
@@ -1671,7 +1800,9 @@ function serializePublicError(error: unknown): PublicSessionApiError {
       name: error.name,
       ...(error.provider !== undefined ? { provider: error.provider } : {}),
       ...(error.requestId !== undefined ? { requestId: error.requestId } : {}),
-      ...(error.statusCode !== undefined ? { statusCode: error.statusCode } : {}),
+      ...(error.statusCode !== undefined
+        ? { statusCode: error.statusCode }
+        : {}),
     };
   }
 
@@ -1716,7 +1847,10 @@ function errorToResponse(error: unknown): Response {
   }
 
   if (error instanceof LLMError) {
-    return jsonResponse({ error: serializePublicError(error) }, error.statusCode ?? (error.retryable ? 503 : 500));
+    return jsonResponse(
+      { error: serializePublicError(error) },
+      error.statusCode ?? (error.retryable ? 503 : 500),
+    );
   }
 
   if (error instanceof Error) {

@@ -6,9 +6,16 @@ import {
   ProviderError,
   RateLimitError,
 } from 'unified-llm-client/errors';
+import { ModelRegistry } from 'unified-llm-client/models';
+import { validateBudgetUsd } from './budget-validation.js';
+import { validateCompletionCacheOptions } from './cache-validation.js';
 import { validateEmbeddingRequest } from './embedding-validation.js';
 import { validateAndCloneMetadata } from './json-metadata.js';
-import { ModelRegistry } from 'unified-llm-client/models';
+import {
+  validateSpeechRequest,
+  validateTranscriptionRequest,
+} from './speech-validation.js';
+import { validateAndCloneTools } from './tool-validation.js';
 import { Conversation, type ConversationRoute } from './conversation.js';
 import { AnthropicAdapter } from './providers/anthropic.js';
 import { GeminiAdapter } from './providers/gemini.js';
@@ -20,7 +27,11 @@ import {
   assertResponseFormatSupported,
   parseStructuredOutput,
 } from './structured-output.js';
-import { calcCostUSD, estimateMessageTokens, formatCost } from './utils/index.js';
+import {
+  calcCostUSD,
+  estimateMessageTokens,
+  formatCost,
+} from './utils/index.js';
 import { calcSpeechCostUSD } from './utils/cost.js';
 import { estimateTokens } from './utils/token-estimator.js';
 import { exportSpeechUsageSummary, exportUsageSummary } from './usage.js';
@@ -29,7 +40,10 @@ import type {
   ModelRegistryOptions,
   ModelPriceOverrides,
 } from 'unified-llm-client/models';
-import type { ConversationOptions, ConversationSnapshot } from './conversation.js';
+import type {
+  ConversationOptions,
+  ConversationSnapshot,
+} from './conversation.js';
 import type {
   GeminiCachedContent,
   GeminiCachedContentPage,
@@ -38,7 +52,11 @@ import type {
   GeminiUpdateCacheOptions,
 } from './providers/gemini.js';
 import type { SessionStore } from './session-store.js';
-import type { ModelRouter, ResolvedModelRoute, RouterContext } from './router.js';
+import type {
+  ModelRouter,
+  ResolvedModelRoute,
+  RouterContext,
+} from './router.js';
 import type {
   CanonicalFinishReason,
   CanonicalMessage,
@@ -143,11 +161,10 @@ export interface RequestCostEstimate {
 }
 
 /** Configuration for `LLMClient.mock()` test instances. */
-export interface MockLLMClientOptions
-  extends Omit<
-    LLMClientOptions,
-    'anthropicApiKey' | 'geminiApiKey' | 'openaiApiKey'
-  > {
+export interface MockLLMClientOptions extends Omit<
+  LLMClientOptions,
+  'anthropicApiKey' | 'geminiApiKey' | 'openaiApiKey'
+> {
   embeddings?: Array<
     | EmbeddingResponse
     | ((
@@ -241,7 +258,9 @@ export class LLMClient {
     create: (options: GeminiCreateCacheOptions) => Promise<GeminiCachedContent>;
     delete: (name: string) => Promise<void>;
     get: (name: string) => Promise<GeminiCachedContent>;
-    list: (options?: GeminiListCachesOptions) => Promise<GeminiCachedContentPage>;
+    list: (
+      options?: GeminiListCachesOptions,
+    ) => Promise<GeminiCachedContentPage>;
     update: (
       name: string,
       options: GeminiUpdateCacheOptions,
@@ -264,9 +283,12 @@ export class LLMClient {
       options.sessionStore ?? resolveDefaultSessionStore(options.sessionStore);
     this.usageLogger = options.usageLogger;
 
-    const anthropicApiKey = options.anthropicApiKey ?? getEnvironmentVariable('ANTHROPIC_API_KEY');
-    const geminiApiKey = options.geminiApiKey ?? getEnvironmentVariable('GEMINI_API_KEY');
-    const openaiApiKey = options.openaiApiKey ?? getEnvironmentVariable('OPENAI_API_KEY');
+    const anthropicApiKey =
+      options.anthropicApiKey ?? getEnvironmentVariable('ANTHROPIC_API_KEY');
+    const geminiApiKey =
+      options.geminiApiKey ?? getEnvironmentVariable('GEMINI_API_KEY');
+    const openaiApiKey =
+      options.openaiApiKey ?? getEnvironmentVariable('OPENAI_API_KEY');
     const fetchImplementation = options.fetchImplementation;
 
     this.anthropicAdapter = anthropicApiKey
@@ -286,8 +308,10 @@ export class LLMClient {
             openaiApiKey,
             fetchImplementation,
             modelRegistry,
-            options.openaiOrganization ?? getEnvironmentVariable('OPENAI_ORG_ID'),
-            options.openaiProject ?? getEnvironmentVariable('OPENAI_PROJECT_ID'),
+            options.openaiOrganization ??
+              getEnvironmentVariable('OPENAI_ORG_ID'),
+            options.openaiProject ??
+              getEnvironmentVariable('OPENAI_PROJECT_ID'),
             options.retryOptions,
           ),
         )
@@ -341,7 +365,7 @@ export class LLMClient {
 
   /** Executes a single non-streaming completion request. */
   async complete(options: LLMRequestOptions): Promise<CanonicalResponse> {
-    const requestOptions = withValidatedMetadata(options);
+    const requestOptions = withValidatedRequest(options);
     const plan = this.resolveRequestPlan(requestOptions);
     const startedAt = Date.now();
     const attemptedRoutes: string[] = [];
@@ -396,11 +420,14 @@ export class LLMClient {
       }
     }
 
-    throw new ProviderCapabilityError('No model route attempts were available.');
+    throw new ProviderCapabilityError(
+      'No model route attempts were available.',
+    );
   }
 
   /** Resolves a conversation turn before context trimming and provider dispatch. */
   resolveContext(options: {
+    budgetUsd?: number;
     maxTokens?: number;
     messages: CanonicalMessage[];
     model?: string;
@@ -412,19 +439,22 @@ export class LLMClient {
     toolChoice?: CanonicalToolChoice;
     tools?: CanonicalTool[];
   }): ConversationRoute {
-    const plan = options.model
+    const requestOptions = withValidatedRequest(options as LLMRequestOptions);
+    const plan = requestOptions.model
       ? {
           attempts: [
             {
-              decision: `requested:${options.model}`,
-              request: this.resolveRequest(options),
+              decision: `requested:${requestOptions.model}`,
+              request: this.resolveRequest(requestOptions),
             },
           ],
         }
-      : this.resolveRequestPlan(options);
+      : this.resolveRequestPlan(requestOptions);
     const attempt = plan.attempts[0];
     if (!attempt) {
-      throw new ProviderCapabilityError('No model route attempts were available.');
+      throw new ProviderCapabilityError(
+        'No model route attempts were available.',
+      );
     }
 
     const modelInfo = this.modelRegistry.get(attempt.request.model);
@@ -442,9 +472,13 @@ export class LLMClient {
 
   /** Estimates completion cost using the same preflight calculation as budgets. */
   estimateRequest(options: LLMRequestOptions): RequestCostEstimate {
-    const primaryAttempt = this.resolveRequestPlan(options).attempts[0];
+    const primaryAttempt = this.resolveRequestPlan(
+      withValidatedRequest(options),
+    ).attempts[0];
     if (!primaryAttempt) {
-      throw new ProviderCapabilityError('No model route attempts were available.');
+      throw new ProviderCapabilityError(
+        'No model route attempts were available.',
+      );
     }
 
     return this.estimateResolvedRequest(primaryAttempt.request);
@@ -458,14 +492,19 @@ export class LLMClient {
     },
   ): RequestCostEstimate {
     const estimatedMessages = resolved.system
-      ? [{ content: resolved.system, role: 'system' as const }, ...resolved.messages]
+      ? [
+          { content: resolved.system, role: 'system' as const },
+          ...resolved.messages,
+        ]
       : resolved.messages;
     const inputTokens = estimateMessageTokens(estimatedMessages);
     const maxOutputTokens = resolved.maxTokens;
     const reasoningTokens = estimateBillableReasoningTokens(resolved);
     const estimatedCostUSD = calcCostUSD(
       {
-        ...(reasoningTokens > 0 ? { billableReasoningTokens: reasoningTokens } : {}),
+        ...(reasoningTokens > 0
+          ? { billableReasoningTokens: reasoningTokens }
+          : {}),
         inputTokens,
         model: resolved.model,
         outputTokens: maxOutputTokens,
@@ -492,7 +531,8 @@ export class LLMClient {
 
   /** Executes a single non-streaming text-to-speech request. */
   async speak(options: SpeechRequestOptions): Promise<SpeechResponse> {
-    const resolved = this.resolveSpeechRequest(options);
+    const validated = validateSpeechRequest(options);
+    const resolved = this.resolveSpeechRequest(validated);
     this.handleSpeechBudgetExceededAction(resolved, 'speech');
     const startedAt = Date.now();
     const response = await this.dispatchSpeak(resolved);
@@ -511,7 +551,8 @@ export class LLMClient {
   async transcribe(
     options: TranscriptionRequestOptions,
   ): Promise<TranscriptionResponse> {
-    const resolved = this.resolveTranscriptionRequest(options);
+    const validated = validateTranscriptionRequest(options);
+    const resolved = this.resolveTranscriptionRequest(validated);
     this.handleSpeechBudgetExceededAction(resolved, 'transcription');
     const startedAt = Date.now();
     const response = await this.dispatchTranscribe(resolved);
@@ -528,7 +569,7 @@ export class LLMClient {
 
   /** Executes a streaming completion request and yields canonical chunks. */
   stream(options: LLMRequestOptions): CancelableStream<StreamChunk> {
-    const requestOptions = withValidatedMetadata(options);
+    const requestOptions = withValidatedRequest(options);
     const plan = this.resolveRequestPlan(requestOptions, { stream: true });
     const startedAt = Date.now();
 
@@ -553,17 +594,32 @@ export class LLMClient {
   async conversation(
     options: Omit<ConversationOptions, 'store'> = {},
   ): Promise<Conversation> {
+    validateBudgetUsd(options.budgetUsd);
+    const conversationOptions =
+      options.tools === undefined
+        ? options
+        : {
+            ...options,
+            tools: validateAndCloneTools(
+              options.tools,
+              options.provider,
+              options.model,
+            ),
+          };
     const store = this.sessionStore;
-    if (store && options.sessionId) {
-      const stored = await store.get(options.sessionId, options.tenantId);
+    if (store && conversationOptions.sessionId) {
+      const stored = await store.get(
+        conversationOptions.sessionId,
+        conversationOptions.tenantId,
+      );
       if (stored) {
         return Conversation.restore(this, stored.snapshot, {
-          ...options,
-          ...(options.budgetExceededAction !== undefined
-            ? { budgetExceededAction: options.budgetExceededAction }
+          ...conversationOptions,
+          ...(conversationOptions.budgetExceededAction !== undefined
+            ? { budgetExceededAction: conversationOptions.budgetExceededAction }
             : { budgetExceededAction: this.budgetExceededAction }),
-          ...(options.onWarning !== undefined
-            ? { onWarning: options.onWarning }
+          ...(conversationOptions.onWarning !== undefined
+            ? { onWarning: conversationOptions.onWarning }
             : { onWarning: this.onWarning }),
           ...(store ? { store } : {}),
         });
@@ -571,12 +627,12 @@ export class LLMClient {
     }
 
     return new Conversation(this, {
-      ...options,
-      ...(options.budgetExceededAction !== undefined
-        ? { budgetExceededAction: options.budgetExceededAction }
+      ...conversationOptions,
+      ...(conversationOptions.budgetExceededAction !== undefined
+        ? { budgetExceededAction: conversationOptions.budgetExceededAction }
         : { budgetExceededAction: this.budgetExceededAction }),
-      ...(options.onWarning !== undefined
-        ? { onWarning: options.onWarning }
+      ...(conversationOptions.onWarning !== undefined
+        ? { onWarning: conversationOptions.onWarning }
         : { onWarning: this.onWarning }),
       ...(store ? { store } : {}),
     });
@@ -599,7 +655,9 @@ export class LLMClient {
   }
 
   /** Returns aggregated speech usage from the configured usage logger. */
-  async getSpeechUsage(query: SpeechUsageQuery = {}): Promise<SpeechUsageSummary> {
+  async getSpeechUsage(
+    query: SpeechUsageQuery = {},
+  ): Promise<SpeechUsageSummary> {
     if (!this.usageLogger?.getSpeechUsage) {
       throw new ProviderCapabilityError(
         'Speech usage aggregation requires a usage logger that implements getSpeechUsage(), such as PostgresUsageLogger.',
@@ -822,7 +880,10 @@ export class LLMClient {
 
     const modelInfo = this.modelRegistry.get(model);
     const provider =
-      target.provider ?? options.provider ?? this.defaultProvider ?? modelInfo.provider;
+      target.provider ??
+      options.provider ??
+      this.defaultProvider ??
+      modelInfo.provider;
 
     if (provider !== modelInfo.provider) {
       throw new ProviderCapabilityError(
@@ -869,7 +930,10 @@ export class LLMClient {
     }
 
     const modelInfo = this.modelRegistry.assertModelKind(model, 'embedding');
-    const provider = options.provider ?? this.defaultEmbeddingProvider ?? (modelInfo.provider as EmbeddingProvider);
+    const provider =
+      options.provider ??
+      this.defaultEmbeddingProvider ??
+      (modelInfo.provider as EmbeddingProvider);
 
     if (provider !== 'google') {
       throw new ProviderCapabilityError(
@@ -935,10 +999,13 @@ export class LLMClient {
     }
 
     if (options.input.length === 0) {
-      throw new ProviderCapabilityError('Text-to-speech input cannot be empty.', {
-        model,
-        provider,
-      });
+      throw new ProviderCapabilityError(
+        'Text-to-speech input cannot be empty.',
+        {
+          model,
+          provider,
+        },
+      );
     }
 
     return {
@@ -955,7 +1022,10 @@ export class LLMClient {
     provider: SpeechProvider;
   } {
     const model = options.model ?? 'gpt-4o-mini-transcribe';
-    const modelInfo = this.modelRegistry.assertModelKind(model, 'transcription');
+    const modelInfo = this.modelRegistry.assertModelKind(
+      model,
+      'transcription',
+    );
     const provider = options.provider ?? (modelInfo.provider as SpeechProvider);
 
     if (provider !== 'openai') {
@@ -1028,7 +1098,9 @@ export class LLMClient {
   ): ResolvedModelRoute {
     if (!this.modelRouter) {
       const directRequest = this.resolveRequest(options, {}, resolveOptions);
-      const decision = options.model ? `requested:${directRequest.model}` : `default:${directRequest.model}`;
+      const decision = options.model
+        ? `requested:${directRequest.model}`
+        : `default:${directRequest.model}`;
       return {
         attempts: [
           {
@@ -1043,7 +1115,9 @@ export class LLMClient {
 
     return this.modelRouter.resolve(this.buildRouterContext(options), {
       modelRegistry: this.modelRegistry,
-      ...(this.defaultModel !== undefined ? { defaultModel: this.defaultModel } : {}),
+      ...(this.defaultModel !== undefined
+        ? { defaultModel: this.defaultModel }
+        : {}),
       ...(this.defaultProvider !== undefined
         ? { defaultProvider: this.defaultProvider }
         : {}),
@@ -1055,12 +1129,20 @@ export class LLMClient {
       maxTokens: options.maxTokens ?? 1024,
       messages: options.messages,
       ...(options.model !== undefined ? { requestedModel: options.model } : {}),
-      ...(options.provider !== undefined ? { requestedProvider: options.provider } : {}),
-      ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+      ...(options.provider !== undefined
+        ? { requestedProvider: options.provider }
+        : {}),
+      ...(options.sessionId !== undefined
+        ? { sessionId: options.sessionId }
+        : {}),
       ...(options.system !== undefined ? { system: options.system } : {}),
-      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+      ...(options.temperature !== undefined
+        ? { temperature: options.temperature }
+        : {}),
       ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
-      ...(options.toolChoice !== undefined ? { toolChoice: options.toolChoice } : {}),
+      ...(options.toolChoice !== undefined
+        ? { toolChoice: options.toolChoice }
+        : {}),
       ...(options.tools !== undefined ? { tools: options.tools } : {}),
     };
   }
@@ -1132,7 +1214,10 @@ export class LLMClient {
   private handleSpeechBudgetExceededAction(
     options:
       | (SpeechRequestOptions & { model: string; provider: SpeechProvider })
-      | (TranscriptionRequestOptions & { model: string; provider: SpeechProvider }),
+      | (TranscriptionRequestOptions & {
+          model: string;
+          provider: SpeechProvider;
+        }),
     kind: 'speech' | 'transcription',
   ): void {
     if (options.budgetUsd === undefined) {
@@ -1292,7 +1377,9 @@ export class LLMClient {
         provider: input.provider,
         speechUsage: input.usage ?? { estimated: true },
         timestamp: new Date().toISOString(),
-        ...(input.options.botId !== undefined ? { botId: input.options.botId } : {}),
+        ...(input.options.botId !== undefined
+          ? { botId: input.options.botId }
+          : {}),
         ...(input.options.sessionId !== undefined
           ? { sessionId: input.options.sessionId }
           : {}),
@@ -1324,7 +1411,9 @@ export class LLMClient {
 
     const decorate = (chunk: StreamChunk): StreamChunk => ({
       ...chunk,
-      ...(options.requestId !== undefined ? { requestId: options.requestId } : {}),
+      ...(options.requestId !== undefined
+        ? { requestId: options.requestId }
+        : {}),
       sequence: ++sequence,
       timestamp: new Date().toISOString(),
       version: 2,
@@ -1420,19 +1509,26 @@ export class LLMClient {
 }
 
 class MockLLMClient extends LLMClient {
-  private readonly embeddingQueue: NonNullable<MockLLMClientOptions['embeddings']>;
+  private readonly embeddingQueue: NonNullable<
+    MockLLMClientOptions['embeddings']
+  >;
   private readonly mockDefaultModel: string;
   private readonly mockDefaultEmbeddingModel: string;
   private readonly mockDefaultEmbeddingProvider: EmbeddingProvider;
   private readonly mockDefaultProvider: CanonicalProvider;
-  private readonly responseQueue: NonNullable<MockLLMClientOptions['responses']>;
+  private readonly responseQueue: NonNullable<
+    MockLLMClientOptions['responses']
+  >;
   private readonly speechQueue: NonNullable<MockLLMClientOptions['speeches']>;
   private readonly streamQueue: NonNullable<MockLLMClientOptions['streams']>;
-  private readonly transcriptionQueue: NonNullable<MockLLMClientOptions['transcriptions']>;
+  private readonly transcriptionQueue: NonNullable<
+    MockLLMClientOptions['transcriptions']
+  >;
 
   constructor(options: MockLLMClientOptions = {}) {
     const defaultModel = options.defaultModel ?? 'mock-model';
-    const defaultEmbeddingModel = options.defaultEmbeddingModel ?? 'mock-embedding-model';
+    const defaultEmbeddingModel =
+      options.defaultEmbeddingModel ?? 'mock-embedding-model';
     const defaultEmbeddingProvider = options.defaultEmbeddingProvider ?? 'mock';
     const defaultProvider = options.defaultProvider ?? 'mock';
     super({
@@ -1454,6 +1550,7 @@ class MockLLMClient extends LLMClient {
   }
 
   override resolveContext(options: {
+    budgetUsd?: number;
     maxTokens?: number;
     messages: CanonicalMessage[];
     model?: string;
@@ -1465,11 +1562,12 @@ class MockLLMClient extends LLMClient {
     toolChoice?: CanonicalToolChoice;
     tools?: CanonicalTool[];
   }): ConversationRoute {
+    const requestOptions = withValidatedRequest(options as LLMRequestOptions);
     try {
-      return super.resolveContext(options);
+      return super.resolveContext(requestOptions);
     } catch {
-      const model = options.model ?? this.mockDefaultModel;
-      const provider = options.provider ?? this.mockDefaultProvider;
+      const model = requestOptions.model ?? this.mockDefaultModel;
+      const provider = requestOptions.provider ?? this.mockDefaultProvider;
       let contextWindow: number | undefined;
       try {
         contextWindow = this.models.get(model).contextWindow;
@@ -1484,7 +1582,9 @@ class MockLLMClient extends LLMClient {
     }
   }
 
-  override async embed(options: EmbeddingRequestOptions): Promise<EmbeddingResponse> {
+  override async embed(
+    options: EmbeddingRequestOptions,
+  ): Promise<EmbeddingResponse> {
     const resolved = this.resolveMockEmbeddingRequest(options);
     let modelInfo;
     try {
@@ -1516,12 +1616,17 @@ class MockLLMClient extends LLMClient {
     return typeof next === 'function' ? await next(resolved) : next;
   }
 
-  override async complete(options: LLMRequestOptions): Promise<CanonicalResponse> {
-    const resolved = this.resolveMockRequest(withValidatedMetadata(options));
+  override async complete(
+    options: LLMRequestOptions,
+  ): Promise<CanonicalResponse> {
+    const resolved = this.resolveMockRequest(withValidatedRequest(options));
     const next = this.responseQueue.shift();
 
     if (!next) {
-      return buildMockResponse(extractLastUserText(resolved.messages), resolved);
+      return buildMockResponse(
+        extractLastUserText(resolved.messages),
+        resolved,
+      );
     }
 
     const response = typeof next === 'function' ? await next(resolved) : next;
@@ -1529,13 +1634,14 @@ class MockLLMClient extends LLMClient {
   }
 
   override async speak(options: SpeechRequestOptions): Promise<SpeechResponse> {
-    const resolved = this.resolveMockSpeechRequest(options);
+    const validated = validateSpeechRequest(options);
+    const resolved = this.resolveMockSpeechRequest(validated);
     const next = this.speechQueue.shift();
 
     if (!next) {
       return {
         audio: new Uint8Array([1, 2, 3]),
-        format: options.format ?? 'mp3',
+        format: validated.format ?? 'mp3',
         mediaType: 'audio/mpeg',
         model: resolved.model,
         provider: resolved.provider,
@@ -1544,8 +1650,8 @@ class MockLLMClient extends LLMClient {
           cost: '$0.00',
           costUSD: 0,
           estimated: true,
-          inputCharacters: options.input.length,
-          inputTokens: estimateTokens(options.input),
+          inputCharacters: validated.input.length,
+          inputTokens: estimateTokens(validated.input),
         },
       };
     }
@@ -1556,7 +1662,9 @@ class MockLLMClient extends LLMClient {
   override async transcribe(
     options: TranscriptionRequestOptions,
   ): Promise<TranscriptionResponse> {
-    const resolved = this.resolveMockTranscriptionRequest(options);
+    const resolved = this.resolveMockTranscriptionRequest(
+      validateTranscriptionRequest(options),
+    );
     const next = this.transcriptionQueue.shift();
 
     if (!next) {
@@ -1577,7 +1685,7 @@ class MockLLMClient extends LLMClient {
   }
 
   override stream(options: LLMRequestOptions): CancelableStream<StreamChunk> {
-    const requestOptions = withValidatedMetadata(options);
+    const requestOptions = withValidatedRequest(options);
     return createCancelableStream(
       async function* (
         this: MockLLMClient,
@@ -1602,7 +1710,10 @@ class MockLLMClient extends LLMClient {
         });
 
         if (!next) {
-          const response = buildMockResponse(extractLastUserText(resolved.messages), resolved);
+          const response = buildMockResponse(
+            extractLastUserText(resolved.messages),
+            resolved,
+          );
           if (response.text.length > 0) {
             yield decorate({ delta: response.text, type: 'text-delta' });
           }
@@ -1638,9 +1749,7 @@ class MockLLMClient extends LLMClient {
     );
   }
 
-  private resolveMockRequest(
-    options: LLMRequestOptions,
-  ): LLMRequestOptions & {
+  private resolveMockRequest(options: LLMRequestOptions): LLMRequestOptions & {
     maxTokens: number;
     model: string;
     provider: CanonicalProvider;
@@ -1827,8 +1936,13 @@ function extractLastUserText(messages: CanonicalMessage[]): string {
   return '';
 }
 
-function isAsyncIterable(value: AsyncIterable<StreamChunk> | StreamChunk[]): value is AsyncIterable<StreamChunk> {
-  return typeof (value as AsyncIterable<StreamChunk>)[Symbol.asyncIterator] === 'function';
+function isAsyncIterable(
+  value: AsyncIterable<StreamChunk> | StreamChunk[],
+): value is AsyncIterable<StreamChunk> {
+  return (
+    typeof (value as AsyncIterable<StreamChunk>)[Symbol.asyncIterator] ===
+    'function'
+  );
 }
 
 function buildUsageEvent(input: {
@@ -1847,22 +1961,52 @@ function buildUsageEvent(input: {
     model: input.model,
     provider: input.provider,
     timestamp: new Date().toISOString(),
-    ...(input.options.botId !== undefined ? { botId: input.options.botId } : {}),
-    ...(input.options.metadata !== undefined ? { metadata: input.options.metadata } : {}),
-    ...(input.options.requestId !== undefined ? { requestId: input.options.requestId } : {}),
-    ...(input.routingDecision ? { routingDecision: input.routingDecision } : {}),
-    ...(input.options.sessionId !== undefined ? { sessionId: input.options.sessionId } : {}),
-    ...(input.options.tenantId !== undefined ? { tenantId: input.options.tenantId } : {}),
+    ...(input.options.botId !== undefined
+      ? { botId: input.options.botId }
+      : {}),
+    ...(input.options.metadata !== undefined
+      ? { metadata: input.options.metadata }
+      : {}),
+    ...(input.options.requestId !== undefined
+      ? { requestId: input.options.requestId }
+      : {}),
+    ...(input.routingDecision
+      ? { routingDecision: input.routingDecision }
+      : {}),
+    ...(input.options.sessionId !== undefined
+      ? { sessionId: input.options.sessionId }
+      : {}),
+    ...(input.options.tenantId !== undefined
+      ? { tenantId: input.options.tenantId }
+      : {}),
   };
 }
 
-function withValidatedMetadata(options: LLMRequestOptions): LLMRequestOptions {
-  return options.metadata === undefined
-    ? options
-    : {
-        ...options,
-        metadata: validateAndCloneMetadata(options.metadata),
-      };
+function withValidatedRequest(options: LLMRequestOptions): LLMRequestOptions {
+  validateBudgetUsd((options as { budgetUsd?: unknown }).budgetUsd);
+  validateCompletionCacheOptions({
+    messages: options.messages,
+    ...(options.model !== undefined ? { model: options.model } : {}),
+    ...(options.providerOptions !== undefined
+      ? { providerOptions: options.providerOptions }
+      : {}),
+  });
+  const metadata =
+    options.metadata === undefined
+      ? undefined
+      : validateAndCloneMetadata(options.metadata);
+  const tools =
+    options.tools === undefined
+      ? undefined
+      : validateAndCloneTools(options.tools, options.provider, options.model);
+  if (metadata === undefined && tools === undefined) {
+    return options;
+  }
+  return {
+    ...options,
+    ...(metadata !== undefined ? { metadata } : {}),
+    ...(tools !== undefined ? { tools } : {}),
+  };
 }
 
 function estimateBillableReasoningTokens(options: {
@@ -1873,7 +2017,8 @@ function estimateBillableReasoningTokens(options: {
     return 0;
   }
 
-  const thinkingBudget = options.providerOptions?.google?.thinking?.budgetTokens;
+  const thinkingBudget =
+    options.providerOptions?.google?.thinking?.budgetTokens;
   if (thinkingBudget === undefined || thinkingBudget <= 0) {
     return 0;
   }

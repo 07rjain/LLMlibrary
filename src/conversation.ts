@@ -3,12 +3,15 @@ import {
   MaxToolRoundsError,
   ProviderError,
 } from 'unified-llm-client/errors';
+import { validateBudgetUsd } from './budget-validation.js';
 import {
   buildAbortError,
   createCancelableStream,
   throwIfAborted,
 } from './stream-control.js';
 import { validateAndCloneMetadata } from './json-metadata.js';
+import { validateAndCloneCanonicalMessages } from './message-validation.js';
+import { validateAndCloneTools } from './tool-validation.js';
 import { formatCost } from './utils/cost.js';
 
 import type { ContextManager } from './context-manager.js';
@@ -38,7 +41,11 @@ const DEFAULT_TOOL_EXECUTION_TIMEOUT_MS = 30_000;
 const DEFAULT_TOOL_VALIDATION: ToolValidationMode = 'strict';
 const MAX_TOOL_EXECUTION_TIMEOUT_MS = 300_000;
 const MAX_TOOL_ROUNDS = 100;
-const FORBIDDEN_TOOL_ARGUMENT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const FORBIDDEN_TOOL_ARGUMENT_KEYS = new Set([
+  '__proto__',
+  'constructor',
+  'prototype',
+]);
 
 export type ToolValidationMode = 'permissive' | 'strict';
 
@@ -57,6 +64,7 @@ export interface ConversationRoute {
 /** Minimal client contract consumed by `Conversation`. */
 export interface ConversationClient {
   resolveContext?(options: {
+    budgetUsd?: number;
     maxTokens?: number;
     messages: CanonicalMessage[];
     model?: string;
@@ -232,6 +240,7 @@ export class Conversation {
   private updatedAt: string;
 
   constructor(client: ConversationClient, options: ConversationOptions = {}) {
+    validateBudgetUsd((options as { budgetUsd?: unknown }).budgetUsd);
     this.budgetExceededAction = options.budgetExceededAction ?? 'throw';
     this.client = client;
     this.contextManager = options.contextManager;
@@ -243,7 +252,9 @@ export class Conversation {
     this.messages = cloneValue(options.messages ?? []);
     this.model = options.model;
     this.provider = options.provider;
-    this.providerOptions = options.providerOptions ? cloneValue(options.providerOptions) : undefined;
+    this.providerOptions = options.providerOptions
+      ? cloneValue(options.providerOptions)
+      : undefined;
     this.responseFormat = options.responseFormat
       ? cloneValue(options.responseFormat)
       : undefined;
@@ -259,7 +270,9 @@ export class Conversation {
     );
     this.toolValidation = options.toolValidation ?? DEFAULT_TOOL_VALIDATION;
     this.toolChoice = options.toolChoice;
-    this.tools = options.tools ? cloneTools(options.tools) : undefined;
+    this.tools = options.tools
+      ? validateAndCloneTools(options.tools, options.provider, options.model)
+      : undefined;
     this.toolCallDispatcher = options.toolCallDispatcher;
     this.onWarning = options.onWarning ?? ((message) => console.warn(message));
     this.onCompaction = options.onCompaction;
@@ -308,7 +321,11 @@ export class Conversation {
     const userMessage = buildUserMessage(input);
     const initialMessages = [...this.messages, userMessage];
     const route = this.resolveConversationRoute(initialMessages);
-    const nextMessages = await this.prepareMessages(userMessage, options.requestId, route);
+    const nextMessages = await this.prepareMessages(
+      userMessage,
+      options.requestId,
+      route,
+    );
     const result = await this.runCompleteToolLoop(
       nextMessages,
       options.signal,
@@ -338,7 +355,11 @@ export class Conversation {
         const userMessage = buildUserMessage(input);
         const initialMessages = [...this.messages, userMessage];
         const route = this.resolveConversationRoute(initialMessages);
-        const nextMessages = await this.prepareMessages(userMessage, options.requestId, route);
+        const nextMessages = await this.prepareMessages(
+          userMessage,
+          options.requestId,
+          route,
+        );
         const result = yield* this.runStreamToolLoop(
           nextMessages,
           signal,
@@ -366,7 +387,9 @@ export class Conversation {
       ...(this.maxToolRounds !== DEFAULT_MAX_TOOL_ROUNDS
         ? { maxToolRounds: this.maxToolRounds }
         : {}),
-      ...(this.maxContextTokens !== undefined ? { maxContextTokens: this.maxContextTokens } : {}),
+      ...(this.maxContextTokens !== undefined
+        ? { maxContextTokens: this.maxContextTokens }
+        : {}),
       ...(this.maxTokens !== undefined ? { maxTokens: this.maxTokens } : {}),
       messages: cloneValue(this.messages),
       ...(this.model !== undefined ? { model: this.model } : {}),
@@ -386,7 +409,9 @@ export class Conversation {
       ...(this.toolValidation !== DEFAULT_TOOL_VALIDATION
         ? { toolValidation: this.toolValidation }
         : {}),
-      ...(this.toolChoice !== undefined ? { toolChoice: cloneValue(this.toolChoice) } : {}),
+      ...(this.toolChoice !== undefined
+        ? { toolChoice: cloneValue(this.toolChoice) }
+        : {}),
       ...(this.tools !== undefined ? { tools: cloneValue(this.tools) } : {}),
       totalCachedTokens: this.totalCachedTokens,
       totalCostUSD: this.totalCostUSD,
@@ -400,7 +425,10 @@ export class Conversation {
   /** Returns the full message list including the pinned system prompt. */
   toMessages(): CanonicalMessage[] {
     return this.system
-      ? [{ content: this.system, pinned: true, role: 'system' }, ...cloneValue(this.messages)]
+      ? [
+          { content: this.system, pinned: true, role: 'system' },
+          ...cloneValue(this.messages),
+        ]
       : cloneValue(this.messages);
   }
 
@@ -434,7 +462,12 @@ export class Conversation {
     }
 
     for (const message of this.toMessages()) {
-      sections.push('', `## ${capitaliseRole(message.role)}`, '', renderMessageMarkdown(message));
+      sections.push(
+        '',
+        `## ${capitaliseRole(message.role)}`,
+        '',
+        renderMessageMarkdown(message),
+      );
     }
 
     return sections.join('\n').trim();
@@ -455,7 +488,9 @@ export class Conversation {
         : snapshot.budgetUsd !== undefined
           ? { budgetUsd: snapshot.budgetUsd }
           : {}),
-      ...(options.contextManager !== undefined ? { contextManager: options.contextManager } : {}),
+      ...(options.contextManager !== undefined
+        ? { contextManager: options.contextManager }
+        : {}),
       ...(options.maxToolRounds !== undefined
         ? { maxToolRounds: options.maxToolRounds }
         : snapshot.maxToolRounds !== undefined
@@ -477,7 +512,9 @@ export class Conversation {
         : snapshot.model !== undefined
           ? { model: snapshot.model }
           : {}),
-      ...(options.onWarning !== undefined ? { onWarning: options.onWarning } : {}),
+      ...(options.onWarning !== undefined
+        ? { onWarning: options.onWarning }
+        : {}),
       ...(options.provider !== undefined
         ? { provider: options.provider }
         : snapshot.provider !== undefined
@@ -585,13 +622,23 @@ export class Conversation {
       ...(this.maxContextTokens !== undefined
         ? { maxContextTokens: this.maxContextTokens }
         : {}),
-      ...(this.maxTokens !== undefined ? { reservedOutputTokens: this.maxTokens } : {}),
+      ...(this.maxTokens !== undefined
+        ? { reservedOutputTokens: this.maxTokens }
+        : {}),
     };
-    if (!(await this.contextManager.shouldTrim(messages, context))) {
+    const shouldTrimMessages = validateAndCloneCanonicalMessages(messages);
+    if (
+      !(await this.contextManager.shouldTrim(shouldTrimMessages, {
+        ...context,
+      }))
+    ) {
       return messages;
     }
 
-    const trimmed = await this.contextManager.trim(messages, context);
+    const trimMessages = validateAndCloneCanonicalMessages(messages);
+    const trimmed = validateAndCloneCanonicalMessages(
+      await this.contextManager.trim(trimMessages, { ...context }),
+    );
     if (trimmed.length !== messages.length) {
       this.onCompaction?.({
         afterCount: trimmed.length,
@@ -636,9 +683,15 @@ export class Conversation {
           contextWindow,
         );
       }
-      const remainingBudget = this.resolveRemainingBudgetDecision(aggregateUsage.costUSD);
+      const remainingBudget = this.resolveRemainingBudgetDecision(
+        aggregateUsage.costUSD,
+      );
       if (remainingBudget.action === 'skip') {
-        const response = buildBudgetSkipResponse(remainingBudget.error, model, provider);
+        const response = buildBudgetSkipResponse(
+          remainingBudget.error,
+          model,
+          provider,
+        );
         aggregateUsage = accumulateUsage(aggregateUsage, response.usage);
         workingMessages = [...workingMessages, buildAssistantMessage(response)];
         return {
@@ -669,8 +722,8 @@ export class Conversation {
       model = response.model;
       provider = response.provider;
       contextWindow =
-        this.resolveConversationRoute(workingMessages, model, provider)?.contextWindow ??
-        contextWindow;
+        this.resolveConversationRoute(workingMessages, model, provider)
+          ?.contextWindow ?? contextWindow;
       route = {
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         model,
@@ -679,7 +732,9 @@ export class Conversation {
       aggregateUsage = accumulateUsage(aggregateUsage, response.usage);
       workingMessages = [...workingMessages, buildAssistantMessage(response)];
 
-      if (!this.shouldContinueToolLoop(response.finishReason, response.toolCalls)) {
+      if (
+        !this.shouldContinueToolLoop(response.finishReason, response.toolCalls)
+      ) {
         return {
           messages: workingMessages,
           model,
@@ -695,7 +750,12 @@ export class Conversation {
       toolRounds = this.assertNextToolRound(toolRounds + 1, model, provider);
       workingMessages = [
         ...workingMessages,
-        await this.executeToolCalls(response.toolCalls, model, provider, signal),
+        await this.executeToolCalls(
+          response.toolCalls,
+          model,
+          provider,
+          signal,
+        ),
       ];
     }
   }
@@ -735,9 +795,15 @@ export class Conversation {
 
     while (true) {
       throwIfAborted(signal);
-      const remainingBudget = this.resolveRemainingBudgetDecision(aggregateUsage.costUSD);
+      const remainingBudget = this.resolveRemainingBudgetDecision(
+        aggregateUsage.costUSD,
+      );
       if (remainingBudget.action === 'skip') {
-        const response = buildBudgetSkipResponse(remainingBudget.error, model, provider);
+        const response = buildBudgetSkipResponse(
+          remainingBudget.error,
+          model,
+          provider,
+        );
         aggregateUsage = accumulateUsage(aggregateUsage, response.usage);
         workingMessages = [...workingMessages, buildAssistantMessage(response)];
         yield decorate({ delta: response.text, type: 'text-delta' });
@@ -778,7 +844,10 @@ export class Conversation {
       requestOptions.messages = workingMessages;
       model = requestOptions.model ?? model;
       provider = requestOptions.provider ?? provider;
-      const pendingToolCalls = new Map<string, { args?: JsonObject; name: string }>();
+      const pendingToolCalls = new Map<
+        string,
+        { args?: JsonObject; name: string }
+      >();
       let text = '';
       let finishReason: CanonicalResponse['finishReason'] | undefined;
       let usage: UsageMetrics | undefined;
@@ -788,8 +857,8 @@ export class Conversation {
           model = chunk.model;
           provider = chunk.provider;
           contextWindow =
-            this.resolveConversationRoute(workingMessages, model, provider)?.contextWindow ??
-            contextWindow;
+            this.resolveConversationRoute(workingMessages, model, provider)
+              ?.contextWindow ?? contextWindow;
           route = {
             ...(contextWindow !== undefined ? { contextWindow } : {}),
             model,
@@ -814,7 +883,9 @@ export class Conversation {
         if (chunk.type === 'tool-call-result') {
           const current = pendingToolCalls.get(chunk.id);
           pendingToolCalls.set(chunk.id, {
-            args: isPlainJsonObject(chunk.result) ? chunk.result : { result: chunk.result },
+            args: isPlainJsonObject(chunk.result)
+              ? chunk.result
+              : { result: chunk.result },
             name: current?.name ?? chunk.name,
           });
           yield decorate(chunk);
@@ -841,7 +912,9 @@ export class Conversation {
       }
 
       if (!finishReason || !usage) {
-        throw new ProviderError('Streaming conversation ended without a done chunk.');
+        throw new ProviderError(
+          'Streaming conversation ended without a done chunk.',
+        );
       }
 
       aggregateUsage = accumulateUsage(aggregateUsage, usage);
@@ -882,7 +955,7 @@ export class Conversation {
       toolCalls.length > 0 &&
       Boolean(
         this.toolCallDispatcher ||
-          this.tools?.some((tool) => typeof tool.execute === 'function'),
+        this.tools?.some((tool) => typeof tool.execute === 'function'),
       )
     );
   }
@@ -912,7 +985,9 @@ export class Conversation {
     signal: AbortSignal | undefined,
   ): Promise<CanonicalMessage> {
     const parts = await Promise.all(
-      toolCalls.map((toolCall) => this.executeToolCall(toolCall, model, provider, signal)),
+      toolCalls.map((toolCall) =>
+        this.executeToolCall(toolCall, model, provider, signal),
+      ),
     );
 
     return {
@@ -927,7 +1002,9 @@ export class Conversation {
     provider: CanonicalProvider | undefined,
     signal: AbortSignal | undefined,
   ): Promise<Extract<CanonicalPart, { type: 'tool_result' }>> {
-    const tool = this.tools?.find((candidate) => candidate.name === toolCall.name);
+    const tool = this.tools?.find(
+      (candidate) => candidate.name === toolCall.name,
+    );
     if (!tool?.execute && !this.toolCallDispatcher) {
       return buildToolErrorPart(
         toolCall,
@@ -940,14 +1017,20 @@ export class Conversation {
       throwIfAborted(signal);
       if (this.toolValidation === 'strict' && tool) {
         validateToolArguments(toolCall.args, tool.parameters);
-      } else if (this.toolValidation === 'strict' && this.toolCallDispatcher && !tool) {
+      } else if (
+        this.toolValidation === 'strict' &&
+        this.toolCallDispatcher &&
+        !tool
+      ) {
         throw new Error(`No tool schema registered for "${toolCall.name}".`);
       }
       const result = await executeToolWithGuards(
         (toolSignal) => {
           if (this.toolCallDispatcher) {
             if (!model || !provider) {
-              throw new Error('Tool dispatcher requires resolved model and provider.');
+              throw new Error(
+                'Tool dispatcher requires resolved model and provider.',
+              );
             }
             return this.toolCallDispatcher.execute({
               call: toolCall,
@@ -967,7 +1050,9 @@ export class Conversation {
               ...(provider !== undefined ? { provider } : {}),
               signal: toolSignal,
               sessionId: this.sessionId,
-              ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
+              ...(this.tenantId !== undefined
+                ? { tenantId: this.tenantId }
+                : {}),
             }),
           );
         },
@@ -1024,11 +1109,14 @@ export class Conversation {
     provider: CanonicalProvider | undefined = this.provider,
   ): ConversationRoute | undefined {
     const resolved = this.client.resolveContext?.({
+      ...(this.budgetUsd !== undefined ? { budgetUsd: this.budgetUsd } : {}),
       messages,
       ...(this.maxTokens !== undefined ? { maxTokens: this.maxTokens } : {}),
       ...(model !== undefined ? { model } : {}),
       ...(provider !== undefined ? { provider } : {}),
-      ...(this.responseFormat !== undefined ? { responseFormat: this.responseFormat } : {}),
+      ...(this.responseFormat !== undefined
+        ? { responseFormat: this.responseFormat }
+        : {}),
       sessionId: this.sessionId,
       ...(this.system !== undefined ? { system: this.system } : {}),
       ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
@@ -1110,14 +1198,20 @@ export class Conversation {
       ...(route !== undefined
         ? {
             resolvedRoute: {
-              ...(route.attempts !== undefined ? { attempts: route.attempts } : {}),
+              ...(route.attempts !== undefined
+                ? { attempts: route.attempts }
+                : {}),
               model: route.model,
               provider: route.provider,
             },
           }
         : {}),
-      ...(this.providerOptions !== undefined ? { providerOptions: this.providerOptions } : {}),
-      ...(this.responseFormat !== undefined ? { responseFormat: this.responseFormat } : {}),
+      ...(this.providerOptions !== undefined
+        ? { providerOptions: this.providerOptions }
+        : {}),
+      ...(this.responseFormat !== undefined
+        ? { responseFormat: this.responseFormat }
+        : {}),
       ...(requestId !== undefined ? { requestId } : {}),
       sessionId: this.sessionId,
       ...(signal !== undefined ? { signal } : {}),
@@ -1140,7 +1234,8 @@ export class Conversation {
       };
     }
 
-    const remainingBudgetUsd = this.budgetUsd - (this.totalCostUSD + executionCostUSD);
+    const remainingBudgetUsd =
+      this.budgetUsd - (this.totalCostUSD + executionCostUSD);
     if (remainingBudgetUsd > 0) {
       return {
         action: 'continue',
@@ -1179,7 +1274,9 @@ export class Conversation {
   }
 }
 
-function buildUserMessage(input: CanonicalMessage['content']): CanonicalMessage {
+function buildUserMessage(
+  input: CanonicalMessage['content'],
+): CanonicalMessage {
   return {
     content: typeof input === 'string' ? input : cloneValue(input),
     role: 'user',
@@ -1282,7 +1379,10 @@ function buildToolCallsFromPendingToolCalls(
 }
 
 function generateSessionId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+  if (
+    typeof crypto !== 'undefined' &&
+    typeof crypto.randomUUID === 'function'
+  ) {
     return crypto.randomUUID();
   }
 
@@ -1295,13 +1395,6 @@ function isPlainJsonObject(value: JsonValue): value is JsonObject {
 
 function cloneValue<TValue>(value: TValue): TValue {
   return JSON.parse(JSON.stringify(value)) as TValue;
-}
-
-function cloneTools(tools: CanonicalTool[]): CanonicalTool[] {
-  return tools.map((tool) => ({
-    ...tool,
-    parameters: cloneValue(tool.parameters),
-  }));
 }
 
 function createEmptyUsage(): UsageMetrics {
@@ -1335,11 +1428,23 @@ function buildBudgetSkipResponse(
   };
 }
 
-function accumulateUsage(total: UsageMetrics, next: UsageMetrics): UsageMetrics {
+function accumulateUsage(
+  total: UsageMetrics,
+  next: UsageMetrics,
+): UsageMetrics {
   const costUSD = total.costUSD + next.costUSD;
-  const cachedReadTokens = sumOptionalMetric(total.cachedReadTokens, next.cachedReadTokens);
-  const cachedWriteTokens = sumOptionalMetric(total.cachedWriteTokens, next.cachedWriteTokens);
-  const reasoningTokens = sumOptionalMetric(total.reasoningTokens, next.reasoningTokens);
+  const cachedReadTokens = sumOptionalMetric(
+    total.cachedReadTokens,
+    next.cachedReadTokens,
+  );
+  const cachedWriteTokens = sumOptionalMetric(
+    total.cachedWriteTokens,
+    next.cachedWriteTokens,
+  );
+  const reasoningTokens = sumOptionalMetric(
+    total.reasoningTokens,
+    next.reasoningTokens,
+  );
 
   return {
     cachedTokens: total.cachedTokens + next.cachedTokens,
@@ -1476,7 +1581,9 @@ async function executeToolWithGuards(
   guardedPromises.push(
     new Promise<JsonValue>((_, reject) => {
       timeoutId = setTimeout(() => {
-        controller.abort(new Error(`Tool execution timed out after ${timeoutMs}ms.`));
+        controller.abort(
+          new Error(`Tool execution timed out after ${timeoutMs}ms.`),
+        );
         reject(new Error(`Tool execution timed out after ${timeoutMs}ms.`));
       }, timeoutMs);
     }),
@@ -1514,7 +1621,10 @@ async function executeToolWithGuards(
   }
 }
 
-function validateToolArguments(args: JsonObject, schema: CanonicalToolSchema): void {
+function validateToolArguments(
+  args: JsonObject,
+  schema: CanonicalToolSchema,
+): void {
   validateToolSchemaValue(args, schema, 'arguments');
 }
 
@@ -1523,7 +1633,10 @@ function validateToolSchemaValue(
   schema: CanonicalToolSchema,
   path: string,
 ): void {
-  if (schema.enum && !schema.enum.some((item) => jsonPrimitiveEquals(item, value))) {
+  if (
+    schema.enum &&
+    !schema.enum.some((item) => jsonPrimitiveEquals(item, value))
+  ) {
     throw new Error(`${path} must be one of the allowed enum values.`);
   }
 
@@ -1534,7 +1647,11 @@ function validateToolSchemaValue(
       }
       if (schema.items) {
         value.forEach((item, index) => {
-          validateToolSchemaValue(item, schema.items as CanonicalToolSchema, `${path}[${index}]`);
+          validateToolSchemaValue(
+            item,
+            schema.items as CanonicalToolSchema,
+            `${path}[${index}]`,
+          );
         });
       }
       return;
@@ -1605,8 +1722,14 @@ function validateToolObjectValue(
 
 function normalizeMaxToolRounds(value: number | undefined): number {
   const resolved = value ?? DEFAULT_MAX_TOOL_ROUNDS;
-  if (!Number.isInteger(resolved) || resolved < 0 || resolved > MAX_TOOL_ROUNDS) {
-    throw new Error(`maxToolRounds must be an integer between 0 and ${MAX_TOOL_ROUNDS}.`);
+  if (
+    !Number.isInteger(resolved) ||
+    resolved < 0 ||
+    resolved > MAX_TOOL_ROUNDS
+  ) {
+    throw new Error(
+      `maxToolRounds must be an integer between 0 and ${MAX_TOOL_ROUNDS}.`,
+    );
   }
 
   return resolved;
@@ -1627,11 +1750,15 @@ function normalizeToolExecutionTimeoutMs(value: number | undefined): number {
   return resolved;
 }
 
-function jsonPrimitiveEquals(expected: JsonPrimitive, actual: JsonValue): boolean {
+function jsonPrimitiveEquals(
+  expected: JsonPrimitive,
+  actual: JsonValue,
+): boolean {
   return (
-    actual === null ||
-    typeof actual === 'boolean' ||
-    typeof actual === 'number' ||
-    typeof actual === 'string'
-  ) && Object.is(expected, actual);
+    (actual === null ||
+      typeof actual === 'boolean' ||
+      typeof actual === 'number' ||
+      typeof actual === 'string') &&
+    Object.is(expected, actual)
+  );
 }
