@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { ProviderCapabilityError } from '../src/errors.js';
 import { ModelRegistry } from '../src/models/registry.js';
 import {
   anthropicUsageToCanonical,
@@ -51,8 +52,10 @@ describe('cost utilities', () => {
       const expected =
         (inputTokens / 1_000_000) * model.inputPrice +
         (outputTokens / 1_000_000) * model.outputPrice +
-        (cachedReadTokens / 1_000_000) * (model.cacheReadPrice ?? model.inputPrice * 0.1) +
-        (cachedWriteTokens / 1_000_000) * (model.cacheWritePrice ?? model.inputPrice * 1.25);
+        (cachedReadTokens / 1_000_000) *
+          (model.cacheReadPrice ?? model.inputPrice * 0.1) +
+        (cachedWriteTokens / 1_000_000) *
+          (model.cacheWritePrice ?? model.inputPrice * 1.25);
 
       expect(
         calcCostUSD(
@@ -103,6 +106,23 @@ describe('cost utilities', () => {
     expect(formatCost(0)).toBe('$0.00');
     expect(formatCost(0.00234)).toBe('$0.0023');
     expect(formatCost(12.3456)).toBe('$12.35');
+  });
+
+  it('rejects invalid cost values while accepting finite boundaries', () => {
+    expect(formatCost(-0)).toBe('$0.00');
+    expect(formatCost(0.000001)).toBe('$0.0000');
+    for (const value of [
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      '1',
+      null,
+    ]) {
+      expect(() => formatCost(value as number)).toThrow(
+        ProviderCapabilityError,
+      );
+    }
   });
 
   it('normalizes provider usage payloads', () => {
@@ -266,7 +286,9 @@ describe('cost utilities', () => {
       outputTokens: 50,
       reasoningTokens: 40,
     });
-    expect(usageWithCost(openai, usage)).not.toHaveProperty('billableReasoningTokens');
+    expect(usageWithCost(openai, usage)).not.toHaveProperty(
+      'billableReasoningTokens',
+    );
   });
 
   it('does not double-count cached Gemini input tokens', () => {

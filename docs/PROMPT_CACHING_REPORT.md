@@ -47,6 +47,15 @@ Current mapping:
 - `providerOptions.openai.promptCaching.retention`
   - sent as `prompt_cache_retention`
 
+Runtime validation:
+
+- `promptCaching` must be a plain accessor-free object containing only `key`
+  and `retention`
+- an explicitly supplied `key` must be a non-empty string
+- `retention` must be `in_memory` or `24h`
+- the legacy retention surface remains available for compatibility and is not
+  model-gated locally
+
 The OpenAI request translator also always sends `store: false`, because the library keeps conversation history in its own state layer.
 
 Important note:
@@ -67,6 +76,12 @@ Current request mapping:
 - top-level request cache control is translated to `cache_control`
 - content parts that carry `cacheControl` are translated to Anthropic content blocks with `cache_control`
 - tools with `cacheControl` are translated to Anthropic tool definitions with `cache_control`
+
+Every Anthropic cache-control boundary is validated before translation or
+fetch. `type` is required and must be `ephemeral`; `ttl` may be omitted
+(provider default) or explicitly set to `5m` or `1h`. Accessors, unknown
+fields, and unsupported values fail locally with a typed
+`ProviderCapabilityError`.
 
 This means callers can choose coarse request-level caching or more selective block-level caching, depending on how they structure their prompt.
 

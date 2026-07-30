@@ -8,7 +8,11 @@ import { LLMClient } from '../src/client.js';
 
 import type { ConversationSnapshot } from '../src/conversation.js';
 import type { SessionApiOptions } from '../src/session-api.js';
-import type { JsonObject, StreamChunk } from '../src/types.js';
+import type {
+  CanonicalMessage,
+  JsonObject,
+  StreamChunk,
+} from '../src/types.js';
 
 function createSessionApi(options: SessionApiOptions) {
   return createSessionApiSource({
@@ -58,9 +62,7 @@ describe('SessionApi', () => {
     const client = LLMClient.mock({
       defaultModel: 'mock-model',
       defaultProvider: 'mock',
-      responses: [
-        mockResponse('First reply', 0.01),
-      ],
+      responses: [mockResponse('First reply', 0.01)],
       sessionStore: store,
     });
     vi.spyOn(client, 'getUsage').mockResolvedValue({
@@ -110,9 +112,13 @@ describe('SessionApi', () => {
     ]);
 
     const messageResponse = await api.handle(
-      jsonRequest('https://example.test/sessions/session-1/message?include=usage', 'POST', {
-        content: 'Hello there',
-      }),
+      jsonRequest(
+        'https://example.test/sessions/session-1/message?include=usage',
+        'POST',
+        {
+          content: 'Hello there',
+        },
+      ),
     );
     const messaged = (await messageResponse.json()) as {
       response: { text: string };
@@ -136,7 +142,9 @@ describe('SessionApi', () => {
     ]);
 
     const inspectResponse = await api.handle(
-      new Request('https://example.test/sessions/session-1?include=messages,cost,usage'),
+      new Request(
+        'https://example.test/sessions/session-1?include=messages,cost,usage',
+      ),
     );
     const inspected = (await inspectResponse.json()) as {
       session: {
@@ -335,7 +343,9 @@ describe('SessionApi', () => {
 
     expect(response.status).toBe(201);
     expect(record?.snapshot.system).toBe('SERVER_SYSTEM_PROMPT');
-    expect(record?.snapshot.messages).toEqual([{ content: 'Hello', role: 'user' }]);
+    expect(record?.snapshot.messages).toEqual([
+      { content: 'Hello', role: 'user' },
+    ]);
 
     const trustedStore = new InMemorySessionStore<ConversationSnapshot>();
     const trustedClient = LLMClient.mock({
@@ -377,7 +387,11 @@ describe('SessionApi', () => {
         [
           { delta: 'Hello ', type: 'text-delta' },
           { id: 'tool_1', name: 'lookup', type: 'tool-call-start' },
-          { argsDelta: '{"city":"Berlin"}', id: 'tool_1', type: 'tool-call-delta' },
+          {
+            argsDelta: '{"city":"Berlin"}',
+            id: 'tool_1',
+            type: 'tool-call-delta',
+          },
           {
             id: 'tool_1',
             name: 'lookup',
@@ -417,12 +431,16 @@ describe('SessionApi', () => {
     );
 
     const response = await api.handle(
-      jsonRequest('https://example.test/sessions/stream-session/message?stream=true', 'POST', {
-        content: 'Stream this',
-        metadata: { source: 'session-api-test' },
-        requestId: 'session-request-123',
-        stream: true,
-      }),
+      jsonRequest(
+        'https://example.test/sessions/stream-session/message?stream=true',
+        'POST',
+        {
+          content: 'Stream this',
+          metadata: { source: 'session-api-test' },
+          requestId: 'session-request-123',
+          stream: true,
+        },
+      ),
     );
     const text = await response.text();
 
@@ -497,12 +515,15 @@ describe('SessionApi', () => {
 
     const abortController = new AbortController();
     const response = await api.handle(
-      new Request('https://example.test/sessions/abort-stream-session/message?stream=true', {
-        body: JSON.stringify({ content: 'Stream this', stream: true }),
-        headers: { 'content-type': 'application/json' },
-        method: 'POST',
-        signal: abortController.signal,
-      }),
+      new Request(
+        'https://example.test/sessions/abort-stream-session/message?stream=true',
+        {
+          body: JSON.stringify({ content: 'Stream this', stream: true }),
+          headers: { 'content-type': 'application/json' },
+          method: 'POST',
+          signal: abortController.signal,
+        },
+      ),
     );
 
     const reader = response.body?.getReader();
@@ -553,12 +574,15 @@ describe('SessionApi', () => {
 
     const abortController = new AbortController();
     const responsePromise = api.handle(
-      new Request('https://example.test/sessions/abort-complete-session/message', {
-        body: JSON.stringify({ content: 'Complete this' }),
-        headers: { 'content-type': 'application/json' },
-        method: 'POST',
-        signal: abortController.signal,
-      }),
+      new Request(
+        'https://example.test/sessions/abort-complete-session/message',
+        {
+          body: JSON.stringify({ content: 'Complete this' }),
+          headers: { 'content-type': 'application/json' },
+          method: 'POST',
+          signal: abortController.signal,
+        },
+      ),
     );
 
     await observed;
@@ -614,9 +638,13 @@ describe('SessionApi', () => {
       }),
     );
     const response = await api.handle(
-      jsonRequest('https://example.test/sessions/redacted-tool-session/message', 'POST', {
-        content: 'run tool',
-      }),
+      jsonRequest(
+        'https://example.test/sessions/redacted-tool-session/message',
+        'POST',
+        {
+          content: 'run tool',
+        },
+      ),
     );
     const payloadText = await response.text();
 
@@ -664,9 +692,13 @@ describe('SessionApi', () => {
       }),
     );
     const exposedResponse = await exposedApi.handle(
-      jsonRequest('https://example.test/sessions/exposed-tool-session/message', 'POST', {
-        content: 'run tool',
-      }),
+      jsonRequest(
+        'https://example.test/sessions/exposed-tool-session/message',
+        'POST',
+        {
+          content: 'run tool',
+        },
+      ),
     );
 
     expect(exposedResponse.status).toBe(200);
@@ -702,25 +734,37 @@ describe('SessionApi', () => {
     });
 
     const spoofedResponse = await api.handle(
-      jsonRequest('https://example.test/sessions', 'POST', {
-        sessionId: 'tenant-session',
-        tenantId: 'spoofed',
-      }, {
-        'x-tenant-id': 'tenant-a',
-      }),
+      jsonRequest(
+        'https://example.test/sessions',
+        'POST',
+        {
+          sessionId: 'tenant-session',
+          tenantId: 'spoofed',
+        },
+        {
+          'x-tenant-id': 'tenant-a',
+        },
+      ),
     );
     const response = await api.handle(
-      jsonRequest('https://example.test/sessions', 'POST', {
-        sessionId: 'tenant-session',
-      }, {
-        'x-tenant-id': 'tenant-a',
-      }),
+      jsonRequest(
+        'https://example.test/sessions',
+        'POST',
+        {
+          sessionId: 'tenant-session',
+        },
+        {
+          'x-tenant-id': 'tenant-a',
+        },
+      ),
     );
 
     expect(spoofedResponse.status).toBe(400);
     expect(response.status).toBe(201);
     expect(withRequestContextSpy).toHaveBeenCalled();
-    await expect(store.get('tenant-session', 'tenant-a')).resolves.not.toBeNull();
+    await expect(
+      store.get('tenant-session', 'tenant-a'),
+    ).resolves.not.toBeNull();
     await expect(store.get('tenant-session', 'spoofed')).resolves.toBeNull();
   });
 
@@ -759,33 +803,56 @@ describe('SessionApi', () => {
         }),
       ),
       api.handle(
-        jsonRequest('https://example.test/sessions/tenant-routes/message', 'POST', {
-          content: 'hello',
-          tenantId: 'tenant-b',
-        }),
-      ),
-      api.handle(new Request('https://example.test/sessions/tenant-routes?tenantId=tenant-b')),
-      api.handle(
-        new Request('https://example.test/sessions/tenant-routes/messages?tenantId=tenant-b'),
-      ),
-      api.handle(
-        new Request('https://example.test/sessions/tenant-routes?tenantId=tenant-b', {
-          method: 'DELETE',
-        }),
+        jsonRequest(
+          'https://example.test/sessions/tenant-routes/message',
+          'POST',
+          {
+            content: 'hello',
+            tenantId: 'tenant-b',
+          },
+        ),
       ),
       api.handle(
-        jsonRequest('https://example.test/sessions/tenant-routes/compact', 'POST', {
-          maxMessages: 1,
-          tenantId: 'tenant-b',
-        }),
+        new Request(
+          'https://example.test/sessions/tenant-routes?tenantId=tenant-b',
+        ),
       ),
       api.handle(
-        jsonRequest('https://example.test/sessions/tenant-routes/fork', 'POST', {
-          fromMessageIndex: 0,
-          tenantId: 'tenant-b',
-        }),
+        new Request(
+          'https://example.test/sessions/tenant-routes/messages?tenantId=tenant-b',
+        ),
       ),
-      api.handle(new Request('https://example.test/sessions?tenantId=tenant-b')),
+      api.handle(
+        new Request(
+          'https://example.test/sessions/tenant-routes?tenantId=tenant-b',
+          {
+            method: 'DELETE',
+          },
+        ),
+      ),
+      api.handle(
+        jsonRequest(
+          'https://example.test/sessions/tenant-routes/compact',
+          'POST',
+          {
+            maxMessages: 1,
+            tenantId: 'tenant-b',
+          },
+        ),
+      ),
+      api.handle(
+        jsonRequest(
+          'https://example.test/sessions/tenant-routes/fork',
+          'POST',
+          {
+            fromMessageIndex: 0,
+            tenantId: 'tenant-b',
+          },
+        ),
+      ),
+      api.handle(
+        new Request('https://example.test/sessions?tenantId=tenant-b'),
+      ),
     ]);
 
     expect(responses.map((response) => response.status)).toEqual([
@@ -814,7 +881,9 @@ describe('SessionApi', () => {
       }),
     );
     const getResponse = await api.handle(
-      new Request('https://example.test/sessions/legacy-session?tenantId=tenant-a'),
+      new Request(
+        'https://example.test/sessions/legacy-session?tenantId=tenant-a',
+      ),
     );
 
     expect(createResponse.status).toBe(201);
@@ -823,7 +892,9 @@ describe('SessionApi', () => {
 
   it('ignores toolValidation from session message config unless allowlisted', async () => {
     const store = new InMemorySessionStore<ConversationSnapshot>();
-    const execute = vi.fn(async (args: JsonObject) => ({ observed: String(args.count) }));
+    const execute = vi.fn(async (args: JsonObject) => ({
+      observed: String(args.count),
+    }));
     const client = LLMClient.mock({
       defaultModel: 'mock-model',
       defaultProvider: 'mock',
@@ -831,7 +902,10 @@ describe('SessionApi', () => {
         {
           content: [
             {
-              args: { count: 'not-number', extra: 'allowed only in permissive mode' },
+              args: {
+                count: 'not-number',
+                extra: 'allowed only in permissive mode',
+              },
               id: 'tool_1',
               name: 'validated_tool',
               type: 'tool_call',
@@ -844,7 +918,10 @@ describe('SessionApi', () => {
           text: '',
           toolCalls: [
             {
-              args: { count: 'not-number', extra: 'allowed only in permissive mode' },
+              args: {
+                count: 'not-number',
+                extra: 'allowed only in permissive mode',
+              },
               id: 'tool_1',
               name: 'validated_tool',
             },
@@ -888,10 +965,14 @@ describe('SessionApi', () => {
       }),
     );
     const response = await api.handle(
-      jsonRequest('https://example.test/sessions/tool-validation-session/message', 'POST', {
-        content: 'run',
-        toolValidation: 'permissive',
-      }),
+      jsonRequest(
+        'https://example.test/sessions/tool-validation-session/message',
+        'POST',
+        {
+          content: 'run',
+          toolValidation: 'permissive',
+        },
+      ),
     );
 
     expect(response.status).toBe(200);
@@ -908,7 +989,10 @@ describe('SessionApi', () => {
         {
           content: [
             {
-              args: { count: 'not-number', extra: 'allowed only in permissive mode' },
+              args: {
+                count: 'not-number',
+                extra: 'allowed only in permissive mode',
+              },
               id: 'tool_1',
               name: 'validated_tool',
               type: 'tool_call',
@@ -921,7 +1005,10 @@ describe('SessionApi', () => {
           text: '',
           toolCalls: [
             {
-              args: { count: 'not-number', extra: 'allowed only in permissive mode' },
+              args: {
+                count: 'not-number',
+                extra: 'allowed only in permissive mode',
+              },
               id: 'tool_1',
               name: 'validated_tool',
             },
@@ -1084,7 +1171,9 @@ describe('SessionApi', () => {
     ]);
     expect(deleteOtherTenantResponse.status).toBe(200);
     expect(tenantBDeletedResponse.status).toBe(404);
-    await expect(store.get('shared-session', 'tenant-a')).resolves.not.toBeNull();
+    await expect(
+      store.get('shared-session', 'tenant-a'),
+    ).resolves.not.toBeNull();
     await expect(store.get('shared-session', 'tenant-b')).resolves.toBeNull();
   });
 
@@ -1227,7 +1316,9 @@ describe('SessionApi', () => {
     expect(createdRecord?.snapshot.toolChoice).toEqual({ type: 'auto' });
 
     const listFilteredResponse = await api.handle(
-      new Request('https://example.test/v1/sessions?model=other-model&provider=openai'),
+      new Request(
+        'https://example.test/v1/sessions?model=other-model&provider=openai',
+      ),
     );
     const listFilteredPayload = (await listFilteredResponse.json()) as {
       sessions: { items: unknown[] };
@@ -1247,13 +1338,19 @@ describe('SessionApi', () => {
       new Request('https://example.test/v1/sessions?cursor=-1'),
     );
     const badLimitResponse = await api.handle(
-      new Request(`https://example.test/v1/sessions/${created.session.id}/messages?limit=101`),
+      new Request(
+        `https://example.test/v1/sessions/${created.session.id}/messages?limit=101`,
+      ),
     );
     const compactWithoutStrategyResponse = await createSessionApi({
       client,
       sessionStore: store,
     }).handle(
-      jsonRequest(`https://example.test/sessions/${created.session.id}/compact`, 'POST', {}),
+      jsonRequest(
+        `https://example.test/sessions/${created.session.id}/compact`,
+        'POST',
+        {},
+      ),
     );
 
     expect(notFoundRouteResponse.status).toBe(404);
@@ -1263,9 +1360,13 @@ describe('SessionApi', () => {
     expect(compactWithoutStrategyResponse.status).toBe(400);
 
     const messageErrorResponse = await api.handle(
-      jsonRequest(`https://example.test/v1/sessions/${created.session.id}/message`, 'POST', {
-        content: 'Trigger llm error',
-      }),
+      jsonRequest(
+        `https://example.test/v1/sessions/${created.session.id}/message`,
+        'POST',
+        {
+          content: 'Trigger llm error',
+        },
+      ),
     );
     const messageErrorPayload = (await messageErrorResponse.json()) as {
       error: { name: string };
@@ -1291,14 +1392,19 @@ describe('SessionApi', () => {
     );
 
     const forkPreserveUsageResponse = await api.handle(
-      jsonRequest('https://example.test/v1/sessions/usage-preserved/fork', 'POST', {
-        fromMessageIndex: 0,
-        resetUsage: false,
-      }),
+      jsonRequest(
+        'https://example.test/v1/sessions/usage-preserved/fork',
+        'POST',
+        {
+          fromMessageIndex: 0,
+          resetUsage: false,
+        },
+      ),
     );
-    const forkPreserveUsagePayload = (await forkPreserveUsageResponse.json()) as {
-      session: { totals: { costUSD: number; reasoningTokens: number } };
-    };
+    const forkPreserveUsagePayload =
+      (await forkPreserveUsageResponse.json()) as {
+        session: { totals: { costUSD: number; reasoningTokens: number } };
+      };
 
     expect(forkPreserveUsageResponse.status).toBe(201);
     expect(forkPreserveUsagePayload.session.totals.costUSD).toBe(0.25);
@@ -1415,6 +1521,53 @@ describe('SessionApi', () => {
     expect(await store.get(snapshot.sessionId)).toEqual(before);
   });
 
+  it('rejects invalid custom compaction output without mutating the store', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const client = LLMClient.mock({ sessionStore: store });
+    const snapshot: ConversationSnapshot = {
+      createdAt: '2026-07-29T00:00:00.000Z',
+      messages: [{ content: 'Original', role: 'user' }],
+      sessionId: 'invalid-compact-output',
+      totalCachedTokens: 0,
+      totalCostUSD: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      updatedAt: '2026-07-29T00:00:00.000Z',
+    };
+    await store.set(snapshot.sessionId, snapshot);
+    const set = vi.spyOn(store, 'set');
+    const getter = vi.fn(() => 'bad');
+    const api = createSessionApi({
+      client,
+      contextManager: {
+        shouldTrim: () => true,
+        trim: () =>
+          [
+            Object.defineProperty({ role: 'user' }, 'content', {
+              enumerable: true,
+              get: getter,
+            }),
+          ] as unknown as CanonicalMessage[],
+      },
+      sessionStore: store,
+    });
+
+    const response = await api.handle(
+      jsonRequest(
+        `https://example.test/sessions/${snapshot.sessionId}/compact`,
+        'POST',
+        {},
+      ),
+    );
+
+    expect(response.status).toBe(400);
+    expect(getter).not.toHaveBeenCalled();
+    expect(set).not.toHaveBeenCalled();
+    expect((await store.get(snapshot.sessionId))?.snapshot.messages).toEqual(
+      snapshot.messages,
+    );
+  });
+
   it('maps unknown and generic errors to 500 responses', async () => {
     const store = new InMemorySessionStore<ConversationSnapshot>();
     const client = LLMClient.mock({
@@ -1436,7 +1589,9 @@ describe('SessionApi', () => {
       client,
       sessionStore: store,
     });
-    vi.spyOn(client, 'getUsage').mockRejectedValueOnce(new Error('usage blew up'));
+    vi.spyOn(client, 'getUsage').mockRejectedValueOnce(
+      new Error('usage blew up'),
+    );
 
     await errorApi.handle(
       jsonRequest('https://example.test/sessions', 'POST', {
@@ -1448,7 +1603,9 @@ describe('SessionApi', () => {
       new Request('https://example.test/sessions'),
     );
     const genericErrorResponse = await errorApi.handle(
-      new Request('https://example.test/sessions/usage-error-session?include=usage'),
+      new Request(
+        'https://example.test/sessions/usage-error-session?include=usage',
+      ),
     );
     const unknownPayload = (await unknownErrorResponse.json()) as {
       error: { message: string };
@@ -1574,13 +1731,10 @@ describe('SessionApi', () => {
     expect(set).not.toHaveBeenCalled();
 
     const compactEmpty = await api.handle(
-      new Request(
-        'https://example.test/sessions/json-boundary/compact',
-        {
-          headers: { 'content-type': 'application/json' },
-          method: 'POST',
-        },
-      ),
+      new Request('https://example.test/sessions/json-boundary/compact', {
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
     );
     expect(compactEmpty.status).toBe(200);
 
@@ -1781,9 +1935,7 @@ describe('SessionApi', () => {
           content: 'hello',
         }),
       ),
-      api.handle(
-        new Request('https://example.test/sessions/example/messages'),
-      ),
+      api.handle(new Request('https://example.test/sessions/example/messages')),
       api.handle(
         jsonRequest(
           'https://example.test/sessions/example/compact',
@@ -1929,11 +2081,10 @@ describe('SessionApi', () => {
 
     for (const newSessionId of invalidIds) {
       const response = await api.handle(
-        jsonRequest(
-          'https://example.test/sessions/fork-source/fork',
-          'POST',
-          { fromMessageIndex: 0, newSessionId },
-        ),
+        jsonRequest('https://example.test/sessions/fork-source/fork', 'POST', {
+          fromMessageIndex: 0,
+          newSessionId,
+        }),
       );
       const payload = (await response.json()) as {
         error: { code: string };
@@ -2101,9 +2252,13 @@ describe('SessionApi', () => {
       }),
     );
     const response = await api.handle(
-      jsonRequest('https://example.test/sessions/error-session/message', 'POST', {
-        content: 'trigger',
-      }),
+      jsonRequest(
+        'https://example.test/sessions/error-session/message',
+        'POST',
+        {
+          content: 'trigger',
+        },
+      ),
     );
     const body = await response.text();
 

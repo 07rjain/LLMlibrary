@@ -13,6 +13,7 @@ import {
   mapOpenAIError,
   translateOpenAIRequest,
   translateOpenAIResponse,
+  translateOpenAITool,
   translateOpenAIToolChoice,
 } from '../src/providers/openai.js';
 
@@ -168,7 +169,9 @@ describe('OpenAI adapter', () => {
   it('maps responseFormat to OpenAI Responses text.format', () => {
     expect(
       translateOpenAIRequest({
-        messages: [{ content: 'Return JSON with an answer key.', role: 'user' }],
+        messages: [
+          { content: 'Return JSON with an answer key.', role: 'user' },
+        ],
         model: 'gpt-4o',
         responseFormat: { type: 'json_object' },
       }),
@@ -251,6 +254,99 @@ describe('OpenAI adapter', () => {
       prompt_cache_key: 'support-faq-v1',
       prompt_cache_retention: '24h',
     });
+  });
+
+  it('rejects invalid OpenAI prompt caching before translation side effects', () => {
+    for (const promptCaching of [
+      { key: '' },
+      { key: ' ' },
+      { key: 42 },
+      { retention: 'forever' },
+      { retention: null },
+      { extra: true },
+    ]) {
+      expect(() =>
+        translateOpenAIRequest({
+          messages: [{ content: 'Hello', role: 'user' }],
+          model: 'gpt-4o',
+          providerOptions: {
+            openai: {
+              promptCaching: promptCaching as never,
+            },
+          },
+        }),
+      ).toThrow(ProviderCapabilityError);
+    }
+
+    const getter = vi.fn(() => 'secret');
+    const promptCaching = Object.defineProperty({}, 'key', {
+      enumerable: true,
+      get: getter,
+    });
+    expect(() =>
+      translateOpenAIRequest({
+        messages: [{ content: 'Hello', role: 'user' }],
+        model: 'gpt-4o',
+        providerOptions: {
+          openai: {
+            promptCaching,
+          },
+        },
+      }),
+    ).toThrow(ProviderCapabilityError);
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid and duplicate tool definitions', () => {
+    const valid = {
+      description: 'Lookup weather',
+      name: 'weather_lookup',
+      parameters: { type: 'object' as const },
+    };
+    expect(() => translateOpenAITool({ ...valid, name: 'bad tool' })).toThrow(
+      ProviderCapabilityError,
+    );
+    const duplicate = () =>
+      translateOpenAIRequest({
+        messages: [{ content: 'Hello', role: 'user' }],
+        model: 'gpt-4o',
+        tools: [valid, valid],
+      });
+    expect(duplicate).toThrow(ProviderCapabilityError);
+    try {
+      duplicate();
+    } catch (error) {
+      expect(error).toMatchObject({
+        details: expect.objectContaining({
+          duplicateIndex: 1,
+          firstIndex: 0,
+        }),
+      });
+    }
+
+    const getter = vi.fn(() => 'lookup');
+    const accessorTool = Object.defineProperty(
+      {
+        description: 'Lookup',
+        parameters: { type: 'object' },
+      },
+      'name',
+      { enumerable: true, get: getter },
+    );
+    expect(() => translateOpenAITool(accessorTool as never)).toThrow(
+      ProviderCapabilityError,
+    );
+    expect(getter).not.toHaveBeenCalled();
+
+    const parameters: Record<string, unknown> = { type: 'object' };
+    parameters.self = parameters;
+    expect(() =>
+      translateOpenAITool({
+        description: 'Lookup',
+        name: 'lookup',
+        parameters: parameters as never,
+      }),
+    ).toThrow(ProviderCapabilityError);
   });
 
   it('maps OpenAI reasoning options into Responses request fields', () => {
@@ -494,38 +590,39 @@ describe('OpenAI adapter', () => {
 
   it('performs a complete request with auth headers', async () => {
     const signal = new AbortController().signal;
-    const fetchImplementation = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          id: 'resp_1',
-          model: 'gpt-4o',
-          object: 'response',
-          output: [
-            {
-              content: [
-                {
-                  annotations: [],
-                  text: 'Hello there',
-                  type: 'output_text',
-                },
-              ],
-              id: 'msg_1',
-              role: 'assistant',
-              status: 'completed',
-              type: 'message',
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: 'resp_1',
+            model: 'gpt-4o',
+            object: 'response',
+            output: [
+              {
+                content: [
+                  {
+                    annotations: [],
+                    text: 'Hello there',
+                    type: 'output_text',
+                  },
+                ],
+                id: 'msg_1',
+                role: 'assistant',
+                status: 'completed',
+                type: 'message',
+              },
+            ],
+            status: 'completed',
+            usage: {
+              input_tokens: 20,
+              output_tokens: 10,
             },
-          ],
-          status: 'completed',
-          usage: {
-            input_tokens: 20,
-            output_tokens: 10,
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
           },
-        }),
-        {
-          headers: { 'content-type': 'application/json' },
-          status: 200,
-        },
-      ),
+        ),
     );
     const adapter = new OpenAIAdapter({
       apiKey: 'openai-key',
@@ -560,11 +657,12 @@ describe('OpenAI adapter', () => {
   });
 
   it('performs a text-to-speech request and returns audio bytes with estimated usage', async () => {
-    const fetchImplementation = vi.fn(async () =>
-      new Response(new Uint8Array([1, 2, 3, 4]), {
-        headers: { 'content-type': 'audio/mpeg' },
-        status: 200,
-      }),
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(new Uint8Array([1, 2, 3, 4]), {
+          headers: { 'content-type': 'audio/mpeg' },
+          status: 200,
+        }),
     );
     const adapter = new OpenAIAdapter({
       apiKey: 'openai-key',
@@ -684,19 +782,119 @@ describe('OpenAI adapter', () => {
     ).rejects.toThrow(ProviderError);
   });
 
-  it('performs a speech-to-text request with multipart form data', async () => {
-    const fetchImplementation = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          duration: 2.5,
-          language: 'en',
-          text: 'Hello world',
-        }),
-        {
-          headers: { 'content-type': 'application/json' },
-          status: 200,
+  it('rejects invalid speech and transcription before direct adapter fetches', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>();
+    const adapter = new OpenAIAdapter({
+      apiKey: 'openai-key',
+      fetchImplementation,
+    });
+    const speechGetter = vi.fn(() => 'secret speech');
+    const speechAccessor = Object.defineProperty(
+      {
+        model: 'gpt-4o-mini-tts',
+        provider: 'openai',
+      },
+      'input',
+      {
+        enumerable: true,
+        get: speechGetter,
+      },
+    );
+    const transcriptionGetter = vi.fn(() => ({
+      file: new Uint8Array([1]),
+      mediaType: 'audio/mpeg',
+    }));
+    const transcriptionAccessor = Object.defineProperty(
+      {
+        model: 'gpt-4o-mini-transcribe',
+        provider: 'openai',
+      },
+      'input',
+      {
+        enumerable: true,
+        get: transcriptionGetter,
+      },
+    );
+
+    await expect(
+      adapter.speak({
+        input: ' ',
+        model: 'gpt-4o-mini-tts',
+        provider: 'openai',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    await expect(
+      adapter.speak({
+        input: 'hello',
+        model: 'gpt-4o-mini-tts',
+        provider: 'openai',
+        speed: Number.POSITIVE_INFINITY,
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    await expect(adapter.speak(speechAccessor as never)).rejects.toBeInstanceOf(
+      ProviderCapabilityError,
+    );
+    await expect(
+      adapter.speak({
+        input: 'hello',
+        model: 'gpt-4o-mini-tts',
+        provider: 'openai',
+        unknown: true,
+      } as never),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    await expect(
+      adapter.transcribe({
+        input: {
+          data: 'not base64',
+          mediaType: 'audio/mpeg',
         },
-      ),
+        model: 'gpt-4o-mini-transcribe',
+        provider: 'openai',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    await expect(
+      adapter.transcribe({
+        input: {
+          file: new Uint8Array([1]),
+          mediaType: 'text/plain',
+        },
+        model: 'gpt-4o-mini-transcribe',
+        provider: 'openai',
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    await expect(
+      adapter.transcribe(transcriptionAccessor as never),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    await expect(
+      adapter.transcribe({
+        input: {
+          file: new Uint8Array([1]),
+          mediaType: 'audio/mpeg',
+        },
+        model: 'gpt-4o-mini-transcribe',
+        provider: 'openai',
+        unknown: true,
+      } as never),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    expect(speechGetter).not.toHaveBeenCalled();
+    expect(transcriptionGetter).not.toHaveBeenCalled();
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it('performs a speech-to-text request with multipart form data', async () => {
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            duration: 2.5,
+            language: 'en',
+            text: 'Hello world',
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+          },
+        ),
     );
     const adapter = new OpenAIAdapter({
       apiKey: 'openai-key',
@@ -959,16 +1157,14 @@ describe('OpenAI adapter', () => {
   });
 
   it('revalidates transcription URL redirects and enforces byte limits while streaming', async () => {
-    const redirectFetch = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response(null, {
-          headers: {
-            location: 'http://169.254.169.254/audio.mp3',
-          },
-          status: 302,
-        }),
-      );
+    const redirectFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(null, {
+        headers: {
+          location: 'http://169.254.169.254/audio.mp3',
+        },
+        status: 302,
+      }),
+    );
     const redirectAdapter = new OpenAIAdapter({
       apiKey: 'openai-key',
       fetchImplementation: redirectFetch,
@@ -991,14 +1187,12 @@ describe('OpenAI adapter', () => {
     ).rejects.toThrow(/private or local/);
     expect(redirectFetch).toHaveBeenCalledTimes(1);
 
-    const oversizedFetch = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response(new Uint8Array([1, 2, 3, 4]), {
-          headers: { 'content-type': 'audio/mpeg' },
-          status: 200,
-        }),
-      );
+    const oversizedFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(new Uint8Array([1, 2, 3, 4]), {
+        headers: { 'content-type': 'audio/mpeg' },
+        status: 200,
+      }),
+    );
     const oversizedAdapter = new OpenAIAdapter({
       apiKey: 'openai-key',
       fetchImplementation: oversizedFetch,
@@ -1108,14 +1302,12 @@ describe('OpenAI adapter', () => {
       }),
     ).rejects.toThrow(/location/);
 
-    const contentTypeFetch = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response('not audio', {
-          headers: { 'content-type': 'text/html' },
-          status: 200,
-        }),
-      );
+    const contentTypeFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response('not audio', {
+        headers: { 'content-type': 'text/html' },
+        status: 200,
+      }),
+    );
     const contentTypeAdapter = new OpenAIAdapter({
       apiKey: 'openai-key',
       fetchImplementation: contentTypeFetch,
@@ -1140,60 +1332,61 @@ describe('OpenAI adapter', () => {
   it('streams text deltas and done events', async () => {
     const adapter = new OpenAIAdapter({
       apiKey: 'openai-key',
-      fetchImplementation: vi.fn(async () =>
-        new Response(
-          makeSSEStream([
-            {
-              content_index: 0,
-              delta: 'Hello ',
-              item_id: 'msg_1',
-              output_index: 0,
-              sequence_number: 1,
-              type: 'response.output_text.delta',
-            },
-            {
-              content_index: 0,
-              delta: 'world',
-              item_id: 'msg_1',
-              output_index: 0,
-              sequence_number: 2,
-              type: 'response.output_text.delta',
-            },
-            {
-              response: {
-                id: 'resp_1',
-                model: 'gpt-4o',
-                object: 'response',
-                output: [
-                  {
-                    content: [
-                      {
-                        annotations: [],
-                        text: 'Hello world',
-                        type: 'output_text',
-                      },
-                    ],
-                    id: 'msg_1',
-                    role: 'assistant',
-                    status: 'completed',
-                    type: 'message',
-                  },
-                ],
-                status: 'completed',
-                usage: {
-                  input_tokens: 20,
-                  output_tokens: 12,
-                },
+      fetchImplementation: vi.fn(
+        async () =>
+          new Response(
+            makeSSEStream([
+              {
+                content_index: 0,
+                delta: 'Hello ',
+                item_id: 'msg_1',
+                output_index: 0,
+                sequence_number: 1,
+                type: 'response.output_text.delta',
               },
-              sequence_number: 3,
-              type: 'response.completed',
+              {
+                content_index: 0,
+                delta: 'world',
+                item_id: 'msg_1',
+                output_index: 0,
+                sequence_number: 2,
+                type: 'response.output_text.delta',
+              },
+              {
+                response: {
+                  id: 'resp_1',
+                  model: 'gpt-4o',
+                  object: 'response',
+                  output: [
+                    {
+                      content: [
+                        {
+                          annotations: [],
+                          text: 'Hello world',
+                          type: 'output_text',
+                        },
+                      ],
+                      id: 'msg_1',
+                      role: 'assistant',
+                      status: 'completed',
+                      type: 'message',
+                    },
+                  ],
+                  status: 'completed',
+                  usage: {
+                    input_tokens: 20,
+                    output_tokens: 12,
+                  },
+                },
+                sequence_number: 3,
+                type: 'response.completed',
+              },
+            ]),
+            {
+              headers: { 'content-type': 'text/event-stream' },
+              status: 200,
             },
-          ]),
-          {
-            headers: { 'content-type': 'text/event-stream' },
-            status: 200,
-          },
-        ),
+          ),
       ),
     });
 
@@ -1219,88 +1412,89 @@ describe('OpenAI adapter', () => {
   it('streams tool-call deltas and reassembles arguments', async () => {
     const adapter = new OpenAIAdapter({
       apiKey: 'openai-key',
-      fetchImplementation: vi.fn(async () =>
-        new Response(
-          makeSSEStream([
-            {
-              item: {
-                arguments: '',
-                call_id: 'call_1',
-                id: 'fc_1',
-                name: 'weather_lookup',
-                status: 'in_progress',
-                type: 'function_call',
+      fetchImplementation: vi.fn(
+        async () =>
+          new Response(
+            makeSSEStream([
+              {
+                item: {
+                  arguments: '',
+                  call_id: 'call_1',
+                  id: 'fc_1',
+                  name: 'weather_lookup',
+                  status: 'in_progress',
+                  type: 'function_call',
+                },
+                output_index: 0,
+                sequence_number: 1,
+                type: 'response.output_item.added',
               },
-              output_index: 0,
-              sequence_number: 1,
-              type: 'response.output_item.added',
-            },
-            {
-              delta: '{"city":"Ber',
-              item_id: 'fc_1',
-              output_index: 0,
-              sequence_number: 2,
-              type: 'response.function_call_arguments.delta',
-            },
-            {
-              delta: 'lin"}',
-              item_id: 'fc_1',
-              output_index: 0,
-              sequence_number: 3,
-              type: 'response.function_call_arguments.delta',
-            },
-            {
-              arguments: '{"city":"Berlin"}',
-              call_id: 'call_1',
-              item_id: 'fc_1',
-              name: 'weather_lookup',
-              output_index: 0,
-              sequence_number: 4,
-              type: 'response.function_call_arguments.done',
-            },
-            {
-              item: {
+              {
+                delta: '{"city":"Ber',
+                item_id: 'fc_1',
+                output_index: 0,
+                sequence_number: 2,
+                type: 'response.function_call_arguments.delta',
+              },
+              {
+                delta: 'lin"}',
+                item_id: 'fc_1',
+                output_index: 0,
+                sequence_number: 3,
+                type: 'response.function_call_arguments.delta',
+              },
+              {
                 arguments: '{"city":"Berlin"}',
                 call_id: 'call_1',
-                id: 'fc_1',
+                item_id: 'fc_1',
                 name: 'weather_lookup',
-                status: 'completed',
-                type: 'function_call',
+                output_index: 0,
+                sequence_number: 4,
+                type: 'response.function_call_arguments.done',
               },
-              output_index: 0,
-              sequence_number: 5,
-              type: 'response.output_item.done',
-            },
-            {
-              response: {
-                id: 'resp_tool_1',
-                model: 'gpt-4o',
-                object: 'response',
-                output: [
-                  {
-                    arguments: '{"city":"Berlin"}',
-                    call_id: 'call_1',
-                    id: 'fc_1',
-                    name: 'weather_lookup',
-                    status: 'completed',
-                    type: 'function_call',
-                  },
-                ],
-                status: 'completed',
-                usage: {
-                  input_tokens: 20,
-                  output_tokens: 12,
+              {
+                item: {
+                  arguments: '{"city":"Berlin"}',
+                  call_id: 'call_1',
+                  id: 'fc_1',
+                  name: 'weather_lookup',
+                  status: 'completed',
+                  type: 'function_call',
                 },
+                output_index: 0,
+                sequence_number: 5,
+                type: 'response.output_item.done',
               },
-              sequence_number: 6,
-              type: 'response.completed',
+              {
+                response: {
+                  id: 'resp_tool_1',
+                  model: 'gpt-4o',
+                  object: 'response',
+                  output: [
+                    {
+                      arguments: '{"city":"Berlin"}',
+                      call_id: 'call_1',
+                      id: 'fc_1',
+                      name: 'weather_lookup',
+                      status: 'completed',
+                      type: 'function_call',
+                    },
+                  ],
+                  status: 'completed',
+                  usage: {
+                    input_tokens: 20,
+                    output_tokens: 12,
+                  },
+                },
+                sequence_number: 6,
+                type: 'response.completed',
+              },
+            ]),
+            {
+              headers: { 'content-type': 'text/event-stream' },
+              status: 200,
             },
-          ]),
-          {
-            headers: { 'content-type': 'text/event-stream' },
-            status: 200,
-          },
-        ),
+          ),
       ),
     });
 
@@ -1355,7 +1549,9 @@ describe('OpenAI adapter', () => {
       adapter.complete({
         messages: [
           {
-            content: [{ data: 'pdf', mediaType: 'application/pdf', type: 'document' }],
+            content: [
+              { data: 'pdf', mediaType: 'application/pdf', type: 'document' },
+            ],
             role: 'user',
           },
         ],
@@ -1386,7 +1582,9 @@ describe('OpenAI adapter', () => {
       adapter.complete({
         messages: [
           {
-            content: [{ type: 'image_url', url: 'https://example.com/image.png' }],
+            content: [
+              { type: 'image_url', url: 'https://example.com/image.png' },
+            ],
             role: 'assistant',
           },
         ],
@@ -1395,10 +1593,12 @@ describe('OpenAI adapter', () => {
     ).rejects.toBeInstanceOf(ProviderCapabilityError);
 
     await expect(
-      adapter.stream({
-        messages: [{ content: 'Hello', role: 'user' }],
-        model: 'gpt-4o',
-      }).next(),
+      adapter
+        .stream({
+          messages: [{ content: 'Hello', role: 'user' }],
+          model: 'gpt-4o',
+        })
+        .next(),
     ).rejects.toBeInstanceOf(ProviderError);
   });
 
@@ -1445,9 +1645,7 @@ describe('OpenAI adapter', () => {
       output: [
         {
           id: 'rs_1',
-          summary: [
-            { text: 'Thinking...', type: 'summary_text' },
-          ],
+          summary: [{ text: 'Thinking...', type: 'summary_text' }],
           type: 'reasoning',
         },
         {
@@ -1472,7 +1670,9 @@ describe('OpenAI adapter', () => {
     });
 
     expect(response.text).toBe('The answer is 42.');
-    expect(response.content).toEqual([{ text: 'The answer is 42.', type: 'text' }]);
+    expect(response.content).toEqual([
+      { text: 'The answer is 42.', type: 'text' },
+    ]);
     expect(response.toolCalls).toEqual([]);
   });
 
@@ -1576,27 +1776,28 @@ describe('OpenAI adapter', () => {
   it('streams response.failed event as a ProviderError', async () => {
     const adapter = new OpenAIAdapter({
       apiKey: 'openai-key',
-      fetchImplementation: vi.fn(async () =>
-        new Response(
-          makeSSEStream([
-            {
-              response: {
-                error: { message: 'Model overloaded' },
-                id: 'resp_fail_1',
-                model: 'gpt-4o',
-                object: 'response',
-                output: [],
-                status: 'failed',
+      fetchImplementation: vi.fn(
+        async () =>
+          new Response(
+            makeSSEStream([
+              {
+                response: {
+                  error: { message: 'Model overloaded' },
+                  id: 'resp_fail_1',
+                  model: 'gpt-4o',
+                  object: 'response',
+                  output: [],
+                  status: 'failed',
+                },
+                sequence_number: 1,
+                type: 'response.failed',
               },
-              sequence_number: 1,
-              type: 'response.failed',
+            ]),
+            {
+              headers: { 'content-type': 'text/event-stream' },
+              status: 200,
             },
-          ]),
-          {
-            headers: { 'content-type': 'text/event-stream' },
-            status: 200,
-          },
-        ),
+          ),
       ),
     });
 
@@ -1615,20 +1816,21 @@ describe('OpenAI adapter', () => {
   it('streams error event as a ProviderError', async () => {
     const adapter = new OpenAIAdapter({
       apiKey: 'openai-key',
-      fetchImplementation: vi.fn(async () =>
-        new Response(
-          makeSSEStream([
+      fetchImplementation: vi.fn(
+        async () =>
+          new Response(
+            makeSSEStream([
+              {
+                code: 'server_error',
+                message: 'Internal server error',
+                type: 'error',
+              },
+            ]),
             {
-              code: 'server_error',
-              message: 'Internal server error',
-              type: 'error',
+              headers: { 'content-type': 'text/event-stream' },
+              status: 200,
             },
-          ]),
-          {
-            headers: { 'content-type': 'text/event-stream' },
-            status: 200,
-          },
-        ),
+          ),
       ),
     });
 
@@ -1647,86 +1849,87 @@ describe('OpenAI adapter', () => {
   it('streams text followed by a tool call in the same stream', async () => {
     const adapter = new OpenAIAdapter({
       apiKey: 'openai-key',
-      fetchImplementation: vi.fn(async () =>
-        new Response(
-          makeSSEStream([
-            {
-              content_index: 0,
-              delta: 'Let me check',
-              item_id: 'msg_1',
-              output_index: 0,
-              sequence_number: 1,
-              type: 'response.output_text.delta',
-            },
-            {
-              item: {
-                arguments: '{"q":"weather"}',
-                call_id: 'call_search',
-                id: 'fc_search',
-                name: 'web_search',
-                status: 'completed',
-                type: 'function_call',
+      fetchImplementation: vi.fn(
+        async () =>
+          new Response(
+            makeSSEStream([
+              {
+                content_index: 0,
+                delta: 'Let me check',
+                item_id: 'msg_1',
+                output_index: 0,
+                sequence_number: 1,
+                type: 'response.output_text.delta',
               },
-              output_index: 1,
-              sequence_number: 2,
-              type: 'response.output_item.added',
-            },
-            {
-              item: {
-                arguments: '{"q":"weather"}',
-                call_id: 'call_search',
-                id: 'fc_search',
-                name: 'web_search',
-                status: 'completed',
-                type: 'function_call',
-              },
-              output_index: 1,
-              sequence_number: 3,
-              type: 'response.output_item.done',
-            },
-            {
-              response: {
-                id: 'resp_mixed_1',
-                model: 'gpt-4o',
-                object: 'response',
-                output: [
-                  {
-                    content: [
-                      {
-                        annotations: [],
-                        text: 'Let me check',
-                        type: 'output_text',
-                      },
-                    ],
-                    id: 'msg_1',
-                    role: 'assistant',
-                    status: 'completed',
-                    type: 'message',
-                  },
-                  {
-                    arguments: '{"q":"weather"}',
-                    call_id: 'call_search',
-                    id: 'fc_search',
-                    name: 'web_search',
-                    status: 'completed',
-                    type: 'function_call',
-                  },
-                ],
-                status: 'completed',
-                usage: {
-                  input_tokens: 20,
-                  output_tokens: 8,
+              {
+                item: {
+                  arguments: '{"q":"weather"}',
+                  call_id: 'call_search',
+                  id: 'fc_search',
+                  name: 'web_search',
+                  status: 'completed',
+                  type: 'function_call',
                 },
+                output_index: 1,
+                sequence_number: 2,
+                type: 'response.output_item.added',
               },
-              sequence_number: 4,
-              type: 'response.completed',
+              {
+                item: {
+                  arguments: '{"q":"weather"}',
+                  call_id: 'call_search',
+                  id: 'fc_search',
+                  name: 'web_search',
+                  status: 'completed',
+                  type: 'function_call',
+                },
+                output_index: 1,
+                sequence_number: 3,
+                type: 'response.output_item.done',
+              },
+              {
+                response: {
+                  id: 'resp_mixed_1',
+                  model: 'gpt-4o',
+                  object: 'response',
+                  output: [
+                    {
+                      content: [
+                        {
+                          annotations: [],
+                          text: 'Let me check',
+                          type: 'output_text',
+                        },
+                      ],
+                      id: 'msg_1',
+                      role: 'assistant',
+                      status: 'completed',
+                      type: 'message',
+                    },
+                    {
+                      arguments: '{"q":"weather"}',
+                      call_id: 'call_search',
+                      id: 'fc_search',
+                      name: 'web_search',
+                      status: 'completed',
+                      type: 'function_call',
+                    },
+                  ],
+                  status: 'completed',
+                  usage: {
+                    input_tokens: 20,
+                    output_tokens: 8,
+                  },
+                },
+                sequence_number: 4,
+                type: 'response.completed',
+              },
+            ]),
+            {
+              headers: { 'content-type': 'text/event-stream' },
+              status: 200,
             },
-          ]),
-          {
-            headers: { 'content-type': 'text/event-stream' },
-            status: 200,
-          },
-        ),
+          ),
       ),
     });
 
@@ -1752,7 +1955,11 @@ describe('OpenAI adapter', () => {
     expect(chunks).toEqual([
       { delta: 'Let me check', type: 'text-delta' },
       { id: 'call_search', name: 'web_search', type: 'tool-call-start' },
-      { argsDelta: '{"q":"weather"}', id: 'call_search', type: 'tool-call-delta' },
+      {
+        argsDelta: '{"q":"weather"}',
+        id: 'call_search',
+        type: 'tool-call-delta',
+      },
       {
         id: 'call_search',
         name: 'web_search',
@@ -1769,53 +1976,54 @@ describe('OpenAI adapter', () => {
   it('streams response.incomplete event with length finish reason', async () => {
     const adapter = new OpenAIAdapter({
       apiKey: 'openai-key',
-      fetchImplementation: vi.fn(async () =>
-        new Response(
-          makeSSEStream([
-            {
-              content_index: 0,
-              delta: 'Truncated',
-              item_id: 'msg_1',
-              output_index: 0,
-              sequence_number: 1,
-              type: 'response.output_text.delta',
-            },
-            {
-              response: {
-                id: 'resp_inc_1',
-                incomplete_details: { reason: 'max_output_tokens' },
-                model: 'gpt-4o',
-                object: 'response',
-                output: [
-                  {
-                    content: [
-                      {
-                        annotations: [],
-                        text: 'Truncated',
-                        type: 'output_text',
-                      },
-                    ],
-                    id: 'msg_1',
-                    role: 'assistant',
-                    status: 'completed',
-                    type: 'message',
-                  },
-                ],
-                status: 'incomplete',
-                usage: {
-                  input_tokens: 10,
-                  output_tokens: 5,
-                },
+      fetchImplementation: vi.fn(
+        async () =>
+          new Response(
+            makeSSEStream([
+              {
+                content_index: 0,
+                delta: 'Truncated',
+                item_id: 'msg_1',
+                output_index: 0,
+                sequence_number: 1,
+                type: 'response.output_text.delta',
               },
-              sequence_number: 2,
-              type: 'response.incomplete',
+              {
+                response: {
+                  id: 'resp_inc_1',
+                  incomplete_details: { reason: 'max_output_tokens' },
+                  model: 'gpt-4o',
+                  object: 'response',
+                  output: [
+                    {
+                      content: [
+                        {
+                          annotations: [],
+                          text: 'Truncated',
+                          type: 'output_text',
+                        },
+                      ],
+                      id: 'msg_1',
+                      role: 'assistant',
+                      status: 'completed',
+                      type: 'message',
+                    },
+                  ],
+                  status: 'incomplete',
+                  usage: {
+                    input_tokens: 10,
+                    output_tokens: 5,
+                  },
+                },
+                sequence_number: 2,
+                type: 'response.incomplete',
+              },
+            ]),
+            {
+              headers: { 'content-type': 'text/event-stream' },
+              status: 200,
             },
-          ]),
-          {
-            headers: { 'content-type': 'text/event-stream' },
-            status: 200,
-          },
-        ),
+          ),
       ),
     });
 
@@ -1872,110 +2080,111 @@ describe('OpenAI adapter', () => {
   it('streams two concurrent tool calls tracked independently by call_id', async () => {
     const adapter = new OpenAIAdapter({
       apiKey: 'openai-key',
-      fetchImplementation: vi.fn(async () =>
-        new Response(
-          makeSSEStream([
-            {
-              item: {
-                arguments: '',
-                call_id: 'call_a',
-                id: 'fc_a',
-                name: 'tool_alpha',
-                status: 'in_progress',
-                type: 'function_call',
+      fetchImplementation: vi.fn(
+        async () =>
+          new Response(
+            makeSSEStream([
+              {
+                item: {
+                  arguments: '',
+                  call_id: 'call_a',
+                  id: 'fc_a',
+                  name: 'tool_alpha',
+                  status: 'in_progress',
+                  type: 'function_call',
+                },
+                output_index: 0,
+                sequence_number: 1,
+                type: 'response.output_item.added',
               },
-              output_index: 0,
-              sequence_number: 1,
-              type: 'response.output_item.added',
-            },
-            {
-              item: {
-                arguments: '',
-                call_id: 'call_b',
-                id: 'fc_b',
-                name: 'tool_beta',
-                status: 'in_progress',
-                type: 'function_call',
+              {
+                item: {
+                  arguments: '',
+                  call_id: 'call_b',
+                  id: 'fc_b',
+                  name: 'tool_beta',
+                  status: 'in_progress',
+                  type: 'function_call',
+                },
+                output_index: 1,
+                sequence_number: 2,
+                type: 'response.output_item.added',
               },
-              output_index: 1,
-              sequence_number: 2,
-              type: 'response.output_item.added',
-            },
-            {
-              delta: '{"x":1}',
-              item_id: 'fc_a',
-              output_index: 0,
-              sequence_number: 3,
-              type: 'response.function_call_arguments.delta',
-            },
-            {
-              delta: '{"y":2}',
-              item_id: 'fc_b',
-              output_index: 1,
-              sequence_number: 4,
-              type: 'response.function_call_arguments.delta',
-            },
-            {
-              item: {
-                arguments: '{"x":1}',
-                call_id: 'call_a',
-                id: 'fc_a',
-                name: 'tool_alpha',
-                status: 'completed',
-                type: 'function_call',
+              {
+                delta: '{"x":1}',
+                item_id: 'fc_a',
+                output_index: 0,
+                sequence_number: 3,
+                type: 'response.function_call_arguments.delta',
               },
-              output_index: 0,
-              sequence_number: 5,
-              type: 'response.output_item.done',
-            },
-            {
-              item: {
-                arguments: '{"y":2}',
-                call_id: 'call_b',
-                id: 'fc_b',
-                name: 'tool_beta',
-                status: 'completed',
-                type: 'function_call',
+              {
+                delta: '{"y":2}',
+                item_id: 'fc_b',
+                output_index: 1,
+                sequence_number: 4,
+                type: 'response.function_call_arguments.delta',
               },
-              output_index: 1,
-              sequence_number: 6,
-              type: 'response.output_item.done',
-            },
-            {
-              response: {
-                id: 'resp_parallel',
-                model: 'gpt-4o',
-                object: 'response',
-                output: [
-                  {
-                    arguments: '{"x":1}',
-                    call_id: 'call_a',
-                    id: 'fc_a',
-                    name: 'tool_alpha',
-                    status: 'completed',
-                    type: 'function_call',
-                  },
-                  {
-                    arguments: '{"y":2}',
-                    call_id: 'call_b',
-                    id: 'fc_b',
-                    name: 'tool_beta',
-                    status: 'completed',
-                    type: 'function_call',
-                  },
-                ],
-                status: 'completed',
-                usage: { input_tokens: 30, output_tokens: 20 },
+              {
+                item: {
+                  arguments: '{"x":1}',
+                  call_id: 'call_a',
+                  id: 'fc_a',
+                  name: 'tool_alpha',
+                  status: 'completed',
+                  type: 'function_call',
+                },
+                output_index: 0,
+                sequence_number: 5,
+                type: 'response.output_item.done',
               },
-              sequence_number: 7,
-              type: 'response.completed',
+              {
+                item: {
+                  arguments: '{"y":2}',
+                  call_id: 'call_b',
+                  id: 'fc_b',
+                  name: 'tool_beta',
+                  status: 'completed',
+                  type: 'function_call',
+                },
+                output_index: 1,
+                sequence_number: 6,
+                type: 'response.output_item.done',
+              },
+              {
+                response: {
+                  id: 'resp_parallel',
+                  model: 'gpt-4o',
+                  object: 'response',
+                  output: [
+                    {
+                      arguments: '{"x":1}',
+                      call_id: 'call_a',
+                      id: 'fc_a',
+                      name: 'tool_alpha',
+                      status: 'completed',
+                      type: 'function_call',
+                    },
+                    {
+                      arguments: '{"y":2}',
+                      call_id: 'call_b',
+                      id: 'fc_b',
+                      name: 'tool_beta',
+                      status: 'completed',
+                      type: 'function_call',
+                    },
+                  ],
+                  status: 'completed',
+                  usage: { input_tokens: 30, output_tokens: 20 },
+                },
+                sequence_number: 7,
+                type: 'response.completed',
+              },
+            ]),
+            {
+              headers: { 'content-type': 'text/event-stream' },
+              status: 200,
             },
-          ]),
-          {
-            headers: { 'content-type': 'text/event-stream' },
-            status: 200,
-          },
-        ),
+          ),
       ),
     });
 
@@ -2000,30 +2209,52 @@ describe('OpenAI adapter', () => {
     }
 
     const startA = chunks.find(
-      (c) => c.type === 'tool-call-start' && (c as { id: string }).id === 'call_a',
+      (c) =>
+        c.type === 'tool-call-start' && (c as { id: string }).id === 'call_a',
     );
     const startB = chunks.find(
-      (c) => c.type === 'tool-call-start' && (c as { id: string }).id === 'call_b',
+      (c) =>
+        c.type === 'tool-call-start' && (c as { id: string }).id === 'call_b',
     );
     const deltaA = chunks.find(
-      (c) => c.type === 'tool-call-delta' && (c as { id: string }).id === 'call_a',
+      (c) =>
+        c.type === 'tool-call-delta' && (c as { id: string }).id === 'call_a',
     );
     const deltaB = chunks.find(
-      (c) => c.type === 'tool-call-delta' && (c as { id: string }).id === 'call_b',
+      (c) =>
+        c.type === 'tool-call-delta' && (c as { id: string }).id === 'call_b',
     );
     const resultA = chunks.find(
-      (c) => c.type === 'tool-call-result' && (c as { id: string }).id === 'call_a',
+      (c) =>
+        c.type === 'tool-call-result' && (c as { id: string }).id === 'call_a',
     );
     const resultB = chunks.find(
-      (c) => c.type === 'tool-call-result' && (c as { id: string }).id === 'call_b',
+      (c) =>
+        c.type === 'tool-call-result' && (c as { id: string }).id === 'call_b',
     );
 
-    expect(startA).toMatchObject({ id: 'call_a', name: 'tool_alpha', type: 'tool-call-start' });
-    expect(startB).toMatchObject({ id: 'call_b', name: 'tool_beta', type: 'tool-call-start' });
+    expect(startA).toMatchObject({
+      id: 'call_a',
+      name: 'tool_alpha',
+      type: 'tool-call-start',
+    });
+    expect(startB).toMatchObject({
+      id: 'call_b',
+      name: 'tool_beta',
+      type: 'tool-call-start',
+    });
     expect(deltaA).toMatchObject({ argsDelta: '{"x":1}', id: 'call_a' });
     expect(deltaB).toMatchObject({ argsDelta: '{"y":2}', id: 'call_b' });
-    expect(resultA).toMatchObject({ id: 'call_a', name: 'tool_alpha', result: { x: 1 } });
-    expect(resultB).toMatchObject({ id: 'call_b', name: 'tool_beta', result: { y: 2 } });
+    expect(resultA).toMatchObject({
+      id: 'call_a',
+      name: 'tool_alpha',
+      result: { x: 1 },
+    });
+    expect(resultB).toMatchObject({
+      id: 'call_b',
+      name: 'tool_beta',
+      result: { y: 2 },
+    });
   });
 
   it('handles zero token usage without errors', () => {
@@ -2089,7 +2320,9 @@ describe('OpenAI adapter', () => {
       adapter.complete({
         messages: [
           {
-            content: [{ type: 'image_url', url: 'https://example.com/image.png' }],
+            content: [
+              { type: 'image_url', url: 'https://example.com/image.png' },
+            ],
             role: 'user',
           },
         ],
@@ -2098,10 +2331,12 @@ describe('OpenAI adapter', () => {
     ).rejects.toBeInstanceOf(ProviderCapabilityError);
 
     await expect(
-      adapter.stream({
-        messages: [{ content: 'Hello', role: 'user' }],
-        model: 'mock-openai-no-capabilities',
-      }).next(),
+      adapter
+        .stream({
+          messages: [{ content: 'Hello', role: 'user' }],
+          model: 'mock-openai-no-capabilities',
+        })
+        .next(),
     ).rejects.toBeInstanceOf(ProviderCapabilityError);
   });
 });
@@ -2111,7 +2346,9 @@ function makeSSEStream(events: unknown[]): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     start(controller) {
       for (const event of events) {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
+        );
       }
       controller.enqueue(encoder.encode('data: [DONE]\n\n'));
       controller.close();

@@ -11,12 +11,12 @@ Speech is intentionally separate from `complete()`, `stream()`, and `conversatio
 
 The first implementation supports OpenAI batch speech endpoints.
 
-| Provider | Text To Speech | Speech To Text | Notes |
-|---|---:|---:|---|
-| OpenAI | Yes | Yes | Uses `/v1/audio/speech` and `/v1/audio/transcriptions`. |
-| Google Gemini | No | No | Planned later; Gemini speech uses different generation semantics. |
-| Anthropic | No | No | Anthropic does not expose first-party TTS/STT endpoints through this library. |
-| Mock | Yes | Yes | Use `LLMClient.mock()` for deterministic tests. |
+| Provider      | Text To Speech | Speech To Text | Notes                                                                         |
+| ------------- | -------------: | -------------: | ----------------------------------------------------------------------------- |
+| OpenAI        |            Yes |            Yes | Uses `/v1/audio/speech` and `/v1/audio/transcriptions`.                       |
+| Google Gemini |             No |             No | Planned later; Gemini speech uses different generation semantics.             |
+| Anthropic     |             No |             No | Anthropic does not expose first-party TTS/STT endpoints through this library. |
+| Mock          |            Yes |            Yes | Use `LLMClient.mock()` for deterministic tests.                               |
 
 Unsupported providers throw `ProviderCapabilityError` instead of silently falling back.
 
@@ -44,6 +44,21 @@ console.log(speech.usage?.cost); // display string only
 
 The library returns audio bytes. It does not write files or store audio for you.
 
+TTS preflight rejects invalid requests before provider or mock dispatch:
+
+- `input` must contain non-whitespace text and is limited to 4096 JavaScript
+  characters
+- `format` is one of `mp3`, `opus`, `aac`, `flac`, `wav`, or `pcm`
+- `speed` is a finite number from `0.25` through `4`
+- a voice is a documented built-in name or a plain `{ id: string }` custom
+  voice
+- duration estimates are finite non-negative numbers; fractional seconds are
+  valid
+
+The top-level request must be a plain object containing only documented
+enumerable data fields. Unknown fields and accessors are rejected without
+invoking getters.
+
 ## Speech To Text
 
 ```ts
@@ -66,6 +81,17 @@ console.log(transcript.usage?.costUSD);
 
 `input` accepts `data` as base64 or `file` as `Blob`, `ArrayBuffer`, or `Uint8Array`.
 
+Exactly one non-empty source is required: `data`, `file`, or `url`.
+`mediaType` must identify a supported audio/container format. Base64 is parsed
+strictly, binary values must not be empty, filenames must be non-empty when
+present, and URL strings must be absolute before the separate URL/SSRF policy
+runs. Response formats, temperatures, and timestamp granularities are also
+validated locally. Invalid requests consume no mock response and perform no
+fetch or usage log.
+
+The same exact-field, accessor-free top-level object rule applies to
+transcription requests.
+
 `input.url` is disabled by default because the library runtime would fetch that URL server-side. To enable URL input, pass an explicit `transcriptionUrlPolicy` with allowed protocols/hosts, byte limits, redirect limits, and a `resolveHostname` function when private-network blocking is enabled. The adapter validates every redirect hop and streams the response with `maxBytes` enforcement.
 
 ## Cost And Budgets
@@ -82,6 +108,10 @@ For budget preflight, duration-priced calls need enough information before the r
 
 - `client.speak()` should pass `estimatedOutputSeconds` or `maxOutputSeconds` when output audio duration affects cost.
 - `client.transcribe()` should pass `inputAudioSeconds` when the source duration cannot be derived from the audio bytes.
+
+`budgetUsd`, `estimatedOutputSeconds`, `maxOutputSeconds`, and
+`inputAudioSeconds` accept finite non-negative decimals. Negative values,
+numeric strings, `NaN`, and infinities fail locally.
 
 ## Usage Logging
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { LLMError } from '../src/errors.js';
+import { LLMError, ProviderCapabilityError } from '../src/errors.js';
 import {
   createDenseRetriever,
   createHybridRetriever,
@@ -16,18 +16,21 @@ import type {
   LexicalKnowledgeSearchOptions,
   RetrievalResult,
 } from '../src/retrieval.js';
-import type { EmbeddingRequestOptions, EmbeddingResponse } from '../src/types.js';
+import type {
+  EmbeddingRequestOptions,
+  EmbeddingResponse,
+} from '../src/types.js';
 
 describe('retrieval helpers', () => {
   it('creates a dense retriever around embed() and the knowledge store', async () => {
-    const embed = vi.fn<(options: EmbeddingRequestOptions) => Promise<EmbeddingResponse>>(
-      async () => ({
-        embeddings: [{ index: 0, values: [0.12, 0.34, 0.56] }],
-        model: 'gemini-embedding-2',
-        provider: 'google',
-        raw: { ok: true },
-      }),
-    );
+    const embed = vi.fn<
+      (options: EmbeddingRequestOptions) => Promise<EmbeddingResponse>
+    >(async () => ({
+      embeddings: [{ index: 0, values: [0.12, 0.34, 0.56] }],
+      model: 'gemini-embedding-2',
+      provider: 'google',
+      raw: { ok: true },
+    }));
     const searchByEmbedding = vi.fn<
       (options: DenseKnowledgeSearchOptions) => Promise<RetrievalResult[]>
     >(async () => [
@@ -93,14 +96,14 @@ describe('retrieval helpers', () => {
   });
 
   it('supports embed invokers and forwards embedding options', async () => {
-    const embed = vi.fn<(options: EmbeddingRequestOptions) => Promise<EmbeddingResponse>>(
-      async () => ({
-        embeddings: [{ index: 0, values: [0.4, 0.8] }],
-        model: 'gemini-embedding-2',
-        provider: 'google',
-        raw: { ok: true },
-      }),
-    );
+    const embed = vi.fn<
+      (options: EmbeddingRequestOptions) => Promise<EmbeddingResponse>
+    >(async () => ({
+      embeddings: [{ index: 0, values: [0.4, 0.8] }],
+      model: 'gemini-embedding-2',
+      provider: 'google',
+      raw: { ok: true },
+    }));
     const retriever = createDenseRetriever({
       embed: { embed },
       embedding: {
@@ -147,14 +150,14 @@ describe('retrieval helpers', () => {
   });
 
   it('merges dense and lexical candidates for hybrid retrieval', async () => {
-    const embed = vi.fn<(options: EmbeddingRequestOptions) => Promise<EmbeddingResponse>>(
-      async () => ({
-        embeddings: [{ index: 0, values: [0.7, 0.2] }],
-        model: 'gemini-embedding-2',
-        provider: 'google',
-        raw: { ok: true },
-      }),
-    );
+    const embed = vi.fn<
+      (options: EmbeddingRequestOptions) => Promise<EmbeddingResponse>
+    >(async () => ({
+      embeddings: [{ index: 0, values: [0.7, 0.2] }],
+      model: 'gemini-embedding-2',
+      provider: 'google',
+      raw: { ok: true },
+    }));
     const searchByEmbedding = vi.fn<
       (options: DenseKnowledgeSearchOptions) => Promise<RetrievalResult[]>
     >(async () => [
@@ -237,7 +240,9 @@ describe('retrieval helpers', () => {
   });
 
   it('applies dense rerank hooks before final limiting', async () => {
-    const rerank = vi.fn(async (results: RetrievalResult[]) => [...results].reverse());
+    const rerank = vi.fn(async (results: RetrievalResult[]) =>
+      [...results].reverse(),
+    );
     const retriever = createDenseRetriever({
       defaultTopK: 2,
       embed: async () => ({
@@ -268,11 +273,16 @@ describe('retrieval helpers', () => {
     const results = await retriever.search({ query: 'refund policy' });
 
     expect(rerank).toHaveBeenCalledOnce();
-    expect(results.map((result) => result.chunkId)).toEqual(['chunk-2', 'chunk-1']);
+    expect(results.map((result) => result.chunkId)).toEqual([
+      'chunk-2',
+      'chunk-1',
+    ]);
   });
 
   it('applies hybrid rerank hooks after candidate fusion', async () => {
-    const rerank = vi.fn(async (results: RetrievalResult[]) => results.slice(0, 1));
+    const rerank = vi.fn(async (results: RetrievalResult[]) =>
+      results.slice(0, 1),
+    );
     const retriever = createHybridRetriever({
       embed: async () => ({
         embeddings: [{ index: 0, values: [0.4, 0.6] }],
@@ -321,9 +331,9 @@ describe('retrieval helpers', () => {
       },
     });
 
-    await expect(retriever.search({ query: 'refund policy' })).rejects.toBeInstanceOf(
-      LLMError,
-    );
+    await expect(
+      retriever.search({ query: 'refund policy' }),
+    ).rejects.toBeInstanceOf(LLMError);
   });
 
   it('throws when hybrid retrieval is requested without lexical support', async () => {
@@ -339,7 +349,9 @@ describe('retrieval helpers', () => {
       },
     });
 
-    await expect(retriever.search({ query: 'hello' })).rejects.toBeInstanceOf(LLMError);
+    await expect(retriever.search({ query: 'hello' })).rejects.toBeInstanceOf(
+      LLMError,
+    );
   });
 
   it('throws when dense retrieval does not receive an embedding vector', async () => {
@@ -355,7 +367,9 @@ describe('retrieval helpers', () => {
       },
     });
 
-    await expect(retriever.search({ query: 'hello' })).rejects.toBeInstanceOf(LLMError);
+    await expect(retriever.search({ query: 'hello' })).rejects.toBeInstanceOf(
+      LLMError,
+    );
   });
 
   it('throws when hybrid retrieval does not receive an embedding vector', async () => {
@@ -372,7 +386,9 @@ describe('retrieval helpers', () => {
       },
     });
 
-    await expect(retriever.search({ query: 'hello' })).rejects.toBeInstanceOf(LLMError);
+    await expect(retriever.search({ query: 'hello' })).rejects.toBeInstanceOf(
+      LLMError,
+    );
   });
 
   it('formats retrieved context with citations and token limits', () => {
@@ -401,16 +417,19 @@ describe('retrieval helpers', () => {
         includeMetadataKeys: ['section'],
         includeScores: true,
         maxPerSource: 1,
-        maxTokens: 40,
+        maxTokens: 90,
       },
     );
 
     expect(formatted.text).toContain('Knowledge');
     expect(formatted.text).toContain('[1] Source: Refund Policy');
     expect(formatted.text).toContain(
-      'Score (raw retrieval score; not a probability): 0.9000',
+      'Score (raw retrieval score; uncalibrated rank score): 0.9000',
     );
     expect(formatted.text).toContain('Metadata: section: billing');
+    expect(formatted.text).toContain('BEGIN UNTRUSTED RETRIEVED CONTENT');
+    expect(formatted.text).toContain('END UNTRUSTED RETRIEVED CONTENT');
+    expect(formatted.text).toContain('Content (untrusted):');
     expect(formatted.text).toContain('[truncated]');
     expect(formatted.citations).toEqual([
       {
@@ -423,7 +442,7 @@ describe('retrieval helpers', () => {
         url: undefined,
       },
     ]);
-    expect(formatted.omittedCount).toBe(0);
+    expect(formatted.omittedCount).toBe(1);
     expect(formatted.truncated).toBe(true);
     expect(formatted.usedResults).toHaveLength(1);
   });
@@ -453,12 +472,80 @@ describe('retrieval helpers', () => {
       truncated: false,
       usedResults: [],
     });
-    expect(exhausted.text).toBe('Knowledge\n\n');
+    expect(exhausted.text).toBe('');
+    expect(exhausted.estimatedTokens).toBe(0);
     expect(exhausted.omittedCount).toBe(1);
     expect(exhausted.truncated).toBe(true);
   });
 
-  it('uses the fallback formatter when the full prefix is too large for the token budget', () => {
+  it('accounts for every result omitted by formatter limits', () => {
+    const results: RetrievalResult[] = [
+      {
+        chunkId: 'a',
+        score: 1,
+        sourceId: 'source-a',
+        text: 'A',
+      },
+      {
+        chunkId: 'b',
+        score: 0.9,
+        sourceId: 'source-a',
+        text: 'B',
+      },
+      {
+        chunkId: 'c',
+        score: 0.8,
+        sourceId: 'source-b',
+        text: 'C',
+      },
+    ];
+    const formatted = formatRetrievedContext(results, {
+      maxPerSource: 1,
+      maxResults: 2,
+    });
+
+    expect(formatted.usedResults).toHaveLength(2);
+    expect(formatted.citations).toHaveLength(2);
+    expect(formatted.omittedCount).toBe(1);
+    expect(formatted.truncated).toBe(true);
+    expect(results).toHaveLength(3);
+  });
+
+  it('rejects invalid formatter values and accessors', () => {
+    for (const maxTokens of [
+      -1,
+      0.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      '10',
+      null,
+    ]) {
+      expect(() =>
+        formatRetrievedContext([], {
+          maxTokens: maxTokens as number,
+        }),
+      ).toThrow(ProviderCapabilityError);
+    }
+    expect(() =>
+      formatRetrievedContext([
+        {
+          chunkId: 'bad',
+          score: Number.NaN,
+          sourceId: 'source',
+          text: 'bad',
+        },
+      ]),
+    ).toThrow(ProviderCapabilityError);
+
+    const getter = vi.fn(() => 1);
+    const options = Object.defineProperty({}, 'maxResults', { get: getter });
+    expect(() =>
+      formatRetrievedContext([], options as { maxResults: number }),
+    ).toThrow(ProviderCapabilityError);
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it('omits results when the trust envelope cannot fit the token budget', () => {
     const formatted = formatRetrievedContext(
       [
         {
@@ -479,19 +566,14 @@ describe('retrieval helpers', () => {
       },
     );
 
-    expect(formatted.text).toContain('[1] Source: Refund Policy');
-    expect(formatted.text).not.toContain('Score:');
-    expect(formatted.text).not.toContain('Metadata:');
-    expect(formatted.text).toContain('Short');
-    expect(formatted.text).toContain('[truncated]');
-    expect(formatted.citations[0]).toMatchObject({
-      chunkId: 'chunk-1',
-      ordinal: 1,
-      sourceId: 'source-a',
-    });
+    expect(formatted.text).toBe('K\n\n');
+    expect(formatted.citations).toEqual([]);
+    expect(formatted.usedResults).toEqual([]);
+    expect(formatted.omittedCount).toBe(1);
+    expect(formatted.estimatedTokens).toBeLessThanOrEqual(15);
   });
 
-  it('keeps short text intact when the truncation budget is still sufficient', () => {
+  it('never exceeds the configured formatter token budget', () => {
     const formatted = formatRetrievedContext(
       [
         {
@@ -511,8 +593,9 @@ describe('retrieval helpers', () => {
       },
     );
 
-    expect(formatted.text).toContain('OK');
-    expect(formatted.text).toContain('[truncated]');
+    expect(formatted.estimatedTokens).toBeLessThanOrEqual(15);
+    expect(formatted.omittedCount).toBe(1);
+    expect(formatted.truncated).toBe(true);
   });
 
   it('merges retrieval candidates directly with reciprocal rank fusion', () => {
@@ -616,7 +699,9 @@ describe('retrieval helpers', () => {
       title: 'Refund Policy',
       url: 'https://example.test/refunds',
     });
-    expect(formatted.text).toContain('Metadata: tags: billing, refund; extra: {"locale":"en"}');
+    expect(formatted.text).toContain(
+      'Metadata: tags: billing, refund; extra: {"locale":"en"}',
+    );
   });
 
   it('formats relative score display with explicit explanatory labels', () => {
@@ -646,10 +731,10 @@ describe('retrieval helpers', () => {
     );
 
     expect(formatted.text).toContain(
-      'Score (relative to top result; display-only, not a probability): 1.0000',
+      'Score (relative display score; uncalibrated): 1.0000',
     );
     expect(formatted.text).toContain(
-      'Score (relative to top result; display-only, not a probability): 0.5000',
+      'Score (relative display score; uncalibrated): 0.5000',
     );
   });
 
@@ -671,7 +756,7 @@ describe('retrieval helpers', () => {
     );
 
     expect(formatted.text).toContain(
-      'Score (raw lexical relevance; not a probability): 0.0000',
+      'Score (raw lexical relevance; uncalibrated rank score): 0.0000',
     );
   });
 
@@ -797,7 +882,9 @@ describe('retrieval helpers', () => {
       }),
     ).rejects.toThrow(/requires a retrieval filter/);
 
-    const demoStore = createInMemoryKnowledgeStore({ allowUnfilteredSearch: true });
+    const demoStore = createInMemoryKnowledgeStore({
+      allowUnfilteredSearch: true,
+    });
     await demoStore.upsertKnowledgeSource({
       botId: 'bot-1',
       embeddingProfileId: 'profile-1',
@@ -1298,7 +1385,14 @@ describe('retrieval helpers', () => {
       }),
     ).toThrow(/pgvector dimensions/);
 
-    for (const dimensions of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 16_001]) {
+    for (const dimensions of [
+      0,
+      -1,
+      1.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      16_001,
+    ]) {
       expect(() =>
         createPgvectorHnswIndexSql({
           dimensions,

@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { chunkText, cleanText, stripHtml } from '../src/chunking.js';
+import { ProviderCapabilityError } from '../src/errors.js';
 
 describe('chunking helpers', () => {
   it('returns empty output for empty text and empty html', () => {
@@ -24,7 +25,9 @@ describe('chunking helpers', () => {
 
   it('decodes named and numeric HTML entities while preserving unknown entities', () => {
     expect(
-      stripHtml('<p>&lt;tag&gt; &quot;x&quot; &apos;y&apos; &#35; &#x41; &unknown;</p>'),
+      stripHtml(
+        '<p>&lt;tag&gt; &quot;x&quot; &apos;y&apos; &#35; &#x41; &unknown;</p>',
+      ),
     ).toBe('<tag> "x" \'y\' # A &unknown;');
   });
 
@@ -33,9 +36,9 @@ describe('chunking helpers', () => {
     expect(() =>
       stripHtml('<p>&#xFFFFFFFF; &#99999999; &#x110000; &#xD800;</p>'),
     ).not.toThrow();
-    expect(stripHtml('<p>&#xFFFFFFFF; &#99999999; &#x110000; &#xD800;</p>')).toBe(
-      '&#xFFFFFFFF; &#99999999; &#x110000; &#xD800;',
-    );
+    expect(
+      stripHtml('<p>&#xFFFFFFFF; &#99999999; &#x110000; &#xD800;</p>'),
+    ).toBe('&#xFFFFFFFF; &#99999999; &#x110000; &#xD800;');
   });
 
   it('decodes valid boundary numeric code points', () => {
@@ -76,15 +79,15 @@ describe('chunking helpers', () => {
     expect(chunks[1]!.startOffset).toBeLessThan(chunks[0]!.endOffset);
 
     for (const chunk of chunks) {
-      expect(cleaned.slice(chunk.startOffset, chunk.endOffset)).toBe(chunk.text);
+      expect(cleaned.slice(chunk.startOffset, chunk.endOffset)).toBe(
+        chunk.text,
+      );
     }
   });
 
-  it('falls back to fixed-size chunk boundaries when no natural split exists', () => {
+  it('falls back to fixed-size boundaries and adapts omitted defaults', () => {
     const chunks = chunkText('ABCDEFGHIJK', {
       chunkSize: 4,
-      minChunkSize: 10,
-      overlap: 10,
     });
 
     expect(chunks[0]).toMatchObject({
@@ -92,15 +95,32 @@ describe('chunking helpers', () => {
       startOffset: 0,
       text: 'ABCD',
     });
-    expect(chunks[1]).toMatchObject({
-      endOffset: 5,
-      startOffset: 1,
-      text: 'BCDE',
-    });
     expect(chunks.at(-1)).toMatchObject({
       endOffset: 11,
       text: 'HIJK',
     });
+  });
+
+  it('rejects invalid explicit chunk options without invoking getters', () => {
+    for (const options of [
+      { chunkSize: 0 },
+      { chunkSize: 1.5 },
+      { chunkSize: Number.NaN },
+      { chunkSize: 4, minChunkSize: 5 },
+      { chunkSize: 4, overlap: -1 },
+      { chunkSize: 4, overlap: 4 },
+      { chunkSize: 4, overlap: Number.POSITIVE_INFINITY },
+    ]) {
+      expect(() => chunkText('text', options)).toThrow(ProviderCapabilityError);
+    }
+
+    const getter = vi.fn(() => 4);
+    const options = Object.defineProperty({}, 'chunkSize', { get: getter });
+    expect(() => chunkText('text', options)).toThrow(ProviderCapabilityError);
+    expect(getter).not.toHaveBeenCalled();
+    expect(() => chunkText(42 as unknown as string)).toThrow(
+      ProviderCapabilityError,
+    );
   });
 
   it('returns no chunks for empty or whitespace-only input', () => {

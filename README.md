@@ -264,6 +264,15 @@ console.log(speech.usage?.costUSD);
 
 Use `usage.costUSD` for arithmetic and billing. `usage.cost` is a formatted display string. Speech audio and transcripts are not stored by the library; keep storage and retention in your application layer.
 
+Speech inputs are validated before routing, mock queue consumption, URL
+resolution, or provider fetches. TTS input must contain 1–4096 JavaScript
+characters, `speed` must be between `0.25` and `4`, and voices must be a
+documented built-in name or `{ id: 'custom-voice-id' }`. Transcription accepts
+exactly one non-empty `data`, `file`, or absolute `url` source with a supported
+audio media type. Duration estimates and `budgetUsd` accept finite
+non-negative decimal values. Top-level speech and transcription requests reject
+unknown fields and accessors without invoking getters.
+
 ## Summarisation Strategy
 
 `SummarisationStrategy` accepts a `summarizer()` callback. In production, point that callback at a cheaper model or internal summarisation service.
@@ -332,7 +341,11 @@ const client = new LLMClient({
 The package also exports a framework-agnostic session API handler. It accepts standard `Request` objects and returns standard `Response` objects, so it can be mounted in Express, Fastify, Hono, Next.js route handlers, Cloudflare Workers, or plain Node HTTP adapters.
 
 ```ts
-import { LLMClient, PostgresSessionStore, createSessionApi } from 'unified-llm-client';
+import {
+  LLMClient,
+  PostgresSessionStore,
+  createSessionApi,
+} from 'unified-llm-client';
 
 const store = PostgresSessionStore.fromEnv();
 const client = LLMClient.fromEnv({
@@ -497,12 +510,19 @@ const answer = await client.complete({
 Chunking helpers are now available as a separate subpath:
 
 ```ts
-const cleaned = cleanText(stripHtml('<h1>Refund Policy</h1><p>Refunds last 30 days.</p>'));
+const cleaned = cleanText(
+  stripHtml('<h1>Refund Policy</h1><p>Refunds last 30 days.</p>'),
+);
 const chunks = chunkText(cleaned, {
   chunkSize: 900,
   overlap: 120,
 });
 ```
+
+Explicit `chunkSize` and `minChunkSize` values must be positive safe integers;
+`overlap` must be a non-negative safe integer smaller than `chunkSize`.
+Impossible explicit configurations now fail locally instead of being silently
+clamped. Defaults still adapt when a small custom `chunkSize` is supplied.
 
 The retrieval module currently includes:
 
@@ -535,7 +555,12 @@ const knowledgeStore = createInMemoryKnowledgeStore();
 
 `InMemoryKnowledgeStore` keeps chunks and vectors in process memory, supports the same retriever-facing search interface, and mirrors the main upsert helpers. It requires an explicit retrieval filter by default. For single-tenant demos only, use `createInMemoryKnowledgeStore({ allowUnfilteredSearch: true })` to preserve match-all searches. It is useful for local development and examples, but it is not durable and should not replace `PostgresKnowledgeStore` for production retrieval.
 
-`formatRetrievedContext()` also supports explicit score display modes so users do not misread raw retrieval scores as probabilities:
+`formatRetrievedContext()` accounts for every result omitted by per-source,
+result-count, or token limits. All included results are contained within
+deterministic `BEGIN/END UNTRUSTED RETRIEVED CONTENT` markers, and
+`estimatedTokens` never exceeds `maxTokens`.
+
+The formatter also supports explicit, uncalibrated score display modes:
 
 ```ts
 const context = formatRetrievedContext(results, {
@@ -545,7 +570,7 @@ const context = formatRetrievedContext(results, {
 ```
 
 - `scoreDisplay: 'raw'` prints labels such as `raw dense similarity`, `raw lexical relevance`, or `raw fused rank score`
-- `scoreDisplay: 'relative_top_1'` prints a display-only score normalized against the top shown result and clearly marks it as not a probability
+- `scoreDisplay: 'relative_top_1'` prints an uncalibrated display score normalized against the top shown result
 
 ## Runtime Support
 
@@ -608,6 +633,12 @@ When the provider returns reasoning or thought-token counts, they are exposed as
 - Anthropic block-level and top-level `cache_control` are exposed for cacheable content and tool definitions.
 - Gemini implicit caching benefits supported models automatically, and explicit cache usage is exposed via `providerOptions.google.promptCaching.cachedContent` plus `client.googleCaches`.
 - Implementation planning lives in [docs/PROMPT_CACHING_REPORT.md](docs/PROMPT_CACHING_REPORT.md) and the active task tracker lives in [prompt_caching_todo.md](prompt_caching_todo.md).
+
+OpenAI cache keys, when present, must be non-empty strings; retention is
+`in_memory` or `24h`. The legacy retention field remains supported for
+compatibility and is not model-gated locally. Anthropic cache control requires
+`type: 'ephemeral'`; `ttl` may be omitted or set to `5m` or `1h`. Invalid
+values fail with a typed `ProviderCapabilityError` before provider dispatch.
 
 ## Prompt Caching Examples
 

@@ -20,7 +20,9 @@ export default defineConfig({
     utils: 'src/utils/index.ts',
   },
   format: ['esm', 'cjs'],
-  minify: false,
+  minifyIdentifiers: false,
+  minifySyntax: false,
+  minifyWhitespace: true,
   external: [
     'unified-llm-client/errors',
     'unified-llm-client/models',

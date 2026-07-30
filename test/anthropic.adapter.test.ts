@@ -11,6 +11,7 @@ import {
   mapAnthropicError,
   translateAnthropicRequest,
   translateAnthropicResponse,
+  translateAnthropicTool,
   translateAnthropicToolChoice,
 } from '../src/providers/anthropic.js';
 
@@ -22,7 +23,11 @@ describe('Anthropic adapter', () => {
         { content: 'You are helpful.', role: 'system' },
         {
           content: [
-            { cacheControl: { type: 'ephemeral' }, text: 'Hello', type: 'text' },
+            {
+              cacheControl: { type: 'ephemeral' },
+              text: 'Hello',
+              type: 'text',
+            },
             { type: 'image_url', url: 'https://example.com/cat.png' },
           ],
           role: 'user',
@@ -77,7 +82,10 @@ describe('Anthropic adapter', () => {
       {
         content: [
           { text: 'Hello', type: 'text' },
-          { source: { type: 'url', url: 'https://example.com/cat.png' }, type: 'image' },
+          {
+            source: { type: 'url', url: 'https://example.com/cat.png' },
+            type: 'image',
+          },
         ],
         role: 'user',
       },
@@ -186,6 +194,49 @@ describe('Anthropic adapter', () => {
     });
   });
 
+  it('rejects invalid Anthropic cache control at every translated boundary', () => {
+    const base = {
+      maxTokens: 64,
+      model: 'claude-sonnet-4-6',
+    };
+    expect(() =>
+      translateAnthropicRequest({
+        ...base,
+        messages: [{ content: 'Hi', role: 'user' }],
+        providerOptions: {
+          anthropic: {
+            cacheControl: { ttl: '2h' } as never,
+          },
+        },
+      }),
+    ).toThrow(ProviderCapabilityError);
+    expect(() =>
+      translateAnthropicRequest({
+        ...base,
+        messages: [
+          {
+            content: [
+              {
+                cacheControl: { ttl: '2h', type: 'ephemeral' } as never,
+                text: 'Hi',
+                type: 'text',
+              },
+            ],
+            role: 'user',
+          },
+        ],
+      }),
+    ).toThrow(ProviderCapabilityError);
+    expect(() =>
+      translateAnthropicTool({
+        cacheControl: { type: 'other' } as never,
+        description: 'Lookup',
+        name: 'lookup',
+        parameters: { type: 'object' },
+      }),
+    ).toThrow(ProviderCapabilityError);
+  });
+
   it('maps Anthropic thinking and effort options into requests', () => {
     const request = translateAnthropicRequest({
       maxTokens: 4096,
@@ -216,7 +267,7 @@ describe('Anthropic adapter', () => {
 
   it.each(['low', 'medium', 'high', 'xhigh', 'max'] as const)(
     'maps Anthropic %s effort under output_config',
-    effort => {
+    (effort) => {
       const request = translateAnthropicRequest({
         maxTokens: 64,
         messages: [{ content: 'Think carefully.', role: 'user' }],
@@ -235,7 +286,7 @@ describe('Anthropic adapter', () => {
 
   it.each(['adaptive', 'ultra', '', null, 1, true])(
     'rejects invalid Anthropic effort value %j at runtime',
-    effort => {
+    (effort) => {
       expect(() =>
         translateAnthropicRequest({
           maxTokens: 64,
@@ -251,7 +302,13 @@ describe('Anthropic adapter', () => {
         expect.objectContaining({
           details: expect.objectContaining({
             effort,
-            supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+            supportedReasoningEfforts: [
+              'low',
+              'medium',
+              'high',
+              'xhigh',
+              'max',
+            ],
           }),
         }),
       );
@@ -399,7 +456,7 @@ describe('Anthropic adapter', () => {
 
   it.each(['adaptive', 'disabled'] as const)(
     'rejects Anthropic thinking budgets for %s mode',
-    type => {
+    (type) => {
       expect(() =>
         translateAnthropicRequest({
           maxTokens: 64,
@@ -426,7 +483,7 @@ describe('Anthropic adapter', () => {
 
   it.each(['adaptive', 'disabled'] as const)(
     'does not emit budget_tokens for %s mode without a budget',
-    type => {
+    (type) => {
       const request = translateAnthropicRequest({
         maxTokens: 64,
         messages: [{ content: 'Think carefully.', role: 'user' }],
@@ -607,7 +664,9 @@ describe('Anthropic adapter', () => {
         maxTokens: 64,
         messages: [
           {
-            content: [{ type: 'image_url', url: 'https://example.com/image.png' }],
+            content: [
+              { type: 'image_url', url: 'https://example.com/image.png' },
+            ],
             role: 'system',
           },
           { content: 'Hi', role: 'user' },
@@ -779,24 +838,25 @@ describe('Anthropic adapter', () => {
   });
 
   it('performs a complete Anthropic request with auth headers', async () => {
-    const fetchImplementation = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          content: [{ text: 'Hello there', type: 'text' }],
-          id: 'msg_1',
-          model: 'claude-sonnet-4-6',
-          role: 'assistant',
-          stop_reason: 'end_turn',
-          usage: {
-            input_tokens: 100,
-            output_tokens: 10,
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            content: [{ text: 'Hello there', type: 'text' }],
+            id: 'msg_1',
+            model: 'claude-sonnet-4-6',
+            role: 'assistant',
+            stop_reason: 'end_turn',
+            usage: {
+              input_tokens: 100,
+              output_tokens: 10,
+            },
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
           },
-        }),
-        {
-          headers: { 'content-type': 'application/json' },
-          status: 200,
-        },
-      ),
+        ),
     );
 
     const adapter = new AnthropicAdapter({
@@ -821,19 +881,20 @@ describe('Anthropic adapter', () => {
   });
 
   it('throws a typed rate-limit error from complete()', async () => {
-    const fetchImplementation = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          error: {
-            message: 'Too many requests',
-            type: 'rate_limit_error',
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              message: 'Too many requests',
+              type: 'rate_limit_error',
+            },
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 429,
           },
-        }),
-        {
-          headers: { 'content-type': 'application/json' },
-          status: 429,
-        },
-      ),
+        ),
     );
     const adapter = new AnthropicAdapter({
       apiKey: 'anthropic-key',
@@ -907,7 +968,9 @@ describe('Anthropic adapter', () => {
         maxTokens: 64,
         messages: [
           {
-            content: [{ type: 'image_url', url: 'https://example.com/image.png' }],
+            content: [
+              { type: 'image_url', url: 'https://example.com/image.png' },
+            ],
             role: 'user',
           },
         ],
@@ -916,11 +979,13 @@ describe('Anthropic adapter', () => {
     ).rejects.toBeInstanceOf(ProviderCapabilityError);
 
     await expect(
-      adapter.stream({
-        maxTokens: 64,
-        messages: [{ content: 'Hello', role: 'user' }],
-        model: 'mock-no-capabilities',
-      }).next(),
+      adapter
+        .stream({
+          maxTokens: 64,
+          messages: [{ content: 'Hello', role: 'user' }],
+          model: 'mock-no-capabilities',
+        })
+        .next(),
     ).rejects.toBeInstanceOf(ProviderCapabilityError);
 
     expect(fetchImplementation).not.toHaveBeenCalled();
@@ -1265,11 +1330,12 @@ describe('Anthropic adapter', () => {
         type: 'message_stop',
       },
     ]);
-    const fetchImplementation = vi.fn(async () =>
-      new Response(stream, {
-        headers: { 'content-type': 'text/event-stream' },
-        status: 200,
-      }),
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(stream, {
+          headers: { 'content-type': 'text/event-stream' },
+          status: 200,
+        }),
     );
     const adapter = new AnthropicAdapter({
       apiKey: 'anthropic-key',
@@ -1400,11 +1466,13 @@ describe('Anthropic adapter', () => {
     ]);
 
     await expect(
-      adapter.stream({
-        maxTokens: 128,
-        messages: [{ content: 'Say hello', role: 'user' }],
-        model: 'claude-sonnet-4-6',
-      }).next(),
+      adapter
+        .stream({
+          maxTokens: 128,
+          messages: [{ content: 'Say hello', role: 'user' }],
+          model: 'claude-sonnet-4-6',
+        })
+        .next(),
     ).rejects.toBeInstanceOf(ProviderError);
   });
 });
@@ -1414,7 +1482,9 @@ function makeSSEStream(events: unknown[]): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     start(controller) {
       for (const event of events) {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
+        );
       }
       controller.close();
     },

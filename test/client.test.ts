@@ -107,29 +107,32 @@ describe('LLMClient', () => {
     });
 
     expect(client.models.get('custom-model').provider).toBe('mock');
-    expect(client.models.list().some((model) => model.id === 'custom-model')).toBe(true);
+    expect(
+      client.models.list().some((model) => model.id === 'custom-model'),
+    ).toBe(true);
   });
 
   it('lists remote OpenAI models through the public client API', async () => {
     const created = 1_710_000_000;
-    const fetchImplementation = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          data: [
-            {
-              created,
-              id: 'gpt-5.4',
-              object: 'model',
-              owned_by: 'system',
-            },
-          ],
-          object: 'list',
-        }),
-        {
-          headers: { 'content-type': 'application/json' },
-          status: 200,
-        },
-      ),
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                created,
+                id: 'gpt-5.4',
+                object: 'model',
+                owned_by: 'system',
+              },
+            ],
+            object: 'list',
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+          },
+        ),
     );
 
     const client = new LLMClient({
@@ -223,7 +226,9 @@ describe('LLMClient', () => {
     ];
     const headers = firstRequest[1].headers as Record<string, string>;
 
-    expect(String(firstRequest[0])).toBe('https://api.anthropic.com/v1/models?limit=100');
+    expect(String(firstRequest[0])).toBe(
+      'https://api.anthropic.com/v1/models?limit=100',
+    );
     expect(String(secondRequest[0])).toContain('after_id=claude-opus-4-7');
     expect(headers['anthropic-version']).toBe('2023-06-01');
     expect(headers['x-api-key']).toBe('anthropic-key');
@@ -255,7 +260,10 @@ describe('LLMClient', () => {
                 inputTokenLimit: 1_048_576,
                 name: 'models/gemini-2.5-flash',
                 outputTokenLimit: 65_536,
-                supportedGenerationMethods: ['generateContent', 'createCachedContent'],
+                supportedGenerationMethods: [
+                  'generateContent',
+                  'createCachedContent',
+                ],
               },
             ],
             nextPageToken: 'page-2',
@@ -332,7 +340,11 @@ describe('LLMClient', () => {
       {
         options: { openaiApiKey: 'key' },
         payload: {
-          data: [{ created: 1, id: 'first-openai' }, {}, { id: 'second-openai' }],
+          data: [
+            { created: 1, id: 'first-openai' },
+            {},
+            { id: 'second-openai' },
+          ],
         },
         provider: 'openai' as const,
       },
@@ -358,8 +370,9 @@ describe('LLMClient', () => {
     ];
 
     for (const testCase of cases) {
-      const fetchImplementation = vi.fn(async () =>
-        new Response(JSON.stringify(testCase.payload), { status: 200 }),
+      const fetchImplementation = vi.fn(
+        async () =>
+          new Response(JSON.stringify(testCase.payload), { status: 200 }),
       );
       const client = new LLMClient({
         ...testCase.options,
@@ -386,7 +399,9 @@ describe('LLMClient', () => {
       for (const body of ['{', JSON.stringify({ unexpected: [] })]) {
         const client = new LLMClient({
           ...testCase.options,
-          fetchImplementation: vi.fn(async () => new Response(body, { status: 200 })),
+          fetchImplementation: vi.fn(
+            async () => new Response(body, { status: 200 }),
+          ),
         });
         const error = await client.models
           .listRemote({ provider: testCase.provider })
@@ -409,8 +424,11 @@ describe('LLMClient', () => {
   it('rejects missing and repeated discovery cursors without looping', async () => {
     const missingAnthropicCursor = new LLMClient({
       anthropicApiKey: 'key',
-      fetchImplementation: vi.fn(async () =>
-        new Response(JSON.stringify({ data: [{ id: 'one' }], has_more: true })),
+      fetchImplementation: vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ data: [{ id: 'one' }], has_more: true }),
+          ),
       ),
     });
     await expect(
@@ -422,8 +440,8 @@ describe('LLMClient', () => {
 
     const invalidAnthropicState = new LLMClient({
       anthropicApiKey: 'key',
-      fetchImplementation: vi.fn(async () =>
-        new Response(JSON.stringify({ data: [] })),
+      fetchImplementation: vi.fn(
+        async () => new Response(JSON.stringify({ data: [] })),
       ),
     });
     await expect(
@@ -434,8 +452,9 @@ describe('LLMClient', () => {
     });
 
     const invalidGoogleCursor = new LLMClient({
-      fetchImplementation: vi.fn(async () =>
-        new Response(JSON.stringify({ models: [], nextPageToken: 123 })),
+      fetchImplementation: vi.fn(
+        async () =>
+          new Response(JSON.stringify({ models: [], nextPageToken: 123 })),
       ),
       geminiApiKey: 'key',
     });
@@ -458,8 +477,9 @@ describe('LLMClient', () => {
         provider: 'google' as const,
       },
     ]) {
-      const fetchImplementation = vi.fn(async () =>
-        new Response(JSON.stringify(testCase.page), { status: 200 }),
+      const fetchImplementation = vi.fn(
+        async () =>
+          new Response(JSON.stringify(testCase.page), { status: 200 }),
       );
       const client = new LLMClient({
         ...testCase.options,
@@ -479,35 +499,40 @@ describe('LLMClient', () => {
   it('throws when remote model discovery is requested without provider credentials', async () => {
     const client = new LLMClient();
 
-    await expect(client.models.listRemote({ provider: 'openai' })).rejects.toBeInstanceOf(
-      AuthenticationError,
-    );
+    await expect(
+      client.models.listRemote({ provider: 'openai' }),
+    ).rejects.toBeInstanceOf(AuthenticationError);
   });
 
   it('routes embed() calls to Gemini using the default embedding model', async () => {
-    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+    const fetchImplementation = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body ?? '{}')) as Record<
+          string,
+          unknown
+        >;
 
-      expect(body).toMatchObject({
-        outputDimensionality: 768,
-        taskType: 'RETRIEVAL_QUERY',
-      });
+        expect(body).toMatchObject({
+          outputDimensionality: 768,
+          taskType: 'RETRIEVAL_QUERY',
+        });
 
-      return new Response(
-        JSON.stringify({
-          embedding: {
-            values: [0.11, 0.22, 0.33],
+        return new Response(
+          JSON.stringify({
+            embedding: {
+              values: [0.11, 0.22, 0.33],
+            },
+            usageMetadata: {
+              promptTokenCount: 12,
+            },
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
           },
-          usageMetadata: {
-            promptTokenCount: 12,
-          },
-        }),
-        {
-          headers: { 'content-type': 'application/json' },
-          status: 200,
-        },
-      );
-    });
+        );
+      },
+    );
 
     const client = new LLMClient({
       defaultEmbeddingModel: 'gemini-embedding-2',
@@ -701,9 +726,7 @@ describe('LLMClient', () => {
       geminiApiKey: 'gemini-key',
     });
 
-    await expect(
-      client.embed({ input } as never),
-    ).rejects.toMatchObject({
+    await expect(client.embed({ input } as never)).rejects.toMatchObject({
       details: {
         option: 'input',
       },
@@ -715,17 +738,19 @@ describe('LLMClient', () => {
 
   it('accepts every public embedding purpose and preserves valid batch indexes', async () => {
     const bodies: Array<Record<string, unknown>> = [];
-    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-      return new Response(
-        JSON.stringify({
-          embedding: {
-            values: [bodies.length],
-          },
-        }),
-        { status: 200 },
-      );
-    });
+    const fetchImplementation = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(
+          JSON.stringify({
+            embedding: {
+              values: [bodies.length],
+            },
+          }),
+          { status: 200 },
+        );
+      },
+    );
     const client = new LLMClient({
       defaultEmbeddingModel: 'gemini-embedding-2',
       fetchImplementation,
@@ -751,33 +776,32 @@ describe('LLMClient', () => {
     ]);
   });
 
-  it.each([
-    ['unknown'],
-    [null],
-    [{ unexpected: true }],
-  ])('rejects invalid embedding purpose %# before dispatch', async (purpose) => {
-    const fetchImplementation = vi.fn();
-    const client = new LLMClient({
-      defaultEmbeddingModel: 'gemini-embedding-2',
-      fetchImplementation,
-      geminiApiKey: 'gemini-key',
-    });
+  it.each([['unknown'], [null], [{ unexpected: true }]])(
+    'rejects invalid embedding purpose %# before dispatch',
+    async (purpose) => {
+      const fetchImplementation = vi.fn();
+      const client = new LLMClient({
+        defaultEmbeddingModel: 'gemini-embedding-2',
+        fetchImplementation,
+        geminiApiKey: 'gemini-key',
+      });
 
-    await expect(
-      client.embed({
-        input: 'valid',
-        purpose,
-      } as never),
-    ).rejects.toMatchObject({
-      details: {
-        constraint: 'supported_embedding_purpose',
-        option: 'purpose',
-      },
-      name: 'ProviderCapabilityError',
-      statusCode: 400,
-    });
-    expect(fetchImplementation).not.toHaveBeenCalled();
-  });
+      await expect(
+        client.embed({
+          input: 'valid',
+          purpose,
+        } as never),
+      ).rejects.toMatchObject({
+        details: {
+          constraint: 'supported_embedding_purpose',
+          option: 'purpose',
+        },
+        name: 'ProviderCapabilityError',
+        statusCode: 400,
+      });
+      expect(fetchImplementation).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([127, 3073, 0, -1, 1.5, Number.NaN, Infinity, -Infinity])(
     'rejects invalid embedding dimensions %s before dispatch',
@@ -805,10 +829,14 @@ describe('LLMClient', () => {
   it.each([128, 512, 768, 1024, 1536, 3072])(
     'accepts supported embedding dimensions %s',
     async (dimensions) => {
-      const fetchImplementation = vi.fn(async () =>
-        new Response(JSON.stringify({ embedding: { values: [dimensions] } }), {
-          status: 200,
-        }),
+      const fetchImplementation = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ embedding: { values: [dimensions] } }),
+            {
+              status: 200,
+            },
+          ),
       );
       const client = new LLMClient({
         defaultEmbeddingModel: 'gemini-embedding-2',
@@ -824,10 +852,11 @@ describe('LLMClient', () => {
   );
 
   it('honors custom embedding bounds and allows metadata-absent dimensions', async () => {
-    const fetchImplementation = vi.fn(async () =>
-      new Response(JSON.stringify({ embedding: { values: [1] } }), {
-        status: 200,
-      }),
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ embedding: { values: [1] } }), {
+          status: 200,
+        }),
     );
     const client = new LLMClient({
       fetchImplementation,
@@ -1051,10 +1080,15 @@ describe('LLMClient', () => {
   it('handles speech validation, unsupported providers, and budget preflight', async () => {
     const fetchImplementation = vi.fn();
     const onWarning = vi.fn();
+    const usageLogger = {
+      log: vi.fn(async () => undefined),
+      logSpeech: vi.fn(async () => undefined),
+    };
     const client = new LLMClient({
       fetchImplementation,
       onWarning,
       openaiApiKey: 'openai-key',
+      usageLogger,
     });
 
     await expect(client.speak({ input: '' })).rejects.toBeInstanceOf(
@@ -1096,11 +1130,49 @@ describe('LLMClient', () => {
         model: 'gpt-4o-mini-tts',
       }),
     ).rejects.toBeInstanceOf(BudgetExceededError);
+    const speechGetter = vi.fn(() => 'secret speech');
+    const speechAccessor = Object.defineProperty({}, 'input', {
+      enumerable: true,
+      get: speechGetter,
+    });
+    const transcriptionGetter = vi.fn(() => ({
+      file: new Uint8Array([1]),
+      mediaType: 'audio/mpeg',
+    }));
+    const transcriptionAccessor = Object.defineProperty({}, 'input', {
+      enumerable: true,
+      get: transcriptionGetter,
+    });
+    await expect(client.speak(speechAccessor as never)).rejects.toBeInstanceOf(
+      ProviderCapabilityError,
+    );
+    await expect(
+      client.speak({ input: 'Hello', unknown: true } as never),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    await expect(
+      client.transcribe(transcriptionAccessor as never),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    await expect(
+      client.transcribe({
+        input: {
+          file: new Uint8Array([1]),
+          mediaType: 'audio/mpeg',
+        },
+        unknown: true,
+      } as never),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    expect(speechGetter).not.toHaveBeenCalled();
+    expect(transcriptionGetter).not.toHaveBeenCalled();
+    expect(fetchImplementation).not.toHaveBeenCalled();
+    expect(onWarning).not.toHaveBeenCalled();
+    expect(usageLogger.log).not.toHaveBeenCalled();
+    expect(usageLogger.logSpeech).not.toHaveBeenCalled();
 
-    const warnFetch = vi.fn(async () =>
-      new Response(new Uint8Array([1, 2]), {
-        status: 200,
-      }),
+    const warnFetch = vi.fn(
+      async () =>
+        new Response(new Uint8Array([1, 2]), {
+          status: 200,
+        }),
     );
     const warnClient = new LLMClient({
       fetchImplementation: warnFetch,
@@ -1120,6 +1192,243 @@ describe('LLMClient', () => {
       expect.stringContaining('Estimated speech request cost'),
     );
     expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid budgets before routing or consuming mock queues', async () => {
+    const responseFactory = vi.fn(() => ({
+      content: [],
+      finishReason: 'stop' as const,
+      model: 'mock-model',
+      provider: 'mock' as const,
+      raw: {},
+      text: 'ok',
+      toolCalls: [],
+      usage: {
+        cachedTokens: 0,
+        cost: '$0.00',
+        costUSD: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      },
+    }));
+    const client = LLMClient.mock({ responses: [responseFactory] });
+    const request = {
+      messages: [{ content: 'Hello', role: 'user' as const }],
+    };
+
+    for (const budgetUsd of [
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      '1',
+      null,
+    ]) {
+      await expect(
+        client.complete({
+          ...request,
+          budgetUsd: budgetUsd as number,
+        }),
+      ).rejects.toMatchObject({
+        details: expect.objectContaining({ code: 'invalid_budget' }),
+        statusCode: 400,
+      });
+    }
+    expect(responseFactory).not.toHaveBeenCalled();
+    await expect(
+      client.complete({ ...request, budgetUsd: 0.5 }),
+    ).resolves.toMatchObject({
+      text: 'ok',
+    });
+    expect(responseFactory).toHaveBeenCalledOnce();
+    expect(() => client.stream({ ...request, budgetUsd: Number.NaN })).toThrow(
+      ProviderCapabilityError,
+    );
+    expect(() =>
+      client.resolveContext({
+        ...request,
+        budgetUsd: Number.POSITIVE_INFINITY,
+      }),
+    ).toThrow(ProviderCapabilityError);
+  });
+
+  it('rejects invalid provider cache options before consuming mock queues', async () => {
+    const openAIGetter = vi.fn(() => 'secret');
+    const openAIPromptCaching = Object.defineProperty({}, 'key', {
+      enumerable: true,
+      get: openAIGetter,
+    });
+    const anthropicGetter = vi.fn(() => '5m');
+    const anthropicCacheControl = Object.defineProperty(
+      { type: 'ephemeral' },
+      'ttl',
+      {
+        enumerable: true,
+        get: anthropicGetter,
+      },
+    );
+    const client = LLMClient.mock({
+      responses: [
+        {
+          content: [{ text: 'queued response', type: 'text' }],
+          finishReason: 'stop',
+          model: 'mock-model',
+          provider: 'mock',
+          raw: { queued: true },
+          text: 'queued response',
+          toolCalls: [],
+          usage: {
+            cachedTokens: 0,
+            cost: '$0.00',
+            costUSD: 0,
+            inputTokens: 1,
+            outputTokens: 1,
+          },
+        },
+      ],
+      streams: [[{ delta: 'queued stream', type: 'text-delta' }]],
+    });
+    const messages = [{ content: 'Hello', role: 'user' as const }];
+    const invalidProviderOptions = [
+      {
+        openai: {
+          promptCaching: { retention: '24h', unknown: true },
+        },
+      },
+      { openai: { promptCaching: openAIPromptCaching } },
+      {
+        anthropic: {
+          cacheControl: { type: 'ephemeral', unknown: true },
+        },
+      },
+      { anthropic: { cacheControl: anthropicCacheControl } },
+    ];
+
+    for (const providerOptions of invalidProviderOptions) {
+      await expect(
+        client.complete({ messages, providerOptions } as never),
+      ).rejects.toMatchObject({
+        name: 'ProviderCapabilityError',
+        statusCode: 400,
+      });
+      expect(() =>
+        client.stream({ messages, providerOptions } as never),
+      ).toThrow(ProviderCapabilityError);
+    }
+    expect(openAIGetter).not.toHaveBeenCalled();
+    expect(anthropicGetter).not.toHaveBeenCalled();
+
+    await expect(client.complete({ messages })).resolves.toMatchObject({
+      raw: { queued: true },
+      text: 'queued response',
+    });
+    const chunks = [];
+    for await (const chunk of client.stream({ messages })) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          delta: 'queued stream',
+          type: 'text-delta',
+        }),
+      ]),
+    );
+  });
+
+  it('validates mock speech and transcription before queue consumption', async () => {
+    const speechFactory = vi.fn(() => ({
+      audio: new Uint8Array([1]),
+      format: 'mp3' as const,
+      mediaType: 'audio/mpeg',
+      model: 'mock-speech-model',
+      provider: 'mock' as const,
+      raw: {},
+    }));
+    const transcriptionFactory = vi.fn(() => ({
+      model: 'mock-transcription-model',
+      provider: 'mock' as const,
+      raw: {},
+      text: 'ok',
+    }));
+    const client = LLMClient.mock({
+      speeches: [speechFactory],
+      transcriptions: [transcriptionFactory],
+    });
+    const speechGetter = vi.fn(() => 'secret speech');
+    const speechAccessor = Object.defineProperty({}, 'input', {
+      enumerable: true,
+      get: speechGetter,
+    });
+
+    for (const request of [
+      { input: '' },
+      { input: ' ', speed: 1 },
+      { input: 'hello', speed: 0 },
+      { input: 'hello', speed: Number.NaN },
+      { estimatedOutputSeconds: -1, input: 'hello' },
+      { input: 'hello', voice: 'unknown' },
+      { input: 'hello', unknown: true },
+      speechAccessor,
+    ]) {
+      await expect(client.speak(request as never)).rejects.toBeInstanceOf(
+        ProviderCapabilityError,
+      );
+    }
+    expect(speechFactory).not.toHaveBeenCalled();
+    expect(speechGetter).not.toHaveBeenCalled();
+    await expect(
+      client.speak({ input: 'hello', voice: { id: 'custom-voice' } }),
+    ).resolves.toMatchObject({ format: 'mp3' });
+    expect(speechFactory).toHaveBeenCalledOnce();
+
+    const transcriptionGetter = vi.fn(() => ({
+      file: new Uint8Array([1]),
+      mediaType: 'audio/mpeg',
+    }));
+    const transcriptionAccessor = Object.defineProperty({}, 'input', {
+      enumerable: true,
+      get: transcriptionGetter,
+    });
+    for (const input of [
+      { mediaType: 'audio/mpeg' },
+      {
+        data: Buffer.from('x').toString('base64'),
+        file: new Uint8Array([1]),
+        mediaType: 'audio/mpeg',
+      },
+      { data: 'not base64', mediaType: 'audio/mpeg' },
+      { file: new Uint8Array(), mediaType: 'audio/mpeg' },
+      { file: new Uint8Array([1]), mediaType: 'text/plain' },
+    ]) {
+      await expect(
+        client.transcribe({ input } as never),
+      ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    }
+    await expect(
+      client.transcribe({
+        input: {
+          file: new Uint8Array([1]),
+          mediaType: 'audio/mpeg',
+        },
+        unknown: true,
+      } as never),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    await expect(
+      client.transcribe(transcriptionAccessor as never),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    expect(transcriptionFactory).not.toHaveBeenCalled();
+    expect(transcriptionGetter).not.toHaveBeenCalled();
+    await expect(
+      client.transcribe({
+        input: {
+          file: new Uint8Array([1]),
+          mediaType: 'audio/mpeg',
+        },
+        inputAudioSeconds: 0.5,
+      }),
+    ).resolves.toMatchObject({ text: 'ok' });
+    expect(transcriptionFactory).toHaveBeenCalledOnce();
   });
 
   it('routes complete() calls to Anthropic by model', async () => {
@@ -1208,38 +1517,49 @@ describe('LLMClient', () => {
   });
 
   it('passes OpenAI prompt caching hints through complete() routing', async () => {
-    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+    const fetchImplementation = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body ?? '{}')) as Record<
+          string,
+          unknown
+        >;
 
-      expect(body.prompt_cache_key).toBe('support-faq-v1');
-      expect(body.prompt_cache_retention).toBe('24h');
+        expect(body.prompt_cache_key).toBe('support-faq-v1');
+        expect(body.prompt_cache_retention).toBe('24h');
 
-      return new Response(
-        JSON.stringify({
-          id: 'resp_1',
-          model: 'gpt-4o',
-          object: 'response',
-          output: [
-            {
-              content: [{ annotations: [], text: 'Cached OpenAI response', type: 'output_text' }],
-              id: 'msg_1',
-              role: 'assistant',
-              status: 'completed',
-              type: 'message',
+        return new Response(
+          JSON.stringify({
+            id: 'resp_1',
+            model: 'gpt-4o',
+            object: 'response',
+            output: [
+              {
+                content: [
+                  {
+                    annotations: [],
+                    text: 'Cached OpenAI response',
+                    type: 'output_text',
+                  },
+                ],
+                id: 'msg_1',
+                role: 'assistant',
+                status: 'completed',
+                type: 'message',
+              },
+            ],
+            status: 'completed',
+            usage: {
+              input_tokens: 10,
+              output_tokens: 5,
             },
-          ],
-          status: 'completed',
-          usage: {
-            input_tokens: 10,
-            output_tokens: 5,
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
           },
-        }),
-        {
-          headers: { 'content-type': 'application/json' },
-          status: 200,
-        },
-      );
-    });
+        );
+      },
+    );
 
     const client = new LLMClient({
       defaultModel: 'gpt-4o',
@@ -1263,34 +1583,39 @@ describe('LLMClient', () => {
   });
 
   it('passes Gemini cachedContent references through complete() routing', async () => {
-    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+    const fetchImplementation = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body ?? '{}')) as Record<
+          string,
+          unknown
+        >;
 
-      expect(body.cachedContent).toBe('cachedContents/support-faq-v1');
+        expect(body.cachedContent).toBe('cachedContents/support-faq-v1');
 
-      return new Response(
-        JSON.stringify({
-          candidates: [
-            {
-              content: {
-                parts: [{ text: 'Cached Gemini response' }],
-                role: 'model',
+        return new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [{ text: 'Cached Gemini response' }],
+                  role: 'model',
+                },
+                finishReason: 'STOP',
+                index: 0,
               },
-              finishReason: 'STOP',
-              index: 0,
+            ],
+            usageMetadata: {
+              candidatesTokenCount: 5,
+              promptTokenCount: 10,
             },
-          ],
-          usageMetadata: {
-            candidatesTokenCount: 5,
-            promptTokenCount: 10,
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
           },
-        }),
-        {
-          headers: { 'content-type': 'application/json' },
-          status: 200,
-        },
-      );
-    });
+        );
+      },
+    );
 
     const client = new LLMClient({
       defaultModel: 'gemini-2.5-flash',
@@ -1367,64 +1692,65 @@ describe('LLMClient', () => {
   });
 
   it('routes stream() calls to OpenAI by model', async () => {
-    const fetchImplementation = vi.fn(async () =>
-      new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(
-              new TextEncoder().encode(
-                `data: ${JSON.stringify({
-                  content_index: 0,
-                  delta: 'Hi',
-                  item_id: 'msg_1',
-                  output_index: 0,
-                  sequence_number: 1,
-                  type: 'response.output_text.delta',
-                })}\n\n`,
-              ),
-            );
-            controller.enqueue(
-              new TextEncoder().encode(
-                `data: ${JSON.stringify({
-                  response: {
-                    id: 'resp_1',
-                    model: 'gpt-4o',
-                    object: 'response',
-                    output: [
-                      {
-                        content: [
-                          {
-                            annotations: [],
-                            text: 'Hi',
-                            type: 'output_text',
-                          },
-                        ],
-                        id: 'msg_1',
-                        role: 'assistant',
-                        status: 'completed',
-                        type: 'message',
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `data: ${JSON.stringify({
+                    content_index: 0,
+                    delta: 'Hi',
+                    item_id: 'msg_1',
+                    output_index: 0,
+                    sequence_number: 1,
+                    type: 'response.output_text.delta',
+                  })}\n\n`,
+                ),
+              );
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `data: ${JSON.stringify({
+                    response: {
+                      id: 'resp_1',
+                      model: 'gpt-4o',
+                      object: 'response',
+                      output: [
+                        {
+                          content: [
+                            {
+                              annotations: [],
+                              text: 'Hi',
+                              type: 'output_text',
+                            },
+                          ],
+                          id: 'msg_1',
+                          role: 'assistant',
+                          status: 'completed',
+                          type: 'message',
+                        },
+                      ],
+                      status: 'completed',
+                      usage: {
+                        input_tokens: 5,
+                        output_tokens: 3,
                       },
-                    ],
-                    status: 'completed',
-                    usage: {
-                      input_tokens: 5,
-                      output_tokens: 3,
                     },
-                  },
-                  sequence_number: 2,
-                  type: 'response.completed',
-                })}\n\n`,
-              ),
-            );
-            controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
-            controller.close();
+                    sequence_number: 2,
+                    type: 'response.completed',
+                  })}\n\n`,
+                ),
+              );
+              controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+              controller.close();
+            },
+          }),
+          {
+            headers: { 'content-type': 'text/event-stream' },
+            status: 200,
           },
-        }),
-        {
-          headers: { 'content-type': 'text/event-stream' },
-          status: 200,
-        },
-      ),
+        ),
     );
     const client = new LLMClient({
       defaultModel: 'gpt-4o',
@@ -1451,38 +1777,39 @@ describe('LLMClient', () => {
   });
 
   it('routes stream() calls to Gemini by model', async () => {
-    const fetchImplementation = vi.fn(async () =>
-      new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(
-              new TextEncoder().encode(
-                `data: ${JSON.stringify({
-                  candidates: [
-                    {
-                      content: {
-                        parts: [{ text: 'Hello from Gemini' }],
-                        role: 'model',
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `data: ${JSON.stringify({
+                    candidates: [
+                      {
+                        content: {
+                          parts: [{ text: 'Hello from Gemini' }],
+                          role: 'model',
+                        },
+                        finishReason: 'STOP',
+                        index: 0,
                       },
-                      finishReason: 'STOP',
-                      index: 0,
+                    ],
+                    usageMetadata: {
+                      candidatesTokenCount: 3,
+                      promptTokenCount: 5,
                     },
-                  ],
-                  usageMetadata: {
-                    candidatesTokenCount: 3,
-                    promptTokenCount: 5,
-                  },
-                })}\n\n`,
-              ),
-            );
-            controller.close();
+                  })}\n\n`,
+                ),
+              );
+              controller.close();
+            },
+          }),
+          {
+            headers: { 'content-type': 'text/event-stream' },
+            status: 200,
           },
-        }),
-        {
-          headers: { 'content-type': 'text/event-stream' },
-          status: 200,
-        },
-      ),
+        ),
     );
     const client = new LLMClient({
       defaultModel: 'gemini-2.5-flash',
@@ -1519,38 +1846,39 @@ describe('LLMClient', () => {
     delete process.env.DATABASE_URL;
 
     try {
-      const fetchImplementation = vi.fn(async () =>
-        new Response(
-          JSON.stringify({
-            id: 'resp_1',
-            model: 'gpt-4o',
-            object: 'response',
-            output: [
-              {
-                content: [
-                  {
-                    annotations: [],
-                    text: 'Env response',
-                    type: 'output_text',
-                  },
-                ],
-                id: 'msg_1',
-                role: 'assistant',
-                status: 'completed',
-                type: 'message',
+      const fetchImplementation = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              id: 'resp_1',
+              model: 'gpt-4o',
+              object: 'response',
+              output: [
+                {
+                  content: [
+                    {
+                      annotations: [],
+                      text: 'Env response',
+                      type: 'output_text',
+                    },
+                  ],
+                  id: 'msg_1',
+                  role: 'assistant',
+                  status: 'completed',
+                  type: 'message',
+                },
+              ],
+              status: 'completed',
+              usage: {
+                input_tokens: 5,
+                output_tokens: 3,
               },
-            ],
-            status: 'completed',
-            usage: {
-              input_tokens: 5,
-              output_tokens: 3,
+            }),
+            {
+              headers: { 'content-type': 'application/json' },
+              status: 200,
             },
-          }),
-          {
-            headers: { 'content-type': 'application/json' },
-            status: 200,
-          },
-        ),
+          ),
       );
       const client = LLMClient.fromEnv({
         defaultModel: 'gpt-4o',
@@ -1579,57 +1907,62 @@ describe('LLMClient', () => {
   });
 
   it('parses structured output and sends provider request format through complete()', async () => {
-    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const request = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
-      expect(request).toMatchObject({
-        text: {
-          format: {
-            schema: {
-              additionalProperties: false,
-              properties: {
-                answer: { type: 'string' },
-              },
-              required: ['answer'],
-              type: 'object',
-            },
-            strict: true,
-            type: 'json_schema',
-          },
-        },
-      });
-
-      return new Response(
-        JSON.stringify({
-          id: 'resp_1',
-          model: 'gpt-4o',
-          object: 'response',
-          output: [
-            {
-              content: [
-                {
-                  annotations: [],
-                  text: '{"answer":"ok"}',
-                  type: 'output_text',
+    const fetchImplementation = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const request = JSON.parse(String(init?.body ?? '{}')) as Record<
+          string,
+          unknown
+        >;
+        expect(request).toMatchObject({
+          text: {
+            format: {
+              schema: {
+                additionalProperties: false,
+                properties: {
+                  answer: { type: 'string' },
                 },
-              ],
-              id: 'msg_1',
-              role: 'assistant',
-              status: 'completed',
-              type: 'message',
+                required: ['answer'],
+                type: 'object',
+              },
+              strict: true,
+              type: 'json_schema',
             },
-          ],
-          status: 'completed',
-          usage: {
-            input_tokens: 5,
-            output_tokens: 3,
           },
-        }),
-        {
-          headers: { 'content-type': 'application/json' },
-          status: 200,
-        },
-      );
-    });
+        });
+
+        return new Response(
+          JSON.stringify({
+            id: 'resp_1',
+            model: 'gpt-4o',
+            object: 'response',
+            output: [
+              {
+                content: [
+                  {
+                    annotations: [],
+                    text: '{"answer":"ok"}',
+                    type: 'output_text',
+                  },
+                ],
+                id: 'msg_1',
+                role: 'assistant',
+                status: 'completed',
+                type: 'message',
+              },
+            ],
+            status: 'completed',
+            usage: {
+              input_tokens: 5,
+              output_tokens: 3,
+            },
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+          },
+        );
+      },
+    );
     const client = new LLMClient({
       defaultModel: 'gpt-4o',
       fetchImplementation,
@@ -1890,8 +2223,12 @@ describe('LLMClient', () => {
     ]);
     expect(chunks.map((chunk) => chunk.sequence)).toEqual([1, 2, 3, 4]);
     expect(chunks.every((chunk) => chunk.version === 2)).toBe(true);
-    expect(chunks.every((chunk) => chunk.requestId === 'mock-request')).toBe(true);
-    expect(chunks.every((chunk) => typeof chunk.timestamp === 'string')).toBe(true);
+    expect(chunks.every((chunk) => chunk.requestId === 'mock-request')).toBe(
+      true,
+    );
+    expect(chunks.every((chunk) => typeof chunk.timestamp === 'string')).toBe(
+      true,
+    );
   });
 
   it('parses structured output responses through LLMClient.mock()', async () => {
@@ -2053,80 +2390,85 @@ describe('LLMClient', () => {
     const usageLogger = {
       log: vi.fn(async () => undefined),
     };
-    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? '{}')) as { model?: string; stream?: boolean };
-      if (body.model === 'gpt-4o') {
+    const fetchImplementation = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          model?: string;
+          stream?: boolean;
+        };
+        if (body.model === 'gpt-4o') {
+          return new Response(
+            JSON.stringify({
+              error: {
+                message: 'Temporary upstream failure',
+              },
+            }),
+            {
+              headers: { 'content-type': 'application/json' },
+              status: 500,
+            },
+          );
+        }
+
         return new Response(
-          JSON.stringify({
-            error: {
-              message: 'Temporary upstream failure',
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `data: ${JSON.stringify({
+                    content_index: 0,
+                    delta: 'Fallback stream',
+                    item_id: 'msg_1',
+                    output_index: 0,
+                    sequence_number: 1,
+                    type: 'response.output_text.delta',
+                  })}\n\n`,
+                ),
+              );
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `data: ${JSON.stringify({
+                    response: {
+                      id: 'resp_1',
+                      model: 'gpt-4o-mini',
+                      object: 'response',
+                      output: [
+                        {
+                          content: [
+                            {
+                              annotations: [],
+                              text: 'Fallback stream',
+                              type: 'output_text',
+                            },
+                          ],
+                          id: 'msg_1',
+                          role: 'assistant',
+                          status: 'completed',
+                          type: 'message',
+                        },
+                      ],
+                      status: 'completed',
+                      usage: {
+                        input_tokens: 4,
+                        output_tokens: 2,
+                      },
+                    },
+                    sequence_number: 2,
+                    type: 'response.completed',
+                  })}\n\n`,
+                ),
+              );
+              controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+              controller.close();
             },
           }),
           {
-            headers: { 'content-type': 'application/json' },
-            status: 500,
+            headers: { 'content-type': 'text/event-stream' },
+            status: 200,
           },
         );
-      }
-
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(
-              new TextEncoder().encode(
-                `data: ${JSON.stringify({
-                  content_index: 0,
-                  delta: 'Fallback stream',
-                  item_id: 'msg_1',
-                  output_index: 0,
-                  sequence_number: 1,
-                  type: 'response.output_text.delta',
-                })}\n\n`,
-              ),
-            );
-            controller.enqueue(
-              new TextEncoder().encode(
-                `data: ${JSON.stringify({
-                  response: {
-                    id: 'resp_1',
-                    model: 'gpt-4o-mini',
-                    object: 'response',
-                    output: [
-                      {
-                        content: [
-                          {
-                            annotations: [],
-                            text: 'Fallback stream',
-                            type: 'output_text',
-                          },
-                        ],
-                        id: 'msg_1',
-                        role: 'assistant',
-                        status: 'completed',
-                        type: 'message',
-                      },
-                    ],
-                    status: 'completed',
-                    usage: {
-                      input_tokens: 4,
-                      output_tokens: 2,
-                    },
-                  },
-                  sequence_number: 2,
-                  type: 'response.completed',
-                })}\n\n`,
-              ),
-            );
-            controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
-            controller.close();
-          },
-        }),
-        {
-          headers: { 'content-type': 'text/event-stream' },
-          status: 200,
-        },
-      );
-    });
+      },
+    );
     const client = new LLMClient({
       defaultModel: 'gpt-4o',
       fetchImplementation,
@@ -2173,45 +2515,50 @@ describe('LLMClient', () => {
       expect.objectContaining({
         metadata: { feature: 'stream-correlation' },
         requestId: 'stream-request-123',
-        routingDecision: 'rule:stream-fallback:primary:gpt-4o -> rule:stream-fallback:fallback:1:gpt-4o-mini',
+        routingDecision:
+          'rule:stream-fallback:primary:gpt-4o -> rule:stream-fallback:fallback:1:gpt-4o-mini',
         sessionId: 'stream-session',
       }),
     );
   });
 
   it('does not fall back after streaming has already emitted output', async () => {
-    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? '{}')) as { model?: string };
-      if (body.model === 'gpt-4o') {
-        return new Response(
-          new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(
-              new TextEncoder().encode(
-                `data: ${JSON.stringify({
-                  content_index: 0,
-                  delta: 'partial',
-                  item_id: 'msg_1',
-                  output_index: 0,
-                  sequence_number: 1,
-                  type: 'response.output_text.delta',
-                })}\n\n`,
-              ),
-            );
-          },
-            pull(controller) {
-              controller.error(new Error('stream exploded'));
+    const fetchImplementation = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          model?: string;
+        };
+        if (body.model === 'gpt-4o') {
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    `data: ${JSON.stringify({
+                      content_index: 0,
+                      delta: 'partial',
+                      item_id: 'msg_1',
+                      output_index: 0,
+                      sequence_number: 1,
+                      type: 'response.output_text.delta',
+                    })}\n\n`,
+                  ),
+                );
+              },
+              pull(controller) {
+                controller.error(new Error('stream exploded'));
+              },
+            }),
+            {
+              headers: { 'content-type': 'text/event-stream' },
+              status: 200,
             },
-          }),
-          {
-            headers: { 'content-type': 'text/event-stream' },
-            status: 200,
-          },
-        );
-      }
+          );
+        }
 
-      return new Response('unexpected fallback', { status: 500 });
-    });
+        return new Response('unexpected fallback', { status: 500 });
+      },
+    );
     const client = new LLMClient({
       defaultModel: 'gpt-4o',
       fetchImplementation,
@@ -2244,7 +2591,11 @@ describe('LLMClient', () => {
       })(),
     ).rejects.toThrow('stream exploded');
     expect(chunks).toContainEqual(
-      expect.objectContaining({ delta: 'partial', type: 'text-delta', version: 2 }),
+      expect.objectContaining({
+        delta: 'partial',
+        type: 'text-delta',
+        version: 2,
+      }),
     );
     expect(fetchImplementation).toHaveBeenCalledTimes(1);
   });
@@ -2253,38 +2604,39 @@ describe('LLMClient', () => {
     const usageLogger = {
       log: vi.fn(async () => undefined),
     };
-    const fetchImplementation = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          id: 'resp_1',
-          model: 'gpt-4o',
-          object: 'response',
-          output: [
-            {
-              content: [
-                {
-                  annotations: [],
-                  text: 'Logged response',
-                  type: 'output_text',
-                },
-              ],
-              id: 'msg_1',
-              role: 'assistant',
-              status: 'completed',
-              type: 'message',
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: 'resp_1',
+            model: 'gpt-4o',
+            object: 'response',
+            output: [
+              {
+                content: [
+                  {
+                    annotations: [],
+                    text: 'Logged response',
+                    type: 'output_text',
+                  },
+                ],
+                id: 'msg_1',
+                role: 'assistant',
+                status: 'completed',
+                type: 'message',
+              },
+            ],
+            status: 'completed',
+            usage: {
+              input_tokens: 5,
+              output_tokens: 3,
             },
-          ],
-          status: 'completed',
-          usage: {
-            input_tokens: 5,
-            output_tokens: 3,
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
           },
-        }),
-        {
-          headers: { 'content-type': 'application/json' },
-          status: 200,
-        },
-      ),
+        ),
     );
     const client = new LLMClient({
       defaultModel: 'gpt-4o',
@@ -2323,38 +2675,39 @@ describe('LLMClient', () => {
   });
 
   it('swallows usage logger failures', async () => {
-    const fetchImplementation = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          id: 'resp_1',
-          model: 'gpt-4o',
-          object: 'response',
-          output: [
-            {
-              content: [
-                {
-                  annotations: [],
-                  text: 'Still succeeds',
-                  type: 'output_text',
-                },
-              ],
-              id: 'msg_1',
-              role: 'assistant',
-              status: 'completed',
-              type: 'message',
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: 'resp_1',
+            model: 'gpt-4o',
+            object: 'response',
+            output: [
+              {
+                content: [
+                  {
+                    annotations: [],
+                    text: 'Still succeeds',
+                    type: 'output_text',
+                  },
+                ],
+                id: 'msg_1',
+                role: 'assistant',
+                status: 'completed',
+                type: 'message',
+              },
+            ],
+            status: 'completed',
+            usage: {
+              input_tokens: 5,
+              output_tokens: 2,
             },
-          ],
-          status: 'completed',
-          usage: {
-            input_tokens: 5,
-            output_tokens: 2,
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
           },
-        }),
-        {
-          headers: { 'content-type': 'application/json' },
-          status: 200,
-        },
-      ),
+        ),
     );
     const client = new LLMClient({
       defaultModel: 'gpt-4o',
@@ -2424,38 +2777,39 @@ describe('LLMClient', () => {
 
   it('can warn and continue when a request exceeds the per-call budget', async () => {
     const onWarning = vi.fn();
-    const fetchImplementation = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          id: 'resp_1',
-          model: 'gpt-4o',
-          object: 'response',
-          output: [
-            {
-              content: [
-                {
-                  annotations: [],
-                  text: 'Allowed with warning',
-                  type: 'output_text',
-                },
-              ],
-              id: 'msg_1',
-              role: 'assistant',
-              status: 'completed',
-              type: 'message',
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: 'resp_1',
+            model: 'gpt-4o',
+            object: 'response',
+            output: [
+              {
+                content: [
+                  {
+                    annotations: [],
+                    text: 'Allowed with warning',
+                    type: 'output_text',
+                  },
+                ],
+                id: 'msg_1',
+                role: 'assistant',
+                status: 'completed',
+                type: 'message',
+              },
+            ],
+            status: 'completed',
+            usage: {
+              input_tokens: 5,
+              output_tokens: 2,
             },
-          ],
-          status: 'completed',
-          usage: {
-            input_tokens: 5,
-            output_tokens: 2,
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
           },
-        }),
-        {
-          headers: { 'content-type': 'application/json' },
-          status: 200,
-        },
-      ),
+        ),
     );
     const client = new LLMClient({
       defaultModel: 'gpt-4o',
@@ -2510,21 +2864,23 @@ describe('LLMClient', () => {
   });
 
   it('exposes a cancel() contract for streaming requests', async () => {
-    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.signal?.aborted) {
-        throw init.signal.reason ?? new Error('aborted');
-      }
+    const fetchImplementation = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.signal?.aborted) {
+          throw init.signal.reason ?? new Error('aborted');
+        }
 
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start() {},
-        }),
-        {
-          headers: { 'content-type': 'text/event-stream' },
-          status: 200,
-        },
-      );
-    });
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start() {},
+          }),
+          {
+            headers: { 'content-type': 'text/event-stream' },
+            status: 200,
+          },
+        );
+      },
+    );
     const client = new LLMClient({
       defaultModel: 'gpt-4o',
       fetchImplementation,
@@ -2543,54 +2899,57 @@ describe('LLMClient', () => {
 
   it('stops yielding already-buffered provider stream chunks after cancel()', async () => {
     const encoder = new TextEncoder();
-    const fetchImplementation = vi.fn(async () =>
-      new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            for (const event of [
-              {
-                content_index: 0,
-                delta: 'first',
-                item_id: 'msg_1',
-                output_index: 0,
-                sequence_number: 1,
-                type: 'response.output_text.delta',
-              },
-              {
-                content_index: 0,
-                delta: 'second',
-                item_id: 'msg_1',
-                output_index: 0,
-                sequence_number: 2,
-                type: 'response.output_text.delta',
-              },
-              {
-                response: {
-                  id: 'resp_1',
-                  model: 'gpt-4o',
-                  object: 'response',
-                  output: [],
-                  status: 'completed',
-                  usage: {
-                    input_tokens: 5,
-                    output_tokens: 3,
-                  },
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              for (const event of [
+                {
+                  content_index: 0,
+                  delta: 'first',
+                  item_id: 'msg_1',
+                  output_index: 0,
+                  sequence_number: 1,
+                  type: 'response.output_text.delta',
                 },
-                sequence_number: 3,
-                type: 'response.completed',
-              },
-            ]) {
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-            }
-            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-            controller.close();
+                {
+                  content_index: 0,
+                  delta: 'second',
+                  item_id: 'msg_1',
+                  output_index: 0,
+                  sequence_number: 2,
+                  type: 'response.output_text.delta',
+                },
+                {
+                  response: {
+                    id: 'resp_1',
+                    model: 'gpt-4o',
+                    object: 'response',
+                    output: [],
+                    status: 'completed',
+                    usage: {
+                      input_tokens: 5,
+                      output_tokens: 3,
+                    },
+                  },
+                  sequence_number: 3,
+                  type: 'response.completed',
+                },
+              ]) {
+                controller.enqueue(
+                  encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
+                );
+              }
+              controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+              controller.close();
+            },
+          }),
+          {
+            headers: { 'content-type': 'text/event-stream' },
+            status: 200,
           },
-        }),
-        {
-          headers: { 'content-type': 'text/event-stream' },
-          status: 200,
-        },
-      ),
+        ),
     );
     const client = new LLMClient({
       defaultModel: 'gpt-4o',
@@ -2610,7 +2969,11 @@ describe('LLMClient', () => {
 
     await expect(iterator.next()).resolves.toEqual({
       done: false,
-      value: expect.objectContaining({ delta: 'first', type: 'text-delta', version: 2 }),
+      value: expect.objectContaining({
+        delta: 'first',
+        type: 'text-delta',
+        version: 2,
+      }),
     });
 
     stream.cancel(new Error('manual cancel'));
@@ -2647,14 +3010,18 @@ describe('LLMClient', () => {
       usageLogger,
     });
 
-    await expect(client.getUsage({ tenantId: 'tenant-1' })).resolves.toEqual(summary);
+    await expect(client.getUsage({ tenantId: 'tenant-1' })).resolves.toEqual(
+      summary,
+    );
     expect(usageLogger.getUsage).toHaveBeenCalledWith({ tenantId: 'tenant-1' });
   });
 
   it('throws from getUsage() when aggregation is not configured', async () => {
     const client = new LLMClient();
 
-    await expect(client.getUsage()).rejects.toBeInstanceOf(ProviderCapabilityError);
+    await expect(client.getUsage()).rejects.toBeInstanceOf(
+      ProviderCapabilityError,
+    );
   });
 
   it('exports aggregated usage as CSV through the client surface', async () => {
@@ -2724,8 +3091,12 @@ describe('LLMClient', () => {
       usageLogger,
     });
 
-    await expect(client.getSpeechUsage({ tenantId: 'tenant-1' })).resolves.toEqual(summary);
-    expect(usageLogger.getSpeechUsage).toHaveBeenCalledWith({ tenantId: 'tenant-1' });
+    await expect(
+      client.getSpeechUsage({ tenantId: 'tenant-1' }),
+    ).resolves.toEqual(summary);
+    expect(usageLogger.getSpeechUsage).toHaveBeenCalledWith({
+      tenantId: 'tenant-1',
+    });
   });
 
   it('exports aggregated speech usage as CSV through the client surface', async () => {
@@ -2769,39 +3140,43 @@ describe('LLMClient', () => {
   it('OpenAI conversation loop: store:false, no previous_response_id, full history re-sent every turn', async () => {
     const capturedBodies: Record<string, unknown>[] = [];
 
-    const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      capturedBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
-      const turnIndex = capturedBodies.length;
+    const fetchImplementation = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        capturedBodies.push(
+          JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
+        );
+        const turnIndex = capturedBodies.length;
 
-      return new Response(
-        JSON.stringify({
-          id: `resp_${turnIndex}`,
-          model: 'gpt-4o',
-          object: 'response',
-          output: [
-            {
-              content: [
-                {
-                  annotations: [],
-                  text: turnIndex === 1 ? 'First reply' : 'Second reply',
-                  type: 'output_text',
-                },
-              ],
-              id: `msg_${turnIndex}`,
-              role: 'assistant',
-              status: 'completed',
-              type: 'message',
-            },
-          ],
-          status: 'completed',
-          usage: { input_tokens: 10, output_tokens: 5 },
-        }),
-        {
-          headers: { 'content-type': 'application/json' },
-          status: 200,
-        },
-      );
-    });
+        return new Response(
+          JSON.stringify({
+            id: `resp_${turnIndex}`,
+            model: 'gpt-4o',
+            object: 'response',
+            output: [
+              {
+                content: [
+                  {
+                    annotations: [],
+                    text: turnIndex === 1 ? 'First reply' : 'Second reply',
+                    type: 'output_text',
+                  },
+                ],
+                id: `msg_${turnIndex}`,
+                role: 'assistant',
+                status: 'completed',
+                type: 'message',
+              },
+            ],
+            status: 'completed',
+            usage: { input_tokens: 10, output_tokens: 5 },
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+          },
+        );
+      },
+    );
 
     const client = new LLMClient({
       defaultModel: 'gpt-4o',
@@ -2834,7 +3209,9 @@ describe('LLMClient', () => {
     const secondInputMessages = secondInput.filter(
       (item) => (item as { role?: string }).role === 'user',
     );
-    expect(secondInputMessages.length).toBeGreaterThan(firstInputMessages.length);
+    expect(secondInputMessages.length).toBeGreaterThan(
+      firstInputMessages.length,
+    );
 
     const replayedAssistantMessage = secondInput.find(
       (item) => (item as { role?: string }).role === 'assistant',
@@ -3043,10 +3420,16 @@ class MockPool {
     return Promise.resolve();
   }
 
-  async query(text: string, values?: unknown[]): Promise<{ rowCount: number; rows: unknown[] }> {
+  async query(
+    text: string,
+    values?: unknown[],
+  ): Promise<{ rowCount: number; rows: unknown[] }> {
     const normalizedText = text.replace(/\s+/g, ' ').trim();
     this.queries.push({ text: normalizedText, ...(values ? { values } : {}) });
-    if (!/^(INSERT|SELECT)\b/i.test(normalizedText) || this.queuedRows.length === 0) {
+    if (
+      !/^(INSERT|SELECT)\b/i.test(normalizedText) ||
+      this.queuedRows.length === 0
+    ) {
       return {
         rowCount: 0,
         rows: [],

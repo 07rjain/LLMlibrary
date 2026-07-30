@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { LLMClient } from '../src/client.js';
-import { SlidingWindowStrategy, SummarisationStrategy } from '../src/context-manager.js';
+import {
+  SlidingWindowStrategy,
+  SummarisationStrategy,
+} from '../src/context-manager.js';
 import { Conversation } from '../src/conversation.js';
 import {
   BudgetExceededError,
@@ -11,7 +14,10 @@ import {
 import { ModelRouter } from '../src/router.js';
 import { InMemorySessionStore } from '../src/session-store.js';
 
-import type { ConversationClient, ConversationSnapshot } from '../src/conversation.js';
+import type {
+  ConversationClient,
+  ConversationSnapshot,
+} from '../src/conversation.js';
 import type {
   CanonicalMessage,
   CanonicalResponse,
@@ -28,26 +34,38 @@ describe('Conversation', () => {
   it('routes tool calls through an external dispatcher', async () => {
     const dispatcher = vi.fn(async () => ({ answer: 42 }));
     const responses: CanonicalResponse[] = [
-        {
-          content: [],
-          finishReason: 'tool_call',
-          model: 'mock-model',
-          provider: 'mock',
-          raw: {},
-          text: '',
-          toolCalls: [{ args: { value: 7 }, id: 'call-1', name: 'answer' }],
-          usage: { cachedTokens: 0, cost: '$0.00', costUSD: 0, inputTokens: 1, outputTokens: 1 },
+      {
+        content: [],
+        finishReason: 'tool_call',
+        model: 'mock-model',
+        provider: 'mock',
+        raw: {},
+        text: '',
+        toolCalls: [{ args: { value: 7 }, id: 'call-1', name: 'answer' }],
+        usage: {
+          cachedTokens: 0,
+          cost: '$0.00',
+          costUSD: 0,
+          inputTokens: 1,
+          outputTokens: 1,
         },
-        {
-          content: [{ text: 'done', type: 'text' }],
-          finishReason: 'stop',
-          model: 'mock-model',
-          provider: 'mock',
-          raw: {},
-          text: 'done',
-          toolCalls: [],
-          usage: { cachedTokens: 0, cost: '$0.00', costUSD: 0, inputTokens: 1, outputTokens: 1 },
+      },
+      {
+        content: [{ text: 'done', type: 'text' }],
+        finishReason: 'stop',
+        model: 'mock-model',
+        provider: 'mock',
+        raw: {},
+        text: 'done',
+        toolCalls: [],
+        usage: {
+          cachedTokens: 0,
+          cost: '$0.00',
+          costUSD: 0,
+          inputTokens: 1,
+          outputTokens: 1,
         },
+      },
     ];
     const client: ConversationClient = {
       complete: vi.fn(async () => responses.shift() as CanonicalResponse),
@@ -61,7 +79,10 @@ describe('Conversation', () => {
         {
           description: 'Answer',
           name: 'answer',
-          parameters: { properties: { value: { type: 'number' } }, type: 'object' },
+          parameters: {
+            properties: { value: { type: 'number' } },
+            type: 'object',
+          },
         },
       ],
     });
@@ -90,7 +111,13 @@ describe('Conversation', () => {
         raw: {},
         text: '',
         toolCalls: [{ args: { value: 7 }, id: 'call-1', name: 'unregistered' }],
-        usage: { cachedTokens: 0, cost: '$0.00', costUSD: 0, inputTokens: 1, outputTokens: 1 },
+        usage: {
+          cachedTokens: 0,
+          cost: '$0.00',
+          costUSD: 0,
+          inputTokens: 1,
+          outputTokens: 1,
+        },
       },
       {
         content: [{ text: 'done', type: 'text' }],
@@ -100,7 +127,13 @@ describe('Conversation', () => {
         raw: {},
         text: 'done',
         toolCalls: [],
-        usage: { cachedTokens: 0, cost: '$0.00', costUSD: 0, inputTokens: 1, outputTokens: 1 },
+        usage: {
+          cachedTokens: 0,
+          cost: '$0.00',
+          costUSD: 0,
+          inputTokens: 1,
+          outputTokens: 1,
+        },
       },
     ];
     const conversation = new Conversation(
@@ -137,23 +170,29 @@ describe('Conversation', () => {
 
   it('handles minimal request and response paths without optional config', async () => {
     const client: ConversationClient = {
-      complete: vi.fn(async (): Promise<CanonicalResponse> => ({
-        content: [],
-        finishReason: 'stop',
-        model: 'mock-model',
-        provider: 'mock',
-        raw: {},
-        text: '',
-        toolCalls: [],
-        usage: {
-          cachedTokens: 0,
-          cost: '$0.00',
-          costUSD: 0,
-          inputTokens: 1,
-          outputTokens: 0,
-        },
-      })),
-      stream: vi.fn(async function* (): AsyncGenerator<StreamChunk, void, void> {
+      complete: vi.fn(
+        async (): Promise<CanonicalResponse> => ({
+          content: [],
+          finishReason: 'stop',
+          model: 'mock-model',
+          provider: 'mock',
+          raw: {},
+          text: '',
+          toolCalls: [],
+          usage: {
+            cachedTokens: 0,
+            cost: '$0.00',
+            costUSD: 0,
+            inputTokens: 1,
+            outputTokens: 0,
+          },
+        }),
+      ),
+      stream: vi.fn(async function* (): AsyncGenerator<
+        StreamChunk,
+        void,
+        void
+      > {
         yield {
           finishReason: 'stop',
           type: 'done',
@@ -210,25 +249,27 @@ describe('Conversation', () => {
 
   it('propagates responseFormat through requests and snapshots', async () => {
     const client: ConversationClient = {
-      complete: vi.fn(async (): Promise<CanonicalResponse> => ({
-        content: [{ text: '{"answer":"ok"}', type: 'text' }],
-        finishReason: 'stop',
-        model: 'gpt-4o',
-        parsed: { answer: 'ok' },
-        provider: 'openai',
-        raw: {},
-        responseFormat: 'json_schema',
-        structuredOutputStatus: 'parsed',
-        text: '{"answer":"ok"}',
-        toolCalls: [],
-        usage: {
-          cachedTokens: 0,
-          cost: '$0.00',
-          costUSD: 0,
-          inputTokens: 1,
-          outputTokens: 1,
-        },
-      })),
+      complete: vi.fn(
+        async (): Promise<CanonicalResponse> => ({
+          content: [{ text: '{"answer":"ok"}', type: 'text' }],
+          finishReason: 'stop',
+          model: 'gpt-4o',
+          parsed: { answer: 'ok' },
+          provider: 'openai',
+          raw: {},
+          responseFormat: 'json_schema',
+          structuredOutputStatus: 'parsed',
+          text: '{"answer":"ok"}',
+          toolCalls: [],
+          usage: {
+            cachedTokens: 0,
+            cost: '$0.00',
+            costUSD: 0,
+            inputTokens: 1,
+            outputTokens: 1,
+          },
+        }),
+      ),
       stream: vi.fn(),
     };
     const responseFormat: ResponseFormat = {
@@ -269,23 +310,25 @@ describe('Conversation', () => {
       now: () => new Date('2026-04-15T10:00:00.000Z'),
     });
     const client: ConversationClient = {
-      complete: vi.fn(async (): Promise<CanonicalResponse> => ({
-        content: [{ text: 'Hello there', type: 'text' }],
-        finishReason: 'stop',
-        model: 'gpt-4o',
-        provider: 'openai',
-        raw: {},
-        text: 'Hello there',
-        toolCalls: [],
-        usage: {
-          cachedTokens: 2,
-          cost: '$0.01',
-          costUSD: 0.01,
-          inputTokens: 10,
-          outputTokens: 5,
-          reasoningTokens: 3,
-        },
-      })),
+      complete: vi.fn(
+        async (): Promise<CanonicalResponse> => ({
+          content: [{ text: 'Hello there', type: 'text' }],
+          finishReason: 'stop',
+          model: 'gpt-4o',
+          provider: 'openai',
+          raw: {},
+          text: 'Hello there',
+          toolCalls: [],
+          usage: {
+            cachedTokens: 2,
+            cost: '$0.01',
+            costUSD: 0.01,
+            inputTokens: 10,
+            outputTokens: 5,
+            reasoningTokens: 3,
+          },
+        }),
+      ),
       stream: vi.fn(),
     };
     const conversation = new Conversation(client, {
@@ -324,7 +367,11 @@ describe('Conversation', () => {
   it('streams responses and commits state on done', async () => {
     const client: ConversationClient = {
       complete: vi.fn(),
-      stream: vi.fn(async function* (): AsyncGenerator<StreamChunk, void, void> {
+      stream: vi.fn(async function* (): AsyncGenerator<
+        StreamChunk,
+        void,
+        void
+      > {
         yield { delta: 'Hello ', type: 'text-delta' };
         yield { delta: 'world', type: 'text-delta' };
         yield {
@@ -351,9 +398,21 @@ describe('Conversation', () => {
     }
 
     expect(chunks).toEqual([
-      expect.objectContaining({ delta: 'Hello ', type: 'text-delta', version: 2 }),
-      expect.objectContaining({ delta: 'world', type: 'text-delta', version: 2 }),
-      expect.objectContaining({ finishReason: 'stop', type: 'done', version: 2 }),
+      expect.objectContaining({
+        delta: 'Hello ',
+        type: 'text-delta',
+        version: 2,
+      }),
+      expect.objectContaining({
+        delta: 'world',
+        type: 'text-delta',
+        version: 2,
+      }),
+      expect.objectContaining({
+        finishReason: 'stop',
+        type: 'done',
+        version: 2,
+      }),
     ]);
     expect(conversation.history).toEqual([
       { content: 'Hi', role: 'user' },
@@ -365,7 +424,11 @@ describe('Conversation', () => {
   it('streams tool calls into assistant message parts', async () => {
     const client: ConversationClient = {
       complete: vi.fn(),
-      stream: vi.fn(async function* (): AsyncGenerator<StreamChunk, void, void> {
+      stream: vi.fn(async function* (): AsyncGenerator<
+        StreamChunk,
+        void,
+        void
+      > {
         yield { id: 'tool_1', name: 'lookup', type: 'tool-call-start' };
         yield {
           id: 'tool_1',
@@ -431,7 +494,9 @@ describe('Conversation', () => {
         provider: 'openai',
         raw: {},
         text: '',
-        toolCalls: [{ args: { city: 'Berlin' }, id: 'tool_1', name: 'lookup_weather' }],
+        toolCalls: [
+          { args: { city: 'Berlin' }, id: 'tool_1', name: 'lookup_weather' },
+        ],
         usage: usage(10, 2, 0.01),
       })
       .mockResolvedValueOnce({
@@ -553,7 +618,9 @@ describe('Conversation', () => {
         provider: 'openai',
         raw: {},
         text: '',
-        toolCalls: [{ args: { city: 'Berlin' }, id: 'tool_1', name: 'lookup_weather' }],
+        toolCalls: [
+          { args: { city: 'Berlin' }, id: 'tool_1', name: 'lookup_weather' },
+        ],
         usage: usage(10, 2, 0.01),
       })
       .mockResolvedValueOnce({
@@ -574,7 +641,12 @@ describe('Conversation', () => {
       {
         model: 'gpt-4o',
         toolChoice: { name: 'lookup_weather', type: 'tool' },
-        tools: [buildTool('lookup_weather', vi.fn(async () => ({ ok: true })))],
+        tools: [
+          buildTool(
+            'lookup_weather',
+            vi.fn(async () => ({ ok: true })),
+          ),
+        ],
       },
     );
 
@@ -678,7 +750,9 @@ describe('Conversation', () => {
         provider: 'openai',
         raw: {},
         text: '',
-        toolCalls: [{ args: { city: 'Berlin' }, id: 'tool_1', name: 'lookup_weather' }],
+        toolCalls: [
+          { args: { city: 'Berlin' }, id: 'tool_1', name: 'lookup_weather' },
+        ],
         usage: usage(4, 1, 0.01),
       })
       .mockResolvedValueOnce({
@@ -742,7 +816,11 @@ describe('Conversation', () => {
     const execute = vi.fn(async () => ({ forecast: 'Sunny' }));
     const stream = vi
       .fn<ConversationClient['stream']>()
-      .mockImplementationOnce(async function* (): AsyncGenerator<StreamChunk, void, void> {
+      .mockImplementationOnce(async function* (): AsyncGenerator<
+        StreamChunk,
+        void,
+        void
+      > {
         yield { delta: 'Checking ', type: 'text-delta' };
         yield { id: 'tool_1', name: 'lookup_weather', type: 'tool-call-start' };
         yield {
@@ -757,7 +835,11 @@ describe('Conversation', () => {
           usage: usage(6, 2, 0.01),
         };
       })
-      .mockImplementationOnce(async function* (): AsyncGenerator<StreamChunk, void, void> {
+      .mockImplementationOnce(async function* (): AsyncGenerator<
+        StreamChunk,
+        void,
+        void
+      > {
         yield { delta: 'Sunny in Berlin.', type: 'text-delta' };
         yield {
           finishReason: 'stop',
@@ -784,7 +866,11 @@ describe('Conversation', () => {
     }
 
     expect(chunks).toEqual([
-      expect.objectContaining({ delta: 'Checking ', type: 'text-delta', version: 2 }),
+      expect.objectContaining({
+        delta: 'Checking ',
+        type: 'text-delta',
+        version: 2,
+      }),
       expect.objectContaining({
         id: 'tool_1',
         name: 'lookup_weather',
@@ -922,7 +1008,9 @@ describe('Conversation', () => {
                 name: 'validated_tool',
                 result: {
                   error: expect.objectContaining({
-                    message: expect.stringContaining('arguments.count must be a number'),
+                    message: expect.stringContaining(
+                      'arguments.count must be a number',
+                    ),
                   }),
                 },
                 toolCallId: 'tool_1',
@@ -937,7 +1025,9 @@ describe('Conversation', () => {
   });
 
   it('allows invalid tool arguments only in explicit permissive mode', async () => {
-    const execute = vi.fn(async (args: JsonObject) => ({ observed: String(args.count) }));
+    const execute = vi.fn(async (args: JsonObject) => ({
+      observed: String(args.count),
+    }));
     const complete = vi
       .fn<ConversationClient['complete']>()
       .mockResolvedValueOnce({
@@ -1162,7 +1252,11 @@ describe('Conversation', () => {
         text: '',
         toolCalls: [
           { args: { extra: 'blocked' }, id: 'tool_extra', name: 'extra_tool' },
-          { args: { nested: 'not-object' }, id: 'tool_nested', name: 'nested_tool' },
+          {
+            args: { nested: 'not-object' },
+            id: 'tool_nested',
+            name: 'nested_tool',
+          },
           { args: { mode: 'slow' }, id: 'tool_enum', name: 'enum_tool' },
           { args: { items: [1] }, id: 'tool_array', name: 'array_tool' },
         ],
@@ -1281,7 +1375,9 @@ describe('Conversation', () => {
         text: '',
         toolCalls: [
           {
-            args: JSON.parse('{"__proto__":{"polluted":true},"city":"Berlin"}') as JsonObject,
+            args: JSON.parse(
+              '{"__proto__":{"polluted":true},"city":"Berlin"}',
+            ) as JsonObject,
             id: 'tool_proto',
             name: 'lookup_weather',
           },
@@ -1370,7 +1466,9 @@ describe('Conversation', () => {
         provider: 'openai',
         raw: {},
         text: '',
-        toolCalls: [{ args: inheritedArgs, id: 'tool_inherited', name: 'lookup_weather' }],
+        toolCalls: [
+          { args: inheritedArgs, id: 'tool_inherited', name: 'lookup_weather' },
+        ],
         usage: usage(4, 1, 0.01),
       })
       .mockResolvedValueOnce({
@@ -1441,7 +1539,9 @@ describe('Conversation', () => {
         provider: 'openai',
         raw: {},
         text: '',
-        toolCalls: [{ args: { value: 'x' }, id: 'tool_schema', name: 'schema_tool' }],
+        toolCalls: [
+          { args: { value: 'x' }, id: 'tool_schema', name: 'schema_tool' },
+        ],
         usage: usage(4, 1, 0.01),
       })
       .mockResolvedValueOnce({
@@ -1518,7 +1618,9 @@ describe('Conversation', () => {
         provider: 'openai',
         raw: {},
         text: '',
-        toolCalls: [{ args: { city: 'Berlin' }, id: 'tool_1', name: 'lookup_weather' }],
+        toolCalls: [
+          { args: { city: 'Berlin' }, id: 'tool_1', name: 'lookup_weather' },
+        ],
         usage: usage(4, 1, 0.01),
       })
       .mockResolvedValueOnce({
@@ -1569,23 +1671,27 @@ describe('Conversation', () => {
       model: 'gpt-4o',
     });
 
-    await expect(conversation.send('Hi')).rejects.toBeInstanceOf(BudgetExceededError);
+    await expect(conversation.send('Hi')).rejects.toBeInstanceOf(
+      BudgetExceededError,
+    );
     expect(client.complete).not.toHaveBeenCalled();
   });
 
   it('can warn and continue when the conversation budget is exhausted', async () => {
     const onWarning = vi.fn();
     const client: ConversationClient = {
-      complete: vi.fn(async (): Promise<CanonicalResponse> => ({
-        content: [{ text: 'Still allowed.', type: 'text' }],
-        finishReason: 'stop',
-        model: 'gpt-4o',
-        provider: 'openai',
-        raw: {},
-        text: 'Still allowed.',
-        toolCalls: [],
-        usage: usage(4, 1, 0.01),
-      })),
+      complete: vi.fn(
+        async (): Promise<CanonicalResponse> => ({
+          content: [{ text: 'Still allowed.', type: 'text' }],
+          finishReason: 'stop',
+          model: 'gpt-4o',
+          provider: 'openai',
+          raw: {},
+          text: 'Still allowed.',
+          toolCalls: [],
+          usage: usage(4, 1, 0.01),
+        }),
+      ),
       stream: vi.fn(),
     };
     const conversation = new Conversation(client, {
@@ -1634,25 +1740,23 @@ describe('Conversation', () => {
   it('throws MaxToolRoundsError when the model keeps requesting tools', async () => {
     const conversation = new Conversation(
       {
-        complete: vi
-          .fn<ConversationClient['complete']>()
-          .mockResolvedValue({
-            content: [
-              {
-                args: {},
-                id: 'tool_1',
-                name: 'lookup_weather',
-                type: 'tool_call',
-              },
-            ],
-            finishReason: 'tool_call',
-            model: 'gpt-4o',
-            provider: 'openai',
-            raw: {},
-            text: '',
-            toolCalls: [{ args: {}, id: 'tool_1', name: 'lookup_weather' }],
-            usage: usage(4, 1, 0.01),
-          }),
+        complete: vi.fn<ConversationClient['complete']>().mockResolvedValue({
+          content: [
+            {
+              args: {},
+              id: 'tool_1',
+              name: 'lookup_weather',
+              type: 'tool_call',
+            },
+          ],
+          finishReason: 'tool_call',
+          model: 'gpt-4o',
+          provider: 'openai',
+          raw: {},
+          text: '',
+          toolCalls: [{ args: {}, id: 'tool_1', name: 'lookup_weather' }],
+          usage: usage(4, 1, 0.01),
+        }),
         stream: vi.fn(),
       },
       {
@@ -1676,7 +1780,11 @@ describe('Conversation', () => {
     const conversation = new Conversation(
       {
         complete: vi.fn(),
-        stream: vi.fn(async function* (): AsyncGenerator<StreamChunk, void, void> {
+        stream: vi.fn(async function* (): AsyncGenerator<
+          StreamChunk,
+          void,
+          void
+        > {
           yield { delta: 'Partial', type: 'text-delta' };
         }),
       },
@@ -1692,22 +1800,24 @@ describe('Conversation', () => {
 
   it('serialises, restores, and clears while preserving system and totals', async () => {
     const client: ConversationClient = {
-      complete: vi.fn(async (): Promise<CanonicalResponse> => ({
-        content: [{ text: 'Reply', type: 'text' }],
-        finishReason: 'stop',
-        model: 'gpt-4o',
-        provider: 'openai',
-        raw: {},
-        text: 'Reply',
-        toolCalls: [],
-        usage: {
-          cachedTokens: 0,
-          cost: '$0.01',
-          costUSD: 0.01,
-          inputTokens: 8,
-          outputTokens: 3,
-        },
-      })),
+      complete: vi.fn(
+        async (): Promise<CanonicalResponse> => ({
+          content: [{ text: 'Reply', type: 'text' }],
+          finishReason: 'stop',
+          model: 'gpt-4o',
+          provider: 'openai',
+          raw: {},
+          text: 'Reply',
+          toolCalls: [],
+          usage: {
+            cachedTokens: 0,
+            cost: '$0.01',
+            costUSD: 0.01,
+            inputTokens: 8,
+            outputTokens: 3,
+          },
+        }),
+      ),
       stream: vi.fn(),
     };
     const original = new Conversation(client, {
@@ -1888,7 +1998,9 @@ describe('Conversation', () => {
       totalCostUSD: 1,
     });
     expect(restored.serialise().toolValidation).toBeUndefined();
-    expect(restored.history).toEqual([{ content: 'Stored user turn', role: 'user' }]);
+    expect(restored.history).toEqual([
+      { content: 'Stored user turn', role: 'user' },
+    ]);
   });
 
   it('rejects non-finite or excessive tool loop limits', () => {
@@ -1907,50 +2019,72 @@ describe('Conversation', () => {
       updatedAt: '2026-04-15T10:00:00.000Z',
     };
 
-    expect(() => new Conversation(client, { maxToolRounds: Number.POSITIVE_INFINITY })).toThrow(
-      'maxToolRounds must be an integer between 0 and 100.',
-    );
+    expect(
+      () =>
+        new Conversation(client, { maxToolRounds: Number.POSITIVE_INFINITY }),
+    ).toThrow('maxToolRounds must be an integer between 0 and 100.');
     expect(() => new Conversation(client, { maxToolRounds: 101 })).toThrow(
       'maxToolRounds must be an integer between 0 and 100.',
     );
-    expect(() => new Conversation(client, { toolExecutionTimeoutMs: Number.POSITIVE_INFINITY })).toThrow(
+    expect(
+      () =>
+        new Conversation(client, {
+          toolExecutionTimeoutMs: Number.POSITIVE_INFINITY,
+        }),
+    ).toThrow(
       'toolExecutionTimeoutMs must be a finite number between 1 and 300000.',
     );
     expect(() =>
-      Conversation.restore(client, { ...snapshot, maxToolRounds: Number.POSITIVE_INFINITY }),
+      Conversation.restore(client, {
+        ...snapshot,
+        maxToolRounds: Number.POSITIVE_INFINITY,
+      }),
     ).toThrow('maxToolRounds must be an integer between 0 and 100.');
     expect(() =>
-      Conversation.restore(client, { ...snapshot, toolExecutionTimeoutMs: Number.POSITIVE_INFINITY }),
-    ).toThrow('toolExecutionTimeoutMs must be a finite number between 1 and 300000.');
+      Conversation.restore(client, {
+        ...snapshot,
+        toolExecutionTimeoutMs: Number.POSITIVE_INFINITY,
+      }),
+    ).toThrow(
+      'toolExecutionTimeoutMs must be a finite number between 1 and 300000.',
+    );
   });
 
   it('exports markdown transcripts with session metadata and structured parts', async () => {
     const conversation = new Conversation(
       {
-        complete: vi.fn(async (): Promise<CanonicalResponse> => ({
-          content: [
-            { text: 'Looking this up.', type: 'text' },
-            {
-              args: { city: 'Berlin' },
-              id: 'tool_1',
-              name: 'lookup_weather',
-              type: 'tool_call',
+        complete: vi.fn(
+          async (): Promise<CanonicalResponse> => ({
+            content: [
+              { text: 'Looking this up.', type: 'text' },
+              {
+                args: { city: 'Berlin' },
+                id: 'tool_1',
+                name: 'lookup_weather',
+                type: 'tool_call',
+              },
+            ],
+            finishReason: 'tool_call',
+            model: 'gpt-4o',
+            provider: 'openai',
+            raw: {},
+            text: 'Looking this up.',
+            toolCalls: [
+              {
+                args: { city: 'Berlin' },
+                id: 'tool_1',
+                name: 'lookup_weather',
+              },
+            ],
+            usage: {
+              cachedTokens: 0,
+              cost: '$0.01',
+              costUSD: 0.01,
+              inputTokens: 12,
+              outputTokens: 4,
             },
-          ],
-          finishReason: 'tool_call',
-          model: 'gpt-4o',
-          provider: 'openai',
-          raw: {},
-          text: 'Looking this up.',
-          toolCalls: [{ args: { city: 'Berlin' }, id: 'tool_1', name: 'lookup_weather' }],
-          usage: {
-            cachedTokens: 0,
-            cost: '$0.01',
-            costUSD: 0.01,
-            inputTokens: 12,
-            outputTokens: 4,
-          },
-        })),
+          }),
+        ),
         stream: vi.fn(),
       },
       {
@@ -2148,7 +2282,10 @@ describe('Conversation', () => {
           {
             description: 'Look up a city',
             name: 'lookup',
-            parameters: { properties: { city: { type: 'string' } }, type: 'object' },
+            parameters: {
+              properties: { city: { type: 'string' } },
+              type: 'object',
+            },
           },
         ],
       },
@@ -2237,6 +2374,128 @@ describe('Conversation', () => {
     );
   });
 
+  it('isolates custom context-manager mutations before dispatch', async () => {
+    const complete = vi.fn<ConversationClient['complete']>(
+      async (_options) => ({
+        content: [{ text: 'Done.', type: 'text' }],
+        finishReason: 'stop',
+        model: 'mock-model',
+        provider: 'mock',
+        raw: {},
+        text: 'Done.',
+        toolCalls: [],
+        usage: {
+          cachedTokens: 0,
+          cost: '$0.00',
+          costUSD: 0,
+          inputTokens: 1,
+          outputTokens: 1,
+        },
+      }),
+    );
+    const conversation = new Conversation(
+      { complete, stream: vi.fn() },
+      {
+        contextManager: {
+          shouldTrim: vi.fn((messages) => {
+            messages[0]!.content = 'mutated';
+            return false;
+          }),
+          trim: vi.fn(),
+        },
+        messages: [{ content: 'original', role: 'user' }],
+      },
+    );
+
+    await conversation.send('next');
+
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          { content: 'original', role: 'user' },
+          { content: 'next', role: 'user' },
+        ],
+      }),
+    );
+    expect(conversation.history[0]).toEqual({
+      content: 'original',
+      role: 'user',
+    });
+  });
+
+  it('rejects invalid custom context output before callbacks or dispatch', async () => {
+    const complete = vi.fn<ConversationClient['complete']>();
+    const onCompaction = vi.fn();
+    const getter = vi.fn(() => 'bad');
+    const invalidMessage = Object.defineProperty({ role: 'user' }, 'content', {
+      enumerable: true,
+      get: getter,
+    });
+    const conversation = new Conversation(
+      { complete, stream: vi.fn() },
+      {
+        contextManager: {
+          shouldTrim: vi.fn(() => true),
+          trim: vi.fn(() => [invalidMessage] as unknown as CanonicalMessage[]),
+        },
+        messages: [{ content: 'original', role: 'user' }],
+        onCompaction,
+      },
+    );
+
+    await expect(conversation.send('next')).rejects.toMatchObject({
+      details: expect.objectContaining({
+        code: 'invalid_context_manager_output',
+      }),
+      statusCode: 400,
+    });
+    expect(getter).not.toHaveBeenCalled();
+    expect(onCompaction).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+    expect(conversation.history).toEqual([
+      { content: 'original', role: 'user' },
+    ]);
+  });
+
+  it('preserves custom context-manager error identity', async () => {
+    const expected = new Error('context failed');
+    const conversation = new Conversation(
+      { complete: vi.fn(), stream: vi.fn() },
+      {
+        contextManager: {
+          shouldTrim: () => true,
+          trim: () => {
+            throw expected;
+          },
+        },
+      },
+    );
+
+    await expect(conversation.send('next')).rejects.toBe(expected);
+  });
+
+  it('rejects invalid budgets and duplicate tools during construction', () => {
+    const client = { complete: vi.fn(), stream: vi.fn() };
+    expect(
+      () =>
+        new Conversation(client, {
+          budgetUsd: Number.NaN,
+        }),
+    ).toThrow(ProviderCapabilityError);
+
+    const tool: CanonicalTool = {
+      description: 'Lookup',
+      name: 'lookup',
+      parameters: { type: 'object' },
+    };
+    expect(
+      () =>
+        new Conversation(client, {
+          tools: [tool, tool],
+        }),
+    ).toThrow(ProviderCapabilityError);
+  });
+
   it('pins the router-selected initial route for the provider request', async () => {
     const requests: Array<{ model?: string; provider?: string }> = [];
     const client = LLMClient.mock({
@@ -2267,7 +2526,9 @@ describe('Conversation', () => {
         },
       ],
     });
-    const conversation = await client.conversation({ sessionId: 'router-context-route' });
+    const conversation = await client.conversation({
+      sessionId: 'router-context-route',
+    });
 
     await conversation.send('Hello');
 
@@ -2321,30 +2582,32 @@ describe('Conversation', () => {
 
   it('applies a context manager before requests and preserves structured assistant content', async () => {
     const trim = vi.fn((messages: CanonicalMessage[]) => messages.slice(1));
-    const complete = vi.fn(async (): Promise<CanonicalResponse> => ({
-      content: [
-        { text: 'Checking.', type: 'text' },
-        {
-          args: { city: 'Berlin' },
-          id: 'call_1',
-          name: 'lookup',
-          type: 'tool_call',
+    const complete = vi.fn(
+      async (): Promise<CanonicalResponse> => ({
+        content: [
+          { text: 'Checking.', type: 'text' },
+          {
+            args: { city: 'Berlin' },
+            id: 'call_1',
+            name: 'lookup',
+            type: 'tool_call',
+          },
+        ],
+        finishReason: 'tool_call',
+        model: 'gpt-4o',
+        provider: 'openai',
+        raw: {},
+        text: 'Checking.',
+        toolCalls: [{ args: { city: 'Berlin' }, id: 'call_1', name: 'lookup' }],
+        usage: {
+          cachedTokens: 1,
+          cost: '$0.01',
+          costUSD: 0.01,
+          inputTokens: 10,
+          outputTokens: 4,
         },
-      ],
-      finishReason: 'tool_call',
-      model: 'gpt-4o',
-      provider: 'openai',
-      raw: {},
-      text: 'Checking.',
-      toolCalls: [{ args: { city: 'Berlin' }, id: 'call_1', name: 'lookup' }],
-      usage: {
-        cachedTokens: 1,
-        cost: '$0.01',
-        costUSD: 0.01,
-        inputTokens: 10,
-        outputTokens: 4,
-      },
-    }));
+      }),
+    );
     const conversation = new Conversation(
       {
         complete,
@@ -2421,22 +2684,24 @@ describe('Conversation', () => {
   });
 
   it('awaits asynchronous context managers before issuing provider calls', async () => {
-    const complete = vi.fn(async (): Promise<CanonicalResponse> => ({
-      content: [{ text: 'Trimmed.', type: 'text' }],
-      finishReason: 'stop',
-      model: 'gpt-4o',
-      provider: 'openai',
-      raw: {},
-      text: 'Trimmed.',
-      toolCalls: [],
-      usage: {
-        cachedTokens: 0,
-        cost: '$0.00',
-        costUSD: 0,
-        inputTokens: 4,
-        outputTokens: 1,
-      },
-    }));
+    const complete = vi.fn(
+      async (): Promise<CanonicalResponse> => ({
+        content: [{ text: 'Trimmed.', type: 'text' }],
+        finishReason: 'stop',
+        model: 'gpt-4o',
+        provider: 'openai',
+        raw: {},
+        text: 'Trimmed.',
+        toolCalls: [],
+        usage: {
+          cachedTokens: 0,
+          cost: '$0.00',
+          costUSD: 0,
+          inputTokens: 4,
+          outputTokens: 1,
+        },
+      }),
+    );
     const conversation = new Conversation(
       {
         complete,
@@ -2445,7 +2710,9 @@ describe('Conversation', () => {
       {
         contextManager: {
           shouldTrim: vi.fn(async () => true),
-          trim: vi.fn(async (messages: CanonicalMessage[]) => messages.slice(1)),
+          trim: vi.fn(async (messages: CanonicalMessage[]) =>
+            messages.slice(1),
+          ),
         },
         messages: [
           { content: 'Oldest', role: 'user' },
@@ -2473,9 +2740,17 @@ describe('Conversation', () => {
     }));
     const stream = vi
       .fn<ConversationClient['stream']>()
-      .mockImplementationOnce(async function* (): AsyncGenerator<StreamChunk, void, void> {
+      .mockImplementationOnce(async function* (): AsyncGenerator<
+        StreamChunk,
+        void,
+        void
+      > {
         yield { error: new Error('intermediate warning'), type: 'error' };
-        yield { argsDelta: '{"value":"Ber', id: 'tool_1', type: 'tool-call-delta' };
+        yield {
+          argsDelta: '{"value":"Ber',
+          id: 'tool_1',
+          type: 'tool-call-delta',
+        };
         yield {
           id: 'tool_1',
           name: 'lookup_weather',
@@ -2488,7 +2763,11 @@ describe('Conversation', () => {
           usage: usage(4, 1, 0.01),
         };
       })
-      .mockImplementationOnce(async function* (): AsyncGenerator<StreamChunk, void, void> {
+      .mockImplementationOnce(async function* (): AsyncGenerator<
+        StreamChunk,
+        void,
+        void
+      > {
         yield { delta: 'Done.', type: 'text-delta' };
         yield {
           finishReason: 'stop',
@@ -2531,12 +2810,14 @@ describe('Conversation', () => {
         type: 'error',
       }),
     );
-    expect(chunks[1]).toEqual(expect.objectContaining({
-      argsDelta: '{"value":"Ber',
-      id: 'tool_1',
-      type: 'tool-call-delta',
-      version: 2,
-    }));
+    expect(chunks[1]).toEqual(
+      expect.objectContaining({
+        argsDelta: '{"value":"Ber',
+        id: 'tool_1',
+        type: 'tool-call-delta',
+        version: 2,
+      }),
+    );
     expect(execute).toHaveBeenCalledWith(
       { result: 'Berlin' },
       expect.objectContaining({
@@ -2619,7 +2900,10 @@ describe('Conversation', () => {
             name: 'missing_tool',
             parameters: { type: 'object' },
           },
-          buildTool('lookup_weather', vi.fn(async () => ({ ok: true }))),
+          buildTool(
+            'lookup_weather',
+            vi.fn(async () => ({ ok: true })),
+          ),
         ],
       },
     );
@@ -2637,7 +2921,8 @@ describe('Conversation', () => {
                 name: 'missing_tool',
                 result: {
                   error: {
-                    message: 'No executable tool registered for "missing_tool".',
+                    message:
+                      'No executable tool registered for "missing_tool".',
                     name: 'Error',
                   },
                 },
@@ -2745,14 +3030,35 @@ describe('Conversation stream event contract', () => {
     };
     const stream = vi
       .fn<ConversationClient['stream']>()
-      .mockImplementationOnce(async function* (): AsyncGenerator<StreamChunk, void, void> {
-        yield { model: 'resolved-model', provider: 'mock', type: 'response-start' };
+      .mockImplementationOnce(async function* (): AsyncGenerator<
+        StreamChunk,
+        void,
+        void
+      > {
+        yield {
+          model: 'resolved-model',
+          provider: 'mock',
+          type: 'response-start',
+        };
         yield { id: 'call-1', name: 'lookup', type: 'tool-call-start' };
-        yield { id: 'call-1', name: 'lookup', result: { city: 'Berlin' }, type: 'tool-call-result' };
+        yield {
+          id: 'call-1',
+          name: 'lookup',
+          result: { city: 'Berlin' },
+          type: 'tool-call-result',
+        };
         yield { finishReason: 'tool_call', type: 'done', usage };
       })
-      .mockImplementationOnce(async function* (): AsyncGenerator<StreamChunk, void, void> {
-        yield { model: 'resolved-model', provider: 'mock', type: 'response-start' };
+      .mockImplementationOnce(async function* (): AsyncGenerator<
+        StreamChunk,
+        void,
+        void
+      > {
+        yield {
+          model: 'resolved-model',
+          provider: 'mock',
+          type: 'response-start',
+        };
         yield { delta: 'Done.', type: 'text-delta' };
         yield { finishReason: 'stop', type: 'done', usage };
       });
@@ -2787,7 +3093,10 @@ describe('Conversation stream event contract', () => {
           {
             description: 'Look up a city',
             name: 'lookup',
-            parameters: { properties: { city: { type: 'string' } }, type: 'object' },
+            parameters: {
+              properties: { city: { type: 'string' } },
+              type: 'object',
+            },
           },
         ],
       },
@@ -2846,7 +3155,9 @@ describe('Conversation stream event contract', () => {
         provider: 'mock',
       }),
     );
-    expect(chunks.at(-1)).toEqual(expect.objectContaining({ finishReason: 'stop', type: 'done' }));
+    expect(chunks.at(-1)).toEqual(
+      expect.objectContaining({ finishReason: 'stop', type: 'done' }),
+    );
   });
 
   it('keeps v2 metadata monotonic across automatic tool-loop rounds', async () => {
@@ -2859,7 +3170,11 @@ describe('Conversation stream event contract', () => {
     };
     const stream = vi
       .fn<ConversationClient['stream']>()
-      .mockImplementationOnce(async function* (): AsyncGenerator<StreamChunk, void, void> {
+      .mockImplementationOnce(async function* (): AsyncGenerator<
+        StreamChunk,
+        void,
+        void
+      > {
         yield {
           model: 'mock-model',
           provider: 'mock',
@@ -2894,7 +3209,11 @@ describe('Conversation stream event contract', () => {
           version: 2,
         };
       })
-      .mockImplementationOnce(async function* (): AsyncGenerator<StreamChunk, void, void> {
+      .mockImplementationOnce(async function* (): AsyncGenerator<
+        StreamChunk,
+        void,
+        void
+      > {
         yield {
           model: 'mock-model',
           provider: 'mock',
@@ -2950,8 +3269,12 @@ describe('Conversation stream event contract', () => {
       chunks.map((_, index) => index + 1),
     );
     expect(chunks.every((chunk) => chunk.version === 2)).toBe(true);
-    expect(chunks.every((chunk) => chunk.requestId === 'conversation-request')).toBe(true);
-    expect(chunks.every((chunk) => typeof chunk.timestamp === 'string')).toBe(true);
+    expect(
+      chunks.every((chunk) => chunk.requestId === 'conversation-request'),
+    ).toBe(true);
+    expect(chunks.every((chunk) => typeof chunk.timestamp === 'string')).toBe(
+      true,
+    );
     expect(chunks.filter((chunk) => chunk.type === 'done')).toHaveLength(1);
     expect(chunks.at(-1)).toEqual(
       expect.objectContaining({
@@ -2981,7 +3304,9 @@ describe('SlidingWindowStrategy', () => {
 
     for (const option of ['maxMessages', 'maxTokens'] as const) {
       for (const value of valid) {
-        expect(() => new SlidingWindowStrategy({ [option]: value })).not.toThrow();
+        expect(
+          () => new SlidingWindowStrategy({ [option]: value }),
+        ).not.toThrow();
       }
       for (const value of invalid) {
         expect(() => new SlidingWindowStrategy({ [option]: value })).toThrow(
@@ -2993,7 +3318,9 @@ describe('SlidingWindowStrategy', () => {
           () =>
             new SlidingWindowStrategy({
               [option]: value,
-            } as unknown as ConstructorParameters<typeof SlidingWindowStrategy>[0]),
+            } as unknown as ConstructorParameters<
+              typeof SlidingWindowStrategy
+            >[0]),
         ).toThrow(ProviderCapabilityError);
       }
     }
@@ -3042,7 +3369,9 @@ describe('SlidingWindowStrategy', () => {
       expect(() => strategy.shouldTrim(messages, {})).toThrow(
         ProviderCapabilityError,
       );
-      expect(() => strategy.trim(messages, {})).toThrow(ProviderCapabilityError);
+      expect(() => strategy.trim(messages, {})).toThrow(
+        ProviderCapabilityError,
+      );
     }
 
     for (const estimatedTokens of [0, 0.5]) {
@@ -3140,7 +3469,12 @@ describe('SlidingWindowStrategy', () => {
       { content: 'Old user', role: 'user' },
       {
         content: [
-          { args: { city: 'Paris' }, id: 'call-1', name: 'weather', type: 'tool_call' },
+          {
+            args: { city: 'Paris' },
+            id: 'call-1',
+            name: 'weather',
+            type: 'tool_call',
+          },
         ],
         role: 'assistant',
       },
@@ -3220,7 +3554,9 @@ describe('SlidingWindowStrategy', () => {
   it('returns false from shouldTrim when no limits are configured', () => {
     const strategy = new SlidingWindowStrategy();
 
-    expect(strategy.shouldTrim([{ content: 'Hello', role: 'user' }], {})).toBe(false);
+    expect(strategy.shouldTrim([{ content: 'Hello', role: 'user' }], {})).toBe(
+      false,
+    );
   });
 });
 
@@ -3298,7 +3634,12 @@ describe('SummarisationStrategy', () => {
       { content: 'Old user', role: 'user' },
       {
         content: [
-          { args: { city: 'Paris' }, id: 'call-1', name: 'weather', type: 'tool_call' },
+          {
+            args: { city: 'Paris' },
+            id: 'call-1',
+            name: 'weather',
+            type: 'tool_call',
+          },
         ],
         role: 'assistant',
       },
@@ -3411,7 +3752,10 @@ describe('SummarisationStrategy', () => {
 
 describe('InMemorySessionStore', () => {
   it('stores, lists, and deletes tenant-scoped records', async () => {
-    const store = new InMemorySessionStore<{ messages: unknown[]; totalCostUSD: number }>({
+    const store = new InMemorySessionStore<{
+      messages: unknown[];
+      totalCostUSD: number;
+    }>({
       now: () => new Date('2026-04-15T12:00:00.000Z'),
     });
 
@@ -3439,7 +3783,10 @@ describe('InMemorySessionStore', () => {
   });
 
   it('returns null for missing records and preserves existing metadata on update', async () => {
-    const store = new InMemorySessionStore<{ messages: unknown[]; totalCostUSD: number }>({
+    const store = new InMemorySessionStore<{
+      messages: unknown[];
+      totalCostUSD: number;
+    }>({
       now: () => new Date('2026-04-15T13:00:00.000Z'),
     });
 

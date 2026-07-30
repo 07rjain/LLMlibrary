@@ -11,6 +11,13 @@ Updated: 2026-04-25
 - `Conversation` totals and `UsageLogger` aggregates accumulate those estimated USD values, not provider billing exports.
 - `Conversation.totals`, Session API cost views, and `client.getUsage()` include reasoning-token totals when available.
 - Per-call `budgetUsd` preflight estimates include explicit Gemini `providerOptions.google.thinking.budgetTokens` as separately billable reasoning tokens. Provider-selected automatic thinking remains an estimate until the provider returns final usage.
+- Every `budgetUsd` boundary accepts finite non-negative numbers, including
+  fractional and very small USD limits. Negative values, numeric strings,
+  `NaN`, and infinities fail before routing, warnings, mock queue consumption,
+  provider dispatch, or logging.
+- `formatCost()` accepts finite non-negative numbers only. Use numeric
+  `costUSD` values for arithmetic and call `formatCost()` only at display
+  boundaries.
 - When provider pricing is tiered by prompt size, execution mode, or preview/stable status, the checked-in registry stores one explicit baseline price per model. Those cases should be treated as routing-grade estimates, not invoice-grade pricing.
 
 ## Token Counting

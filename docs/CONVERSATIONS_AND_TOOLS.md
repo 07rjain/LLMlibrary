@@ -24,7 +24,9 @@ const conversation = await client.conversation({
   system: 'You are concise, helpful, and operational.',
 });
 
-const response = await conversation.send('Summarise the issue in one paragraph.');
+const response = await conversation.send(
+  'Summarise the issue in one paragraph.',
+);
 
 console.log(response.text);
 console.log(conversation.id);
@@ -133,6 +135,13 @@ const response = await conversation.send('What is the weather in Berlin?');
 console.log(response.text);
 ```
 
+`defineTool()` remains identity-preserving for TypeScript inference.
+Definitions are validated when they reach an execution or provider-translation
+boundary. Names must match `[A-Za-z0-9_-]{1,64}`, descriptions must be
+non-empty, and `parameters` must be an accessor-free, acyclic JSON-safe schema
+whose root type is `object`. Duplicate names are rejected exactly and
+case-sensitively before routing or dispatch.
+
 ### How Tool Execution Works
 
 When the model returns a tool call:
@@ -198,6 +207,13 @@ const conversation = await client.conversation({
 
 This keeps the most recent messages inside a bounded window.
 
+Custom context managers receive isolated message snapshots. A mutation inside
+`shouldTrim()` is discarded, and `trim()` output is validated and cloned as
+dense canonical messages before compaction callbacks, provider dispatch, or
+session persistence. Invalid output fails with `ProviderCapabilityError`
+status `400`; an exception thrown by the custom manager itself is propagated
+unchanged.
+
 ### Summarisation
 
 ```ts
@@ -230,6 +246,10 @@ Use this when you need very long-lived sessions but still want the model to reta
 ## Budget Controls
 
 Conversations can enforce a spend cap with `budgetUsd`.
+
+The cap must be a finite non-negative number. Fractional and very small USD
+values are valid; negative values, numeric strings, `NaN`, and infinities fail
+before routing or warning callbacks.
 
 ```ts
 const conversation = await client.conversation({

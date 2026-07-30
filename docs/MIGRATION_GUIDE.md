@@ -115,3 +115,28 @@ await conversation.send('What is the weather in Berlin?');
 - Replace ad hoc token logging with `UsageLogger` implementations.
 - Use `PostgresUsageLogger` when you need queryable aggregates through `client.getUsage()`.
 - Treat all cost values as estimates based on the checked-in model registry rather than provider invoices.
+
+## Fail-Closed Input Validation
+
+Recent releases no longer silently clamp or forward several invalid values:
+
+- explicit `chunkText()` sizes must be positive safe integers and overlap must
+  be smaller than the chunk size
+- tool names use the portable `[A-Za-z0-9_-]{1,64}` grammar and exact duplicate
+  names are rejected
+- OpenAI cache retention is `in_memory` or `24h`; Anthropic cache TTL is `5m`
+  or `1h` with required `type: 'ephemeral'`
+- TTS and transcription inputs now enforce documented formats, ranges, source
+  exclusivity, and non-empty payloads
+- budgets, duration estimates, and display costs reject negative or non-finite
+  values while continuing to accept fractional values
+
+These failures use `ProviderCapabilityError` with HTTP-style status `400` and
+sanitized `details.code`, `details.option`, and `details.constraint` fields.
+Validation happens before routing, mock queue consumption, provider fetches,
+callbacks, or persisted conversation mutation.
+
+Retrieval formatting now counts all omitted original results, marks any
+omission as truncation, never reports an estimate above `maxTokens`, and wraps
+each used block in explicit untrusted-content delimiters. Score descriptions
+use uncalibrated rank/display terminology.

@@ -291,6 +291,20 @@ describe('Gemini adapter', () => {
     });
   });
 
+  it('rejects invalid and duplicate portable tool definitions', () => {
+    const valid = {
+      description: 'Lookup weather',
+      name: 'weather_lookup',
+      parameters: { type: 'object' as const },
+    };
+    expect(() =>
+      translateGeminiTools([{ ...valid, name: 'weather.lookup' }]),
+    ).toThrow(ProviderCapabilityError);
+    expect(() => translateGeminiTools([valid, valid])).toThrow(
+      ProviderCapabilityError,
+    );
+  });
+
   it('strips JSON Schema fields unsupported by Gemini function declarations', () => {
     expect(
       translateGeminiTools([
@@ -526,25 +540,28 @@ describe('Gemini adapter', () => {
     ['mixed empty batch', ['valid', '']],
     ['mixed null batch', ['valid', null]],
     ['malformed part', [{ type: 'text' }]],
-  ])('rejects invalid direct embedding input before fetch: %s', async (_label, input) => {
-    const fetchImplementation = vi.fn();
-    const adapter = new GeminiAdapter({
-      apiKey: 'gemini-key',
-      fetchImplementation,
-    });
+  ])(
+    'rejects invalid direct embedding input before fetch: %s',
+    async (_label, input) => {
+      const fetchImplementation = vi.fn();
+      const adapter = new GeminiAdapter({
+        apiKey: 'gemini-key',
+        fetchImplementation,
+      });
 
-    await expect(
-      adapter.embed({
-        input,
-        model: 'gemini-embedding-2',
-      } as never),
-    ).rejects.toMatchObject({
-      details: { option: 'input' },
-      name: 'ProviderCapabilityError',
-      statusCode: 400,
-    });
-    expect(fetchImplementation).not.toHaveBeenCalled();
-  });
+      await expect(
+        adapter.embed({
+          input,
+          model: 'gemini-embedding-2',
+        } as never),
+      ).rejects.toMatchObject({
+        details: { option: 'input' },
+        name: 'ProviderCapabilityError',
+        statusCode: 400,
+      });
+      expect(fetchImplementation).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([127, 3073, 0, -1, 1.5, Number.NaN, Infinity, -Infinity])(
     'rejects direct embedding dimensions %s before fetch',
@@ -743,8 +760,16 @@ describe('Gemini adapter', () => {
       messages: [
         {
           content: [
-            { mediaType: 'audio/wav', type: 'audio', url: 'https://example.com/audio.wav' },
-            { data: 'pdf-data', mediaType: 'application/pdf', type: 'document' },
+            {
+              mediaType: 'audio/wav',
+              type: 'audio',
+              url: 'https://example.com/audio.wav',
+            },
+            {
+              data: 'pdf-data',
+              mediaType: 'application/pdf',
+              type: 'document',
+            },
             { type: 'image_url', url: 'https://example.com/cat.jpg' },
           ],
           role: 'user',
@@ -1074,29 +1099,30 @@ describe('Gemini adapter', () => {
 
   it('performs a complete Gemini request with auth headers', async () => {
     const signal = new AbortController().signal;
-    const fetchImplementation = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          candidates: [
-            {
-              content: {
-                parts: [{ text: 'Hello there' }],
-                role: 'model',
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [{ text: 'Hello there' }],
+                  role: 'model',
+                },
+                finishReason: 'STOP',
+                index: 0,
               },
-              finishReason: 'STOP',
-              index: 0,
+            ],
+            usageMetadata: {
+              candidatesTokenCount: 10,
+              promptTokenCount: 20,
             },
-          ],
-          usageMetadata: {
-            candidatesTokenCount: 10,
-            promptTokenCount: 20,
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
           },
-        }),
-        {
-          headers: { 'content-type': 'application/json' },
-          status: 200,
-        },
-      ),
+        ),
     );
     const adapter = new GeminiAdapter({
       apiKey: 'gemini-key',
@@ -1116,7 +1142,9 @@ describe('Gemini adapter', () => {
     const headers = request[1].headers as Record<string, string>;
 
     expect(result.text).toBe('Hello there');
-    expect(request[0]).toContain('/v1beta/models/gemini-2.5-flash:generateContent');
+    expect(request[0]).toContain(
+      '/v1beta/models/gemini-2.5-flash:generateContent',
+    );
     expect(headers['x-goog-api-key']).toBe('gemini-key');
     expect(request[1].signal).toBe(signal);
   });
@@ -1124,47 +1152,48 @@ describe('Gemini adapter', () => {
   it('streams text chunks and done events', async () => {
     const adapter = new GeminiAdapter({
       apiKey: 'gemini-key',
-      fetchImplementation: vi.fn(async () =>
-        new Response(
-          makeSSEStream([
-            {
-              candidates: [
-                {
-                  content: {
-                    parts: [{ text: 'Hello ' }],
-                    role: 'model',
+      fetchImplementation: vi.fn(
+        async () =>
+          new Response(
+            makeSSEStream([
+              {
+                candidates: [
+                  {
+                    content: {
+                      parts: [{ text: 'Hello ' }],
+                      role: 'model',
+                    },
+                    finishReason: null,
+                    index: 0,
                   },
-                  finishReason: null,
-                  index: 0,
+                ],
+                usageMetadata: {
+                  candidatesTokenCount: 3,
+                  promptTokenCount: 20,
                 },
-              ],
-              usageMetadata: {
-                candidatesTokenCount: 3,
-                promptTokenCount: 20,
               },
-            },
-            {
-              candidates: [
-                {
-                  content: {
-                    parts: [{ text: 'world' }],
-                    role: 'model',
+              {
+                candidates: [
+                  {
+                    content: {
+                      parts: [{ text: 'world' }],
+                      role: 'model',
+                    },
+                    finishReason: 'STOP',
+                    index: 0,
                   },
-                  finishReason: 'STOP',
-                  index: 0,
+                ],
+                usageMetadata: {
+                  candidatesTokenCount: 12,
+                  promptTokenCount: 20,
                 },
-              ],
-              usageMetadata: {
-                candidatesTokenCount: 12,
-                promptTokenCount: 20,
               },
+            ]),
+            {
+              headers: { 'content-type': 'text/event-stream' },
+              status: 200,
             },
-          ]),
-          {
-            headers: { 'content-type': 'text/event-stream' },
-            status: 200,
-          },
-        ),
+          ),
       ),
     });
 
@@ -1190,38 +1219,39 @@ describe('Gemini adapter', () => {
   it('streams tool calls from complete functionCall chunks', async () => {
     const adapter = new GeminiAdapter({
       apiKey: 'gemini-key',
-      fetchImplementation: vi.fn(async () =>
-        new Response(
-          makeSSEStream([
-            {
-              candidates: [
-                {
-                  content: {
-                    parts: [
-                      {
-                        functionCall: {
-                          args: { city: 'Berlin' },
-                          name: 'weather_lookup',
+      fetchImplementation: vi.fn(
+        async () =>
+          new Response(
+            makeSSEStream([
+              {
+                candidates: [
+                  {
+                    content: {
+                      parts: [
+                        {
+                          functionCall: {
+                            args: { city: 'Berlin' },
+                            name: 'weather_lookup',
+                          },
                         },
-                      },
-                    ],
-                    role: 'model',
+                      ],
+                      role: 'model',
+                    },
+                    finishReason: 'STOP',
+                    index: 0,
                   },
-                  finishReason: 'STOP',
-                  index: 0,
+                ],
+                usageMetadata: {
+                  candidatesTokenCount: 8,
+                  promptTokenCount: 20,
                 },
-              ],
-              usageMetadata: {
-                candidatesTokenCount: 8,
-                promptTokenCount: 20,
               },
+            ]),
+            {
+              headers: { 'content-type': 'text/event-stream' },
+              status: 200,
             },
-          ]),
-          {
-            headers: { 'content-type': 'text/event-stream' },
-            status: 200,
-          },
-        ),
+          ),
       ),
     });
 
@@ -1269,62 +1299,63 @@ describe('Gemini adapter', () => {
   it('deduplicates repeated streamed functionCall chunks and preserves blocked finish state', async () => {
     const adapter = new GeminiAdapter({
       apiKey: 'gemini-key',
-      fetchImplementation: vi.fn(async () =>
-        new Response(
-          makeSSEStream([
-            {
-              promptFeedback: {
-                blockReason: 'SAFETY',
-              },
-            },
-            {
-              candidates: [
-                {
-                  content: {
-                    parts: [
-                      {
-                        functionCall: {
-                          args: { city: 'Berlin' },
-                          name: 'weather_lookup',
-                        },
-                      },
-                    ],
-                    role: 'model',
-                  },
-                  finishReason: null,
-                  index: 0,
+      fetchImplementation: vi.fn(
+        async () =>
+          new Response(
+            makeSSEStream([
+              {
+                promptFeedback: {
+                  blockReason: 'SAFETY',
                 },
-              ],
-            },
-            {
-              candidates: [
-                {
-                  content: {
-                    parts: [
-                      {
-                        functionCall: {
-                          args: { city: 'Berlin' },
-                          name: 'weather_lookup',
-                        },
-                      },
-                    ],
-                    role: 'model',
-                  },
-                  finishReason: 'STOP',
-                  index: 0,
-                },
-              ],
-              usageMetadata: {
-                candidatesTokenCount: 8,
-                promptTokenCount: 20,
               },
+              {
+                candidates: [
+                  {
+                    content: {
+                      parts: [
+                        {
+                          functionCall: {
+                            args: { city: 'Berlin' },
+                            name: 'weather_lookup',
+                          },
+                        },
+                      ],
+                      role: 'model',
+                    },
+                    finishReason: null,
+                    index: 0,
+                  },
+                ],
+              },
+              {
+                candidates: [
+                  {
+                    content: {
+                      parts: [
+                        {
+                          functionCall: {
+                            args: { city: 'Berlin' },
+                            name: 'weather_lookup',
+                          },
+                        },
+                      ],
+                      role: 'model',
+                    },
+                    finishReason: 'STOP',
+                    index: 0,
+                  },
+                ],
+                usageMetadata: {
+                  candidatesTokenCount: 8,
+                  promptTokenCount: 20,
+                },
+              },
+            ]),
+            {
+              headers: { 'content-type': 'text/event-stream' },
+              status: 200,
             },
-          ]),
-          {
-            headers: { 'content-type': 'text/event-stream' },
-            status: 200,
-          },
-        ),
+          ),
       ),
     });
 
@@ -1374,7 +1405,9 @@ describe('Gemini adapter', () => {
       translateGeminiRequest({
         messages: [
           {
-            content: [{ type: 'image_url', url: 'https://example.com/image.png' }],
+            content: [
+              { type: 'image_url', url: 'https://example.com/image.png' },
+            ],
             role: 'system',
           },
         ],
@@ -1457,7 +1490,9 @@ describe('Gemini adapter', () => {
       adapter.complete({
         messages: [
           {
-            content: [{ type: 'image_url', url: 'https://example.com/image.png' }],
+            content: [
+              { type: 'image_url', url: 'https://example.com/image.png' },
+            ],
             role: 'user',
           },
         ],
@@ -1480,10 +1515,12 @@ describe('Gemini adapter', () => {
     ).rejects.toBeInstanceOf(ProviderCapabilityError);
 
     await expect(
-      adapter.stream({
-        messages: [{ content: 'Hello', role: 'user' }],
-        model: 'mock-gemini-no-capabilities',
-      }).next(),
+      adapter
+        .stream({
+          messages: [{ content: 'Hello', role: 'user' }],
+          model: 'mock-gemini-no-capabilities',
+        })
+        .next(),
     ).rejects.toBeInstanceOf(ProviderCapabilityError);
 
     const streamAdapter = new GeminiAdapter({
@@ -1494,10 +1531,12 @@ describe('Gemini adapter', () => {
     });
 
     await expect(
-      streamAdapter.stream({
-        messages: [{ content: 'Hello', role: 'user' }],
-        model: 'gemini-2.5-flash',
-      }).next(),
+      streamAdapter
+        .stream({
+          messages: [{ content: 'Hello', role: 'user' }],
+          model: 'gemini-2.5-flash',
+        })
+        .next(),
     ).rejects.toBeInstanceOf(ProviderError);
 
     expect(fetchImplementation).not.toHaveBeenCalled();
@@ -1580,7 +1619,10 @@ describe('Gemini adapter', () => {
       ttl: '600s',
     });
     const fetched = await adapter.getCache('cache_1');
-    const listed = await adapter.listCaches({ pageSize: 10, pageToken: 'cursor-1' });
+    const listed = await adapter.listCaches({
+      pageSize: 10,
+      pageToken: 'cursor-1',
+    });
     const updated = await adapter.updateCache('cache_1', {
       expireTime: '2026-04-21T12:00:00Z',
     });
@@ -1591,11 +1633,26 @@ describe('Gemini adapter', () => {
     expect(listed.nextPageToken).toBe('next-token');
     expect(updated.expireTime).toBe('2026-04-21T12:00:00Z');
 
-    const createRequest = fetchImplementation.mock.calls[0] as unknown as [string, RequestInit];
-    const getRequest = fetchImplementation.mock.calls[1] as unknown as [string, RequestInit];
-    const listRequest = fetchImplementation.mock.calls[2] as unknown as [string, RequestInit];
-    const updateRequest = fetchImplementation.mock.calls[3] as unknown as [string, RequestInit];
-    const deleteRequest = fetchImplementation.mock.calls[4] as unknown as [string, RequestInit];
+    const createRequest = fetchImplementation.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    const getRequest = fetchImplementation.mock.calls[1] as unknown as [
+      string,
+      RequestInit,
+    ];
+    const listRequest = fetchImplementation.mock.calls[2] as unknown as [
+      string,
+      RequestInit,
+    ];
+    const updateRequest = fetchImplementation.mock.calls[3] as unknown as [
+      string,
+      RequestInit,
+    ];
+    const deleteRequest = fetchImplementation.mock.calls[4] as unknown as [
+      string,
+      RequestInit,
+    ];
 
     expect(createRequest[0]).toContain('/v1beta/cachedContents');
     expect(JSON.parse(String(createRequest[1].body))).toMatchObject({
@@ -1603,7 +1660,9 @@ describe('Gemini adapter', () => {
       ttl: '600s',
     });
     expect(getRequest[0]).toContain('/v1beta/cachedContents/cache_1');
-    expect(listRequest[0]).toContain('/v1beta/cachedContents?pageSize=10&pageToken=cursor-1');
+    expect(listRequest[0]).toContain(
+      '/v1beta/cachedContents?pageSize=10&pageToken=cursor-1',
+    );
     expect(updateRequest[0]).toContain(
       '/v1beta/cachedContents/cache_1?updateMask=expireTime',
     );
@@ -1630,11 +1689,15 @@ describe('Gemini adapter', () => {
     ];
 
     for (const name of malicious) {
-      await expect(adapter.getCache(name)).rejects.toThrow(/Invalid Gemini cache name/);
+      await expect(adapter.getCache(name)).rejects.toThrow(
+        /Invalid Gemini cache name/,
+      );
       await expect(
         adapter.updateCache(name, { expireTime: '2026-04-21T12:00:00Z' }),
       ).rejects.toThrow(/Invalid Gemini cache name/);
-      await expect(adapter.deleteCache(name)).rejects.toThrow(/Invalid Gemini cache name/);
+      await expect(adapter.deleteCache(name)).rejects.toThrow(
+        /Invalid Gemini cache name/,
+      );
     }
 
     // No network call should ever be attempted for an invalid name.
@@ -1642,14 +1705,22 @@ describe('Gemini adapter', () => {
   });
 
   it('accepts valid cache names with or without the resource prefix', async () => {
-    const fetchImplementation = vi.fn<() => Promise<Response>>().mockImplementation(
-      async () =>
-        new Response(
-          JSON.stringify({ model: 'models/gemini-2.5-flash', name: 'cachedContents/cache_1' }),
-          { headers: { 'content-type': 'application/json' }, status: 200 },
-        ),
-    );
-    const adapter = new GeminiAdapter({ apiKey: 'gemini-key', fetchImplementation });
+    const fetchImplementation = vi
+      .fn<() => Promise<Response>>()
+      .mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({
+              model: 'models/gemini-2.5-flash',
+              name: 'cachedContents/cache_1',
+            }),
+            { headers: { 'content-type': 'application/json' }, status: 200 },
+          ),
+      );
+    const adapter = new GeminiAdapter({
+      apiKey: 'gemini-key',
+      fetchImplementation,
+    });
 
     await adapter.getCache('cache_1');
     await adapter.getCache('cachedContents/cache_1');
@@ -1665,7 +1736,9 @@ function makeSSEStream(events: unknown[]): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     start(controller) {
       for (const event of events) {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
+        );
       }
       controller.close();
     },
