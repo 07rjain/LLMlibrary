@@ -13,6 +13,15 @@ import {
   readOptionalString,
   readRequiredModelId,
 } from '../model-discovery.js';
+import { validateOpenAIPromptCaching } from '../cache-validation.js';
+import {
+  validateSpeechRequest,
+  validateTranscriptionRequest,
+} from '../speech-validation.js';
+import {
+  validateAndCloneTool,
+  validateAndCloneTools,
+} from '../tool-validation.js';
 import {
   openaiUsageToCanonical,
   speechUsageWithCost,
@@ -269,8 +278,7 @@ export interface OpenAIAdapterSpeechOptions extends SpeechRequestOptions {
   provider: 'openai';
 }
 
-export interface OpenAIAdapterTranscriptionOptions
-  extends TranscriptionRequestOptions {
+export interface OpenAIAdapterTranscriptionOptions extends TranscriptionRequestOptions {
   model: string;
   provider: 'openai';
 }
@@ -350,15 +358,24 @@ export class OpenAIAdapter {
     }
 
     if (!response.body) {
-      throw new ProviderError('OpenAI streaming response did not include a body.', {
-        model: options.model,
-        provider: 'openai',
-      });
+      throw new ProviderError(
+        'OpenAI streaming response did not include a body.',
+        {
+          model: options.model,
+          provider: 'openai',
+        },
+      );
     }
 
-    const assembler = new OpenAIStreamAssembler(options.model, this.modelRegistry);
+    const assembler = new OpenAIStreamAssembler(
+      options.model,
+      this.modelRegistry,
+    );
     for await (const payload of parseSSE(response.body)) {
-      const event = JSON.parse(payload) as { [key: string]: unknown; type?: string };
+      const event = JSON.parse(payload) as {
+        [key: string]: unknown;
+        type?: string;
+      };
       yield* assembler.consume(event);
     }
 
@@ -385,7 +402,11 @@ export class OpenAIAdapter {
       throw await mapOpenAIError(response);
     }
 
-    const { records } = await readModelDiscoveryPage(response, 'openai', 'data');
+    const { records } = await readModelDiscoveryPage(
+      response,
+      'openai',
+      'data',
+    );
     const models: RemoteModelInfo[] = [];
     for (const model of records) {
       const id = readRequiredModelId(model, 'id');
@@ -409,45 +430,50 @@ export class OpenAIAdapter {
   }
 
   async speak(options: OpenAIAdapterSpeechOptions): Promise<SpeechResponse> {
-    const format = options.format ?? 'mp3';
+    const validated = validateSpeechRequest(options);
+    const format = validated.format ?? 'mp3';
     const response = await withRetry(
       async () =>
         this.fetchImplementation(
           `${this.baseUrl}/v1/audio/speech`,
           buildRequestInit(
             {
-              body: JSON.stringify(translateOpenAISpeechRequest(options, format)),
+              body: JSON.stringify(
+                translateOpenAISpeechRequest(validated, format),
+              ),
               headers: this.buildHeaders(),
               method: 'POST',
             },
-            options.signal,
+            validated.signal,
           ),
         ),
       this.retryOptions,
     );
 
     if (!response.ok) {
-      throw await mapOpenAIError(response, options.model);
+      throw await mapOpenAIError(response, validated.model);
     }
 
     const audio = new Uint8Array(await response.arrayBuffer());
-    const model = this.modelRegistry.get(options.model);
+    const model = this.modelRegistry.get(validated.model);
     const outputAudioSeconds =
-      options.estimatedOutputSeconds ??
+      validated.estimatedOutputSeconds ??
       deriveAudioDurationSeconds(audio, format) ??
-      options.maxOutputSeconds;
+      validated.maxOutputSeconds;
     const usage = speechUsageWithCost(model, {
       estimated: true,
-      inputCharacters: options.input.length,
-      inputTokens: estimateTokens(options.input),
+      inputCharacters: validated.input.length,
+      inputTokens: estimateTokens(validated.input),
       ...(outputAudioSeconds !== undefined ? { outputAudioSeconds } : {}),
     });
 
     return {
       audio,
       format,
-      mediaType: response.headers.get('content-type') ?? mediaTypeForSpeechFormat(format),
-      model: options.model,
+      mediaType:
+        response.headers.get('content-type') ??
+        mediaTypeForSpeechFormat(format),
+      model: validated.model,
       provider: 'openai',
       raw: {
         headers: Object.fromEntries(response.headers.entries()),
@@ -459,7 +485,11 @@ export class OpenAIAdapter {
   async transcribe(
     options: OpenAIAdapterTranscriptionOptions,
   ): Promise<TranscriptionResponse> {
-    const body = await buildOpenAITranscriptionFormData(options, this.fetchImplementation);
+    const validated = validateTranscriptionRequest(options);
+    const body = await buildOpenAITranscriptionFormData(
+      validated,
+      this.fetchImplementation,
+    );
     const response = await withRetry(
       async () =>
         this.fetchImplementation(
@@ -470,14 +500,14 @@ export class OpenAIAdapter {
               headers: this.buildHeaders({ contentType: false }),
               method: 'POST',
             },
-            options.signal,
+            validated.signal,
           ),
         ),
       this.retryOptions,
     );
 
     if (!response.ok) {
-      throw await mapOpenAIError(response, options.model);
+      throw await mapOpenAIError(response, validated.model);
     }
 
     const contentType = response.headers.get('content-type') ?? '';
@@ -486,9 +516,10 @@ export class OpenAIAdapter {
         ? ((await response.json()) as OpenAITranscriptionPayload)
         : await response.text();
     const normalized = normalizeOpenAITranscription(raw);
-    const model = this.modelRegistry.get(options.model);
+    const model = this.modelRegistry.get(validated.model);
     const inputAudioSeconds =
-      options.inputAudioSeconds ?? deriveAudioInputDurationSeconds(options.input);
+      validated.inputAudioSeconds ??
+      deriveAudioInputDurationSeconds(validated.input);
     const usage = speechUsageWithCost(model, {
       estimated: true,
       ...(inputAudioSeconds !== undefined ? { inputAudioSeconds } : {}),
@@ -498,10 +529,11 @@ export class OpenAIAdapter {
 
     return {
       ...normalized,
-      ...(inputAudioSeconds !== undefined && normalized.durationSeconds === undefined
+      ...(inputAudioSeconds !== undefined &&
+      normalized.durationSeconds === undefined
         ? { durationSeconds: inputAudioSeconds }
         : {}),
-      model: options.model,
+      model: validated.model,
       provider: 'openai',
       raw,
       usage,
@@ -512,15 +544,27 @@ export class OpenAIAdapter {
     options: OpenAICompletionOptions & { stream?: boolean },
   ): void {
     if (options.tools && options.tools.length > 0) {
-      this.modelRegistry.assertCapability(options.model, 'supportsTools', 'tool calling');
+      this.modelRegistry.assertCapability(
+        options.model,
+        'supportsTools',
+        'tool calling',
+      );
     }
 
     if (options.stream) {
-      this.modelRegistry.assertCapability(options.model, 'supportsStreaming', 'streaming');
+      this.modelRegistry.assertCapability(
+        options.model,
+        'supportsStreaming',
+        'streaming',
+      );
     }
 
     if (options.messages.some(messageContainsVisionContent)) {
-      this.modelRegistry.assertCapability(options.model, 'supportsVision', 'vision');
+      this.modelRegistry.assertCapability(
+        options.model,
+        'supportsVision',
+        'vision',
+      );
     }
 
     if (options.messages.some(messageContainsUnsupportedOpenAIParts)) {
@@ -544,7 +588,9 @@ export class OpenAIAdapter {
     return {
       Authorization: `Bearer ${this.apiKey}`,
       ...contentType,
-      ...(this.organization ? { 'OpenAI-Organization': this.organization } : {}),
+      ...(this.organization
+        ? { 'OpenAI-Organization': this.organization }
+        : {}),
       ...(this.project ? { 'OpenAI-Project': this.project } : {}),
     };
   }
@@ -625,7 +671,10 @@ async function buildOpenAITranscriptionFormData(
         ? openaiOptions.chunkingStrategy
         : JSON.stringify(openaiOptions.chunkingStrategy),
     );
-  } else if (options.diarization || options.model === 'gpt-4o-transcribe-diarize') {
+  } else if (
+    options.diarization ||
+    options.model === 'gpt-4o-transcribe-diarize'
+  ) {
     formData.set('chunking_strategy', 'auto');
   }
 
@@ -659,7 +708,9 @@ async function audioInputToBlob(
   }
 
   if (input.file instanceof Uint8Array) {
-    return new Blob([bytesToArrayBuffer(input.file)], { type: input.mediaType });
+    return new Blob([bytesToArrayBuffer(input.file)], {
+      type: input.mediaType,
+    });
   }
 
   if (input.data !== undefined) {
@@ -669,7 +720,13 @@ async function audioInputToBlob(
   }
 
   if (input.url !== undefined) {
-    return fetchTranscriptionAudioUrl(input.url, input.mediaType, urlPolicy, fetchImplementation, signal);
+    return fetchTranscriptionAudioUrl(
+      input.url,
+      input.mediaType,
+      urlPolicy,
+      fetchImplementation,
+      signal,
+    );
   }
 
   throw new ProviderCapabilityError(
@@ -712,9 +769,14 @@ async function fetchTranscriptionAudioUrl(
   }
 
   let currentUrl = parseTranscriptionUrl(url);
-  const maxRedirects = policy.maxRedirects ?? DEFAULT_TRANSCRIPTION_URL_MAX_REDIRECTS;
+  const maxRedirects =
+    policy.maxRedirects ?? DEFAULT_TRANSCRIPTION_URL_MAX_REDIRECTS;
 
-  for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
+  for (
+    let redirectCount = 0;
+    redirectCount <= maxRedirects;
+    redirectCount += 1
+  ) {
     await assertAllowedTranscriptionUrl(currentUrl, policy);
     const response = await fetchImplementation(currentUrl.toString(), {
       redirect: 'manual',
@@ -723,18 +785,24 @@ async function fetchTranscriptionAudioUrl(
 
     if (isRedirectResponse(response)) {
       if (redirectCount === maxRedirects) {
-        throw new ProviderError('Transcription audio URL exceeded redirect limit.', {
-          provider: 'openai',
-          statusCode: response.status,
-        });
+        throw new ProviderError(
+          'Transcription audio URL exceeded redirect limit.',
+          {
+            provider: 'openai',
+            statusCode: response.status,
+          },
+        );
       }
 
       const location = response.headers.get('location');
       if (!location) {
-        throw new ProviderError('Transcription audio URL redirect did not include a location.', {
-          provider: 'openai',
-          statusCode: response.status,
-        });
+        throw new ProviderError(
+          'Transcription audio URL redirect did not include a location.',
+          {
+            provider: 'openai',
+            statusCode: response.status,
+          },
+        );
       }
       currentUrl = parseTranscriptionUrl(location, currentUrl);
       continue;
@@ -768,9 +836,12 @@ function parseTranscriptionUrl(url: string, base?: URL): URL {
   try {
     return new URL(url, base);
   } catch {
-    throw new ProviderCapabilityError('Transcription audio URL must be a valid URL.', {
-      provider: 'openai',
-    });
+    throw new ProviderCapabilityError(
+      'Transcription audio URL must be a valid URL.',
+      {
+        provider: 'openai',
+      },
+    );
   }
 }
 
@@ -846,7 +917,9 @@ function assertAllowedTranscriptionContentType(
   const allowed = policy.allowedContentTypes ?? ['audio/'];
   const isAllowed = allowed.some((item) => {
     const normalized = item.toLowerCase();
-    return normalized.endsWith('/') ? mediaType.startsWith(normalized) : mediaType === normalized;
+    return normalized.endsWith('/')
+      ? mediaType.startsWith(normalized)
+      : mediaType === normalized;
   });
 
   if (!isAllowed) {
@@ -864,17 +937,23 @@ async function readResponseBodyWithLimit(
   maxBytes: number,
 ): Promise<Uint8Array> {
   if (!Number.isInteger(maxBytes) || maxBytes <= 0) {
-    throw new ProviderCapabilityError('transcriptionUrlPolicy.maxBytes must be a positive integer.', {
-      provider: 'openai',
-    });
+    throw new ProviderCapabilityError(
+      'transcriptionUrlPolicy.maxBytes must be a positive integer.',
+      {
+        provider: 'openai',
+      },
+    );
   }
 
   if (!response.body) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.byteLength > maxBytes) {
-      throw new ProviderCapabilityError('Transcription audio URL response exceeded maxBytes.', {
-        provider: 'openai',
-      });
+      throw new ProviderCapabilityError(
+        'Transcription audio URL response exceeded maxBytes.',
+        {
+          provider: 'openai',
+        },
+      );
     }
     return bytes;
   }
@@ -892,9 +971,12 @@ async function readResponseBodyWithLimit(
     totalBytes += value.byteLength;
     if (totalBytes > maxBytes) {
       await reader.cancel();
-      throw new ProviderCapabilityError('Transcription audio URL response exceeded maxBytes.', {
-        provider: 'openai',
-      });
+      throw new ProviderCapabilityError(
+        'Transcription audio URL response exceeded maxBytes.',
+        {
+          provider: 'openai',
+        },
+      );
     }
     chunks.push(value);
   }
@@ -918,10 +1000,13 @@ function isIpAddress(value: string): boolean {
 }
 
 function isIpv4Address(value: string): boolean {
-  return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(value) && value.split('.').every((part) => {
-    const octet = Number(part);
-    return Number.isInteger(octet) && octet >= 0 && octet <= 255;
-  });
+  return (
+    /^(?:\d{1,3}\.){3}\d{1,3}$/.test(value) &&
+    value.split('.').every((part) => {
+      const octet = Number(part);
+      return Number.isInteger(octet) && octet >= 0 && octet <= 255;
+    })
+  );
 }
 
 function isIpv6Address(value: string): boolean {
@@ -937,12 +1022,16 @@ function isPrivateOrLocalAddress(address: string): boolean {
   const normalized = normalizeNetworkAddress(address);
   if (isIpv4Address(normalized)) {
     const numeric = ipv4ToNumber(normalized);
-    return PRIVATE_IPV4_RANGES.some(([start, end]) => numeric >= start && numeric <= end);
+    return PRIVATE_IPV4_RANGES.some(
+      ([start, end]) => numeric >= start && numeric <= end,
+    );
   }
 
   const mappedIpv4 = ipv4MappedIpv6ToNumber(normalized);
   if (mappedIpv4 !== undefined) {
-    return PRIVATE_IPV4_RANGES.some(([start, end]) => mappedIpv4 >= start && mappedIpv4 <= end);
+    return PRIVATE_IPV4_RANGES.some(
+      ([start, end]) => mappedIpv4 >= start && mappedIpv4 <= end,
+    );
   }
 
   if (!isIpv6Address(normalized)) {
@@ -961,7 +1050,9 @@ function isPrivateOrLocalAddress(address: string): boolean {
 
 function normalizeNetworkAddress(value: string): string {
   const lower = value.toLowerCase();
-  return lower.startsWith('[') && lower.endsWith(']') ? lower.slice(1, -1) : lower;
+  return lower.startsWith('[') && lower.endsWith(']')
+    ? lower.slice(1, -1)
+    : lower;
 }
 
 function ipv4MappedIpv6ToNumber(address: string): number | undefined {
@@ -1007,7 +1098,9 @@ function normalizeOpenAITranscription(
   }
 
   return {
-    ...(typeof raw.duration === 'number' ? { durationSeconds: raw.duration } : {}),
+    ...(typeof raw.duration === 'number'
+      ? { durationSeconds: raw.duration }
+      : {}),
     ...(typeof raw.language === 'string' ? { language: raw.language } : {}),
     ...(Array.isArray(raw.segments) ? { segments: raw.segments } : {}),
     text: typeof raw.text === 'string' ? raw.text : '',
@@ -1050,7 +1143,9 @@ function deriveAudioDurationSeconds(
   return deriveWavDurationSeconds(audio);
 }
 
-function deriveAudioInputDurationSeconds(input: AudioInput): number | undefined {
+function deriveAudioInputDurationSeconds(
+  input: AudioInput,
+): number | undefined {
   const bytes =
     input.file instanceof Uint8Array
       ? input.file
@@ -1068,7 +1163,10 @@ function deriveAudioInputDurationSeconds(input: AudioInput): number | undefined 
 }
 
 function deriveWavDurationSeconds(audio: Uint8Array): number | undefined {
-  if (audio.length < 44 || textDecoder.decode(audio.subarray(0, 4)) !== 'RIFF') {
+  if (
+    audio.length < 44 ||
+    textDecoder.decode(audio.subarray(0, 4)) !== 'RIFF'
+  ) {
     return undefined;
   }
 
@@ -1124,8 +1222,15 @@ export function translateOpenAIRequest(
   const input: OpenAIInputItem[] = [];
   const instructions: string[] = [];
   const openaiOptions = options.providerOptions?.openai;
-  const promptCaching = openaiOptions?.promptCaching;
+  const promptCaching = validateOpenAIPromptCaching(
+    openaiOptions?.promptCaching,
+    options.model,
+  );
   const reasoning = openaiOptions?.reasoning;
+  const tools =
+    options.tools === undefined
+      ? undefined
+      : validateAndCloneTools(options.tools, 'openai', options.model);
 
   if (options.system) {
     instructions.push(options.system);
@@ -1166,8 +1271,8 @@ export function translateOpenAIRequest(
     body.text = textFormat;
   }
 
-  if (options.tools && options.tools.length > 0) {
-    body.tools = options.tools.map(translateOpenAITool);
+  if (tools && tools.length > 0) {
+    body.tools = tools.map(translateOpenAIToolDefinition);
   }
 
   if (options.toolChoice) {
@@ -1194,11 +1299,11 @@ export function translateOpenAIRequest(
     }
   }
 
-  if (promptCaching?.key) {
+  if (promptCaching?.key !== undefined) {
     body.prompt_cache_key = promptCaching.key;
   }
 
-  if (promptCaching?.retention) {
+  if (promptCaching?.retention !== undefined) {
     body.prompt_cache_retention = promptCaching.retention;
   }
 
@@ -1206,6 +1311,12 @@ export function translateOpenAIRequest(
 }
 
 export function translateOpenAITool(tool: CanonicalTool): OpenAIToolDefinition {
+  return translateOpenAIToolDefinition(validateAndCloneTool(tool, 'openai'));
+}
+
+function translateOpenAIToolDefinition(
+  tool: CanonicalTool,
+): OpenAIToolDefinition {
   return {
     description: tool.description,
     name: tool.name,
@@ -1247,7 +1358,11 @@ export function translateOpenAIResponse(
   modelRegistry: ModelRegistry = new ModelRegistry(),
   requestedModel?: string,
 ): CanonicalResponse {
-  const resolvedModelId = resolveOpenAIModelId(payload.model, requestedModel, modelRegistry);
+  const resolvedModelId = resolveOpenAIModelId(
+    payload.model,
+    requestedModel,
+    modelRegistry,
+  );
   const model = modelRegistry.get(resolvedModelId);
   const usage = usageWithCost(model, openaiUsageToCanonical(payload.usage));
   const content: CanonicalPart[] = [];
@@ -1268,7 +1383,8 @@ export function translateOpenAIResponse(
         }
 
         if (isOpenAIRefusalPart(part)) {
-          refusal = refusal === undefined ? part.refusal : `${refusal}${part.refusal}`;
+          refusal =
+            refusal === undefined ? part.refusal : `${refusal}${part.refusal}`;
           content.push({
             text: part.refusal,
             type: 'text',
@@ -1336,9 +1452,13 @@ function resolveOpenAIModelId(
 export async function mapOpenAIError(
   response: Response,
   model?: string,
-): Promise<AuthenticationError | ContextLimitError | ProviderError | RateLimitError> {
+): Promise<
+  AuthenticationError | ContextLimitError | ProviderError | RateLimitError
+> {
   const requestId =
-    response.headers.get('x-request-id') ?? response.headers.get('request-id') ?? undefined;
+    response.headers.get('x-request-id') ??
+    response.headers.get('request-id') ??
+    undefined;
   let body: OpenAIErrorBody | undefined;
   try {
     body = (await response.json()) as OpenAIErrorBody;
@@ -1346,7 +1466,8 @@ export async function mapOpenAIError(
     body = undefined;
   }
 
-  const message = body?.error?.message ?? `OpenAI request failed with ${response.status}.`;
+  const message =
+    body?.error?.message ?? `OpenAI request failed with ${response.status}.`;
   const code = body?.error?.code ?? undefined;
   const options = buildOpenAIErrorOptions(
     response.status,
@@ -1399,10 +1520,14 @@ class OpenAIStreamAssembler {
     this.modelRegistry = modelRegistry;
   }
 
-  *consume(event: { [key: string]: unknown; type?: string }): Generator<StreamChunk> {
+  *consume(event: {
+    [key: string]: unknown;
+    type?: string;
+  }): Generator<StreamChunk> {
     switch (event.type) {
       case 'response.output_text.delta': {
-        const typedEvent = event as unknown as OpenAIResponseOutputTextDeltaEvent;
+        const typedEvent =
+          event as unknown as OpenAIResponseOutputTextDeltaEvent;
         if (typedEvent.delta.length > 0) {
           yield {
             delta: typedEvent.delta,
@@ -1412,8 +1537,12 @@ class OpenAIStreamAssembler {
         return;
       }
       case 'response.output_item.added': {
-        const typedEvent = event as unknown as OpenAIResponseOutputItemAddedEvent;
-        yield* this.handleOutputItemAdded(typedEvent.item, typedEvent.output_index);
+        const typedEvent =
+          event as unknown as OpenAIResponseOutputItemAddedEvent;
+        yield* this.handleOutputItemAdded(
+          typedEvent.item,
+          typedEvent.output_index,
+        );
         return;
       }
       case 'response.function_call_arguments.delta':
@@ -1427,23 +1556,33 @@ class OpenAIStreamAssembler {
         );
         return;
       case 'response.output_item.done': {
-        const typedEvent = event as unknown as OpenAIResponseOutputItemDoneEvent;
-        yield* this.handleOutputItemDone(typedEvent.item, typedEvent.output_index);
+        const typedEvent =
+          event as unknown as OpenAIResponseOutputItemDoneEvent;
+        yield* this.handleOutputItemDone(
+          typedEvent.item,
+          typedEvent.output_index,
+        );
         return;
       }
       case 'response.completed':
       case 'response.incomplete':
         this.finalResponse = (
-          event as unknown as OpenAIResponseCompletedEvent | OpenAIResponseIncompleteEvent
+          event as unknown as
+            | OpenAIResponseCompletedEvent
+            | OpenAIResponseIncompleteEvent
         ).response;
         this.finishReason = normalizeOpenAIFinishReason(this.finalResponse);
         return;
       case 'response.failed':
-        this.finalResponse = (event as unknown as OpenAIResponseFailedEvent).response;
+        this.finalResponse = (
+          event as unknown as OpenAIResponseFailedEvent
+        ).response;
         this.finishReason = normalizeOpenAIFinishReason(this.finalResponse);
         throw this.buildStreamError(this.finalResponse.error);
       case 'error':
-        throw this.buildStreamError(event as unknown as OpenAIResponseErrorEvent);
+        throw this.buildStreamError(
+          event as unknown as OpenAIResponseErrorEvent,
+        );
       default:
         return;
     }
@@ -1460,17 +1599,23 @@ class OpenAIStreamAssembler {
     return {
       finishReason: this.finishReason,
       type: 'done',
-      usage: usageWithCost(model, openaiUsageToCanonical(this.finalResponse?.usage)),
+      usage: usageWithCost(
+        model,
+        openaiUsageToCanonical(this.finalResponse?.usage),
+      ),
     };
   }
 
   private buildStreamError(
     error: OpenAIResponseErrorPayload | null | undefined,
   ): ProviderError {
-    return new ProviderError(error?.message ?? 'OpenAI streaming request failed.', {
-      model: this.model,
-      provider: 'openai',
-    });
+    return new ProviderError(
+      error?.message ?? 'OpenAI streaming request failed.',
+      {
+        model: this.model,
+        provider: 'openai',
+      },
+    );
   }
 
   private *handleOutputItemAdded(
@@ -1592,7 +1737,8 @@ function translateOpenAISystemMessage(message: CanonicalMessage): string {
   }
 
   const textParts = message.content.filter(
-    (part): part is Extract<CanonicalPart, { type: 'text' }> => part.type === 'text',
+    (part): part is Extract<CanonicalPart, { type: 'text' }> =>
+      part.type === 'text',
   );
 
   return textParts.map((part) => part.text).join('\n\n');
@@ -1609,7 +1755,9 @@ function translateOpenAIMessage(message: CanonicalMessage): OpenAIInputItem[] {
   }
 }
 
-function translateOpenAIUserMessage(message: CanonicalMessage): OpenAIInputItem[] {
+function translateOpenAIUserMessage(
+  message: CanonicalMessage,
+): OpenAIInputItem[] {
   if (typeof message.content === 'string') {
     return [
       {
@@ -1684,7 +1832,9 @@ function translateOpenAIUserMessage(message: CanonicalMessage): OpenAIInputItem[
   return items;
 }
 
-function translateOpenAIAssistantMessage(message: CanonicalMessage): OpenAIInputItem[] {
+function translateOpenAIAssistantMessage(
+  message: CanonicalMessage,
+): OpenAIInputItem[] {
   if (typeof message.content === 'string') {
     return [
       {
@@ -1769,7 +1919,10 @@ function parseOpenAIToolArguments(
 }
 
 function normalizeOpenAIFinishReason(
-  payload: Pick<OpenAIResponsePayload, 'error' | 'incomplete_details' | 'output' | 'status'>,
+  payload: Pick<
+    OpenAIResponsePayload,
+    'error' | 'incomplete_details' | 'output' | 'status'
+  >,
 ): CanonicalFinishReason {
   if ((payload.output ?? []).some(isOpenAIFunctionCallOutput)) {
     return 'tool_call';
@@ -1797,11 +1950,15 @@ function normalizeOpenAIFinishReason(
   return 'stop';
 }
 
-function isOpenAIFunctionCallOutput(item: OpenAIOutputItem): item is OpenAIFunctionCallOutput {
+function isOpenAIFunctionCallOutput(
+  item: OpenAIOutputItem,
+): item is OpenAIFunctionCallOutput {
   return item.type === 'function_call';
 }
 
-function isOpenAIMessageOutput(item: OpenAIOutputItem): item is OpenAIMessageOutput {
+function isOpenAIMessageOutput(
+  item: OpenAIOutputItem,
+): item is OpenAIMessageOutput {
   return item.type === 'message';
 }
 
@@ -1817,7 +1974,9 @@ function isOpenAIRefusalPart(
   return part.type === 'refusal';
 }
 
-function messageContainsUnsupportedOpenAIParts(message: CanonicalMessage): boolean {
+function messageContainsUnsupportedOpenAIParts(
+  message: CanonicalMessage,
+): boolean {
   return (
     typeof message.content !== 'string' &&
     message.content.some(

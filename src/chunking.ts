@@ -1,3 +1,5 @@
+import { ProviderCapabilityError } from 'unified-llm-client/errors';
+
 export interface TextChunk {
   endOffset: number;
   index: number;
@@ -61,18 +63,19 @@ export function stripHtml(input: string): string {
   return cleanText(decodeHtmlEntities(withStructure));
 }
 
-export function chunkText(input: string, options: ChunkTextOptions = {}): TextChunk[] {
+export function chunkText(
+  input: string,
+  options: ChunkTextOptions = {},
+): TextChunk[] {
+  if (typeof input !== 'string') {
+    invalidChunkOptions();
+  }
+  const [chunkSize, minChunkSize, overlap] = chunkOptions(options);
   const normalized = cleanText(input);
   if (normalized.length === 0) {
     return [];
   }
 
-  const chunkSize = Math.max(options.chunkSize ?? DEFAULT_CHUNK_SIZE, 1);
-  const minChunkSize = Math.max(
-    Math.min(options.minChunkSize ?? DEFAULT_MIN_CHUNK_SIZE, chunkSize),
-    1,
-  );
-  const overlap = Math.max(Math.min(options.overlap ?? DEFAULT_OVERLAP, chunkSize - 1), 0);
   const chunks: TextChunk[] = [];
   let startOffset = 0;
 
@@ -107,6 +110,54 @@ export function chunkText(input: string, options: ChunkTextOptions = {}): TextCh
   return chunks;
 }
 
+function chunkOptions(value: unknown): [number, number, number] {
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
+    Object.getOwnPropertySymbols(value).length
+  ) {
+    return invalidChunkOptions();
+  }
+  const d = Object.getOwnPropertyDescriptors(value);
+  const chunkSize = (d.chunkSize?.value ?? DEFAULT_CHUNK_SIZE) as number;
+  const minChunkSize = (d.minChunkSize?.value ??
+    Math.min(DEFAULT_MIN_CHUNK_SIZE, chunkSize)) as number;
+  const overlap = (d.overlap?.value ??
+    Math.min(DEFAULT_OVERLAP, chunkSize - 1)) as number;
+  if (
+    Object.entries(d).some(
+      ([key, item]) =>
+        !['chunkSize', 'minChunkSize', 'overlap'].includes(key) ||
+        !item.enumerable ||
+        !('value' in item),
+    ) ||
+    !Number.isSafeInteger(chunkSize) ||
+    !Number.isSafeInteger(minChunkSize) ||
+    !Number.isSafeInteger(overlap) ||
+    chunkSize < 1 ||
+    minChunkSize < 1 ||
+    minChunkSize > chunkSize ||
+    overlap < 0 ||
+    overlap >= chunkSize
+  ) {
+    return invalidChunkOptions();
+  }
+  return [chunkSize, minChunkSize, overlap];
+}
+
+function invalidChunkOptions(): never {
+  throw new ProviderCapabilityError('Invalid chunkText input or options.', {
+    details: {
+      code: 'invalid_chunk_options',
+      constraint: 'valid_chunk_configuration',
+      option: 'chunkText',
+    },
+    statusCode: 400,
+  });
+}
+
 function decodeHtmlEntities(input: string): string {
   return input.replace(
     /&(#x?[0-9a-fA-F]+|amp|lt|gt|quot|apos|nbsp);/g,
@@ -127,12 +178,16 @@ function decodeHtmlEntities(input: string): string {
         default:
           if (entity.startsWith('#x') || entity.startsWith('#X')) {
             const codePoint = Number.parseInt(entity.slice(2), 16);
-            return isValidCodePoint(codePoint) ? String.fromCodePoint(codePoint) : match;
+            return isValidCodePoint(codePoint)
+              ? String.fromCodePoint(codePoint)
+              : match;
           }
 
           if (entity.startsWith('#')) {
             const codePoint = Number.parseInt(entity.slice(1), 10);
-            return isValidCodePoint(codePoint) ? String.fromCodePoint(codePoint) : match;
+            return isValidCodePoint(codePoint)
+              ? String.fromCodePoint(codePoint)
+              : match;
           }
 
           return match;

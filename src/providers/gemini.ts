@@ -21,6 +21,10 @@ import { geminiUsageToCanonical, usageWithCost } from '../utils/cost.js';
 import { parseSSE } from '../utils/parse-sse.js';
 import { withRetry } from '../utils/retry.js';
 import {
+  validateAndCloneTool,
+  validateAndCloneTools,
+} from '../tool-validation.js';
+import {
   buildGeminiResponseFormat,
   usesGeminiResponseFormatEnvelope,
 } from '../structured-output.js';
@@ -223,11 +227,16 @@ export interface GeminiCompletionOptions {
   tools?: CanonicalTool[];
 }
 
-export interface GeminiEmbeddingOptions
-  extends Pick<
-    EmbeddingRequestOptions,
-    'botId' | 'dimensions' | 'input' | 'providerOptions' | 'purpose' | 'signal' | 'tenantId'
-  > {
+export interface GeminiEmbeddingOptions extends Pick<
+  EmbeddingRequestOptions,
+  | 'botId'
+  | 'dimensions'
+  | 'input'
+  | 'providerOptions'
+  | 'purpose'
+  | 'signal'
+  | 'tenantId'
+> {
   model: string;
 }
 
@@ -261,7 +270,8 @@ export class GeminiAdapter {
 
   constructor(config: GeminiClientConfig) {
     this.apiKey = config.apiKey;
-    this.baseUrl = config.baseUrl ?? 'https://generativelanguage.googleapis.com';
+    this.baseUrl =
+      config.baseUrl ?? 'https://generativelanguage.googleapis.com';
     this.fetchImplementation = config.fetchImplementation ?? fetch;
     this.modelRegistry = config.modelRegistry ?? new ModelRegistry();
     this.retryOptions = config.retryOptions;
@@ -315,7 +325,9 @@ export class GeminiAdapter {
             `${this.baseUrl}/v1beta/models/${encodeURIComponent(model)}:embedContent`,
             buildRequestInit(
               {
-                body: JSON.stringify(translateGeminiEmbeddingRequest(options, input)),
+                body: JSON.stringify(
+                  translateGeminiEmbeddingRequest(options, input),
+                ),
                 headers: this.buildHeaders(),
                 method: 'POST',
               },
@@ -330,7 +342,11 @@ export class GeminiAdapter {
       }
 
       const payload = (await response.json()) as GeminiEmbedContentResponse;
-      const translated = translateGeminiEmbeddingResponse(payload, options.model, this.modelRegistry);
+      const translated = translateGeminiEmbeddingResponse(
+        payload,
+        options.model,
+        this.modelRegistry,
+      );
       embeddings.push({
         index,
         values: translated.embeddings[0]?.values ?? [],
@@ -343,15 +359,20 @@ export class GeminiAdapter {
     }
 
     if (embeddings.some((item) => item.values.length === 0)) {
-      throw new ProviderError('Gemini embedding response contained no embedding values.', {
-        model: options.model,
-        provider: 'google',
-      });
+      throw new ProviderError(
+        'Gemini embedding response contained no embedding values.',
+        {
+          model: options.model,
+          provider: 'google',
+        },
+      );
     }
 
     const usage = buildGeminiEmbeddingUsage(
       modelInfo,
-      observedPromptTokens ? { promptTokenCount: totalPromptTokens } : undefined,
+      observedPromptTokens
+        ? { promptTokenCount: totalPromptTokens }
+        : undefined,
     );
 
     return {
@@ -389,13 +410,19 @@ export class GeminiAdapter {
     }
 
     if (!response.body) {
-      throw new ProviderError('Gemini streaming response did not include a body.', {
-        model: options.model,
-        provider: 'google',
-      });
+      throw new ProviderError(
+        'Gemini streaming response did not include a body.',
+        {
+          model: options.model,
+          provider: 'google',
+        },
+      );
     }
 
-    const assembler = new GeminiStreamAssembler(options.model, this.modelRegistry);
+    const assembler = new GeminiStreamAssembler(
+      options.model,
+      this.modelRegistry,
+    );
     for await (const payload of parseSSE(response.body)) {
       const chunk = JSON.parse(payload) as GeminiGenerateContentResponse;
       yield* assembler.consume(chunk);
@@ -404,7 +431,9 @@ export class GeminiAdapter {
     yield assembler.finish();
   }
 
-  async createCache(options: GeminiCreateCacheOptions): Promise<GeminiCachedContent> {
+  async createCache(
+    options: GeminiCreateCacheOptions,
+  ): Promise<GeminiCachedContent> {
     const response = await withRetry(
       async () =>
         this.fetchImplementation(
@@ -529,8 +558,14 @@ export class GeminiAdapter {
           continue;
         }
         const displayName = readOptionalString(model, 'displayName');
-        const inputTokenLimit = readOptionalFiniteNumber(model, 'inputTokenLimit');
-        const outputTokenLimit = readOptionalFiniteNumber(model, 'outputTokenLimit');
+        const inputTokenLimit = readOptionalFiniteNumber(
+          model,
+          'inputTokenLimit',
+        );
+        const outputTokenLimit = readOptionalFiniteNumber(
+          model,
+          'outputTokenLimit',
+        );
         const supportedActions = readOptionalStringArray(
           model,
           'supportedGenerationMethods',
@@ -624,15 +659,27 @@ export class GeminiAdapter {
     options: GeminiCompletionOptions & { stream?: boolean },
   ): void {
     if (options.tools && options.tools.length > 0) {
-      this.modelRegistry.assertCapability(options.model, 'supportsTools', 'tool calling');
+      this.modelRegistry.assertCapability(
+        options.model,
+        'supportsTools',
+        'tool calling',
+      );
     }
 
     if (options.stream) {
-      this.modelRegistry.assertCapability(options.model, 'supportsStreaming', 'streaming');
+      this.modelRegistry.assertCapability(
+        options.model,
+        'supportsStreaming',
+        'streaming',
+      );
     }
 
     if (options.messages.some(messageContainsVisionContent)) {
-      this.modelRegistry.assertCapability(options.model, 'supportsVision', 'vision');
+      this.modelRegistry.assertCapability(
+        options.model,
+        'supportsVision',
+        'vision',
+      );
     }
   }
 
@@ -647,8 +694,12 @@ export class GeminiAdapter {
 export function translateGeminiRequest(
   options: GeminiCompletionOptions,
 ): Record<string, unknown> {
-  const systemMessages = options.messages.filter((message) => message.role === 'system');
-  const nonSystemMessages = options.messages.filter((message) => message.role !== 'system');
+  const systemMessages = options.messages.filter(
+    (message) => message.role === 'system',
+  );
+  const nonSystemMessages = options.messages.filter(
+    (message) => message.role !== 'system',
+  );
   const googleOptions = options.providerOptions?.google;
   const cachedContent = googleOptions?.promptCaching?.cachedContent;
 
@@ -685,7 +736,10 @@ export function translateGeminiRequest(
       googleOptions.thinking,
     );
   }
-  const responseFormat = buildGeminiResponseFormat(options.responseFormat, options.model);
+  const responseFormat = buildGeminiResponseFormat(
+    options.responseFormat,
+    options.model,
+  );
   if (responseFormat !== undefined) {
     Object.assign(generationConfig, responseFormat);
   }
@@ -735,12 +789,18 @@ export function translateGeminiEmbeddingRequest(
   >,
   input: EmbeddingInputItem,
 ): Record<string, unknown> {
-  validateEmbeddingRequest({ ...options, input }, {
-    model: normalizeGeminiModelId(options.model),
-    provider: 'google',
-  });
+  validateEmbeddingRequest(
+    { ...options, input },
+    {
+      model: normalizeGeminiModelId(options.model),
+      provider: 'google',
+    },
+  );
   const body: Record<string, unknown> = {
-    content: translateGeminiEmbeddingContent(input, options.providerOptions?.google),
+    content: translateGeminiEmbeddingContent(
+      input,
+      options.providerOptions?.google,
+    ),
   };
 
   const taskType = mapEmbeddingPurposeToGeminiTaskType(options.purpose);
@@ -764,8 +824,12 @@ export function translateGeminiCacheCreateRequest(
   options: GeminiCreateCacheOptions,
 ): Record<string, unknown> {
   const messages = options.messages ?? [];
-  const systemMessages = messages.filter((message) => message.role === 'system');
-  const nonSystemMessages = messages.filter((message) => message.role !== 'system');
+  const systemMessages = messages.filter(
+    (message) => message.role === 'system',
+  );
+  const nonSystemMessages = messages.filter(
+    (message) => message.role !== 'system',
+  );
   const body: Record<string, unknown> = {
     model: normalizeGeminiCacheModelName(options.model),
   };
@@ -824,23 +888,28 @@ export function translateGeminiCacheUpdateRequest(
     };
   }
 
-  throw new ProviderError(
-    'Gemini cache updates require ttl or expireTime.',
-    {
-      provider: 'google',
-    },
-  );
+  throw new ProviderError('Gemini cache updates require ttl or expireTime.', {
+    provider: 'google',
+  });
 }
 
 export function translateGeminiTools(
   tools: CanonicalTool[],
 ): GeminiToolDefinition {
   return {
-    functionDeclarations: tools.map(translateGeminiTool),
+    functionDeclarations: validateAndCloneTools(tools, 'google').map(
+      translateGeminiToolDefinition,
+    ),
   };
 }
 
 export function translateGeminiTool(
+  tool: CanonicalTool,
+): GeminiFunctionDeclaration {
+  return translateGeminiToolDefinition(validateAndCloneTool(tool, 'google'));
+}
+
+function translateGeminiToolDefinition(
   tool: CanonicalTool,
 ): GeminiFunctionDeclaration {
   return {
@@ -875,7 +944,10 @@ export function translateGeminiResponse(
   modelRegistry: ModelRegistry = new ModelRegistry(),
 ): CanonicalResponse {
   const model = modelRegistry.get(requestedModel);
-  const usage = usageWithCost(model, geminiUsageToCanonical(payload.usageMetadata));
+  const usage = usageWithCost(
+    model,
+    geminiUsageToCanonical(payload.usageMetadata),
+  );
   const candidate = payload.candidates?.[0];
 
   if (!candidate) {
@@ -913,7 +985,11 @@ export function translateGeminiResponse(
     }
 
     if ('functionCall' in part) {
-      const id = buildGeminiToolCallId(candidate.index, partIndex, part.functionCall.name);
+      const id = buildGeminiToolCallId(
+        candidate.index,
+        partIndex,
+        part.functionCall.name,
+      );
       content.push({
         args: part.functionCall.args,
         id,
@@ -950,14 +1026,16 @@ export function translateGeminiEmbeddingResponse(
 ): EmbeddingResponse {
   modelRegistry.get(requestedModel);
   const rawEmbeddings =
-    payload.embeddings ??
-    (payload.embedding ? [payload.embedding] : []);
+    payload.embeddings ?? (payload.embedding ? [payload.embedding] : []);
 
   if (rawEmbeddings.length === 0) {
-    throw new ProviderError('Gemini embedding response contained no embedding values.', {
-      model: requestedModel,
-      provider: 'google',
-    });
+    throw new ProviderError(
+      'Gemini embedding response contained no embedding values.',
+      {
+        model: requestedModel,
+        provider: 'google',
+      },
+    );
   }
 
   const usage = buildGeminiEmbeddingUsage(
@@ -980,7 +1058,9 @@ export function translateGeminiEmbeddingResponse(
 export async function mapGeminiError(
   response: Response,
   model?: string,
-): Promise<AuthenticationError | ContextLimitError | ProviderError | RateLimitError> {
+): Promise<
+  AuthenticationError | ContextLimitError | ProviderError | RateLimitError
+> {
   const requestId =
     response.headers.get('x-goog-request-id') ??
     response.headers.get('x-request-id') ??
@@ -994,7 +1074,8 @@ export async function mapGeminiError(
     body = undefined;
   }
 
-  const message = body?.error?.message ?? `Gemini request failed with ${response.status}.`;
+  const message =
+    body?.error?.message ?? `Gemini request failed with ${response.status}.`;
   const status = body?.error?.status;
   const details = body?.error?.details;
   const baseOptions = buildGeminiErrorOptions(
@@ -1067,7 +1148,11 @@ class GeminiStreamAssembler {
       }
 
       if ('functionCall' in part) {
-        const id = buildGeminiToolCallId(candidate.index, partIndex, part.functionCall.name);
+        const id = buildGeminiToolCallId(
+          candidate.index,
+          partIndex,
+          part.functionCall.name,
+        );
         if (this.emittedToolCalls.has(id)) {
           continue;
         }
@@ -1088,7 +1173,10 @@ class GeminiStreamAssembler {
     }
 
     if (candidate.finishReason !== undefined) {
-      this.finishReason = normalizeGeminiFinishReason(candidate.finishReason, parts);
+      this.finishReason = normalizeGeminiFinishReason(
+        candidate.finishReason,
+        parts,
+      );
     }
   }
 
@@ -1119,7 +1207,10 @@ function translateGeminiMessage(message: CanonicalMessage): GeminiContent {
       typeof message.content === 'string'
         ? [{ text: message.content }]
         : message.content.map((part) =>
-            translateGeminiPart(message.role === 'assistant' ? 'assistant' : 'user', part),
+            translateGeminiPart(
+              message.role === 'assistant' ? 'assistant' : 'user',
+              part,
+            ),
           ),
     role,
   };
@@ -1176,7 +1267,8 @@ function translateGeminiPart(
       return {
         fileData: {
           fileUri: part.url,
-          mimeType: part.mediaType ?? inferMediaTypeFromUrl(part.url) ?? 'image/*',
+          mimeType:
+            part.mediaType ?? inferMediaTypeFromUrl(part.url) ?? 'image/*',
         },
       };
     case 'text':
@@ -1245,7 +1337,8 @@ function translateGeminiEmbeddingPart(part: CanonicalPart): GeminiPart {
       return {
         fileData: {
           fileUri: part.url,
-          mimeType: part.mediaType ?? inferMediaTypeFromUrl(part.url) ?? 'image/*',
+          mimeType:
+            part.mediaType ?? inferMediaTypeFromUrl(part.url) ?? 'image/*',
         },
       };
     case 'text':
@@ -1397,7 +1490,9 @@ function normalizeGeminiFinishReason(
     case 'SPII':
       return 'content_filter';
     case 'STOP':
-      return parts.some((part) => 'functionCall' in part) ? 'tool_call' : 'stop';
+      return parts.some((part) => 'functionCall' in part)
+        ? 'tool_call'
+        : 'stop';
     case 'LANGUAGE':
     case 'MALFORMED_FUNCTION_CALL':
     case 'OTHER':

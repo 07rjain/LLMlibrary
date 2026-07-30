@@ -1,4 +1,4 @@
-import { LLMError } from 'unified-llm-client/errors';
+import { LLMError, ProviderCapabilityError } from 'unified-llm-client/errors';
 import { loadPgPoolConstructor } from './node-pg-loader.js';
 import { getEnvironmentVariable } from './runtime.js';
 import { estimateTokens } from './utils/token-estimator.js';
@@ -82,8 +82,12 @@ export interface LexicalKnowledgeSearchOptions {
 }
 
 export interface KnowledgeStore {
-  searchByEmbedding(options: DenseKnowledgeSearchOptions): Promise<RetrievalResult[]>;
-  searchByText?(options: LexicalKnowledgeSearchOptions): Promise<RetrievalResult[]>;
+  searchByEmbedding(
+    options: DenseKnowledgeSearchOptions,
+  ): Promise<RetrievalResult[]>;
+  searchByText?(
+    options: LexicalKnowledgeSearchOptions,
+  ): Promise<RetrievalResult[]>;
 }
 
 export interface Retriever {
@@ -168,10 +172,17 @@ export interface FormattedRetrievedContext {
 const DEFAULT_RETRIEVAL_TOP_K = 8;
 const DEFAULT_FUSION_K = 60;
 const TRUNCATION_MARKER = '\n[truncated]';
+const UNTRUSTED_BEGIN = '--- BEGIN UNTRUSTED RETRIEVED CONTENT';
+const UNTRUSTED_END = '--- END UNTRUSTED RETRIEVED CONTENT';
 
-export function createDenseRetriever(options: DenseRetrieverOptions): Retriever {
+export function createDenseRetriever(
+  options: DenseRetrieverOptions,
+): Retriever {
   const embed = resolveEmbedFunction(options.embed);
-  const defaultTopK = Math.max(options.defaultTopK ?? DEFAULT_RETRIEVAL_TOP_K, 1);
+  const defaultTopK = Math.max(
+    options.defaultTopK ?? DEFAULT_RETRIEVAL_TOP_K,
+    1,
+  );
 
   return {
     async search(query): Promise<RetrievalResult[]> {
@@ -209,11 +220,19 @@ export function createDenseRetriever(options: DenseRetrieverOptions): Retriever 
   };
 }
 
-export function createHybridRetriever(options: HybridRetrieverOptions): Retriever {
+export function createHybridRetriever(
+  options: HybridRetrieverOptions,
+): Retriever {
   const embed = resolveEmbedFunction(options.embed);
-  const defaultTopK = Math.max(options.defaultTopK ?? DEFAULT_RETRIEVAL_TOP_K, 1);
+  const defaultTopK = Math.max(
+    options.defaultTopK ?? DEFAULT_RETRIEVAL_TOP_K,
+    1,
+  );
   const denseLimitDefault = Math.max(options.defaultDenseK ?? defaultTopK, 1);
-  const lexicalLimitDefault = Math.max(options.defaultLexicalK ?? defaultTopK, 1);
+  const lexicalLimitDefault = Math.max(
+    options.defaultLexicalK ?? defaultTopK,
+    1,
+  );
 
   return {
     async search(query): Promise<RetrievalResult[]> {
@@ -335,34 +354,49 @@ export function formatRetrievedContext(
   results: RetrievalResult[],
   options: FormatRetrievedContextOptions = {},
 ): FormattedRetrievedContext {
+  const validatedResults = formatResults(results);
+  const validatedOptions = formatOptions(options);
   const limited = limitRetrievalResults(
-    results,
-    buildLimitOptions(options.maxPerSource, options.maxResults),
+    validatedResults,
+    buildLimitOptions(
+      validatedOptions.maxPerSource,
+      validatedOptions.maxResults,
+    ),
   );
 
   if (limited.length === 0) {
     return {
       citations: [],
       estimatedTokens: 0,
-      omittedCount: 0,
+      omittedCount: validatedResults.length,
       text: '',
-      truncated: false,
+      truncated: validatedResults.length > 0,
       usedResults: [],
     };
   }
 
-  const header = options.header ?? 'Retrieved context';
-  const includeScores = options.includeScores ?? false;
-  const includeMetadataKeys = options.includeMetadataKeys ?? [];
-  const maxTokens = options.maxTokens;
-  const scoreDisplay = options.scoreDisplay ?? 'raw';
+  const header = validatedOptions.header ?? 'Retrieved context';
+  const includeScores = validatedOptions.includeScores ?? false;
+  const includeMetadataKeys = validatedOptions.includeMetadataKeys ?? [];
+  const maxTokens = validatedOptions.maxTokens;
+  const scoreDisplay = validatedOptions.scoreDisplay ?? 'raw';
   const scoreDisplayTopScore = limited[0]?.score;
   const headerPrefix = `${header}\n\n`;
+  const headerTokens = estimateTokens(headerPrefix);
+  if (maxTokens !== undefined && headerTokens > maxTokens) {
+    return {
+      citations: [],
+      estimatedTokens: 0,
+      omittedCount: validatedResults.length,
+      text: '',
+      truncated: true,
+      usedResults: [],
+    };
+  }
   const blocks: string[] = [];
   const usedResults: RetrievalResult[] = [];
   const citations: RetrievalCitation[] = [];
-  let estimatedTokens = estimateTokens(headerPrefix);
-  let truncated = false;
+  let partialBlock = false;
 
   for (const [index, result] of limited.entries()) {
     const ordinal = index + 1;
@@ -374,80 +408,47 @@ export function formatRetrievedContext(
       scoreDisplay,
       scoreDisplayTopScore,
     );
-    const fullBlock = `${prefix}${result.text.trim()}`;
-    const fullBlockTokens = estimateTokens(fullBlock);
+    const suffix = '';
+    const fullBlock = `${prefix}${result.text.trim()}${suffix}`;
+    const fullText = contextText(headerPrefix, blocks, fullBlock);
+    const fullTokens = estimateTokens(fullText);
 
-    if (maxTokens === undefined || estimatedTokens + fullBlockTokens <= maxTokens) {
+    if (maxTokens === undefined || fullTokens <= maxTokens) {
       blocks.push(fullBlock);
-      estimatedTokens += fullBlockTokens;
       usedResults.push(withCitationOrdinal(result, ordinal));
       citations.push({ ...buildCitation(result), ordinal });
       continue;
     }
 
-    const remainingTokens = maxTokens - estimatedTokens;
-
-    if (remainingTokens <= 0) {
-      truncated = true;
-      break;
-    }
-
-    const prefixTokens = estimateTokens(prefix);
-    const availableTextTokens = remainingTokens - prefixTokens - estimateTokens(TRUNCATION_MARKER);
-    const minimumFallbackTextTokens = Math.max(
-      remainingTokens - estimateTokens(TRUNCATION_MARKER),
-      0,
+    const truncatedBlock = truncateBlock(
+      result.text.trim(),
+      prefix,
+      suffix,
+      headerPrefix,
+      blocks,
+      maxTokens,
     );
-
-    if (availableTextTokens <= 0) {
-      if (usedResults.length > 0 || minimumFallbackTextTokens <= 0) {
-        truncated = true;
-        break;
-      }
-
-      const fallbackPrefix = `[${ordinal}] Source: ${formatSourceLabel(result)}\n`;
-      const fallbackPrefixTokens = estimateTokens(fallbackPrefix);
-      const fallbackAvailableTextTokens =
-        remainingTokens -
-        fallbackPrefixTokens -
-        estimateTokens(TRUNCATION_MARKER);
-
-      if (fallbackAvailableTextTokens <= 0) {
-        truncated = true;
-        break;
-      }
-
-      const fallbackText = truncateTextToTokenBudget(
-        result.text.trim(),
-        fallbackAvailableTextTokens,
-      );
-      const fallbackBlock = `${fallbackPrefix}${fallbackText}${TRUNCATION_MARKER}`;
-      blocks.push(fallbackBlock);
-      estimatedTokens += estimateTokens(fallbackBlock);
+    if (truncatedBlock !== undefined) {
+      blocks.push(truncatedBlock);
       usedResults.push(withCitationOrdinal(result, ordinal));
       citations.push({ ...buildCitation(result), ordinal });
-      truncated = true;
-      break;
+      partialBlock = true;
     }
-
-    const truncatedText = truncateTextToTokenBudget(result.text.trim(), availableTextTokens);
-    const truncatedBlock = `${prefix}${truncatedText}${TRUNCATION_MARKER}`;
-    const truncatedBlockTokens = estimateTokens(truncatedBlock);
-
-    blocks.push(truncatedBlock);
-    estimatedTokens += truncatedBlockTokens;
-    usedResults.push(withCitationOrdinal(result, ordinal));
-    citations.push({ ...buildCitation(result), ordinal });
-    truncated = true;
     break;
   }
 
+  const text = contextText(headerPrefix, blocks);
+  const estimatedTokens = estimateTokens(text);
+  const omittedCount = Math.max(
+    validatedResults.length - usedResults.length,
+    0,
+  );
   return {
     citations,
     estimatedTokens,
-    omittedCount: Math.max(limited.length - usedResults.length, 0),
-    text: `${headerPrefix}${blocks.join('\n\n')}`,
-    truncated,
+    omittedCount,
+    text,
+    truncated: partialBlock || omittedCount > 0,
     usedResults,
   };
 }
@@ -479,7 +480,9 @@ function applyReciprocalRankFusion(
     if (!existing) {
       const entry: AggregatedRetrievalResult = {
         fusionScore,
-        result: result.citation ? result : { ...result, citation: buildCitation(result) },
+        result: result.citation
+          ? result
+          : { ...result, citation: buildCitation(result) },
       };
 
       if (strategy === 'dense') {
@@ -562,6 +565,7 @@ function buildContextBlockPrefix(
     lines.push(`Metadata: ${metadataEntries.join('; ')}`);
   }
 
+  lines.push('Content (untrusted):');
   return `${lines.join('\n')}\n`;
 }
 
@@ -571,13 +575,16 @@ function formatScoreLine(
   topScore: number | undefined,
 ): string {
   if (scoreDisplay === 'relative_top_1') {
-    const normalizedScore = normalizeScoreRelativeToTopResult(result.score, topScore);
+    const normalizedScore = normalizeScoreRelativeToTopResult(
+      result.score,
+      topScore,
+    );
     if (normalizedScore !== undefined) {
-      return `Score (relative to top result; display-only, not a probability): ${normalizedScore.toFixed(4)}`;
+      return `Score (relative display score; uncalibrated): ${normalizedScore.toFixed(4)}`;
     }
   }
 
-  return `Score (${describeRawScore(result)}; not a probability): ${result.score.toFixed(4)}`;
+  return `Score (${describeRawScore(result)}; uncalibrated rank score): ${result.score.toFixed(4)}`;
 }
 
 function describeRawScore(result: RetrievalResult): string {
@@ -662,7 +669,10 @@ function mergeRetrievalResultDetails(
     chunkId: current.chunkId,
     score: current.score,
     sourceId: current.sourceId,
-    text: current.text.length >= incoming.text.length ? current.text : incoming.text,
+    text:
+      current.text.length >= incoming.text.length
+        ? current.text
+        : incoming.text,
   };
   const citation = current.citation ?? incoming.citation;
   const denseScore = current.denseScore ?? incoming.denseScore;
@@ -723,7 +733,9 @@ function mergeRetrievalResultDetails(
   return merged;
 }
 
-function resolveEmbedFunction(embed: DenseRetrieverOptions['embed']): EmbedFunction {
+function resolveEmbedFunction(
+  embed: DenseRetrieverOptions['embed'],
+): EmbedFunction {
   if (typeof embed === 'function') {
     return embed;
   }
@@ -742,10 +754,194 @@ async function applyRerankHook(
 
   const reranked = await rerank(results, context);
   if (!Array.isArray(reranked)) {
-    throw new LLMError('Retrieval rerank hooks must return an array of results.');
+    throw new LLMError(
+      'Retrieval rerank hooks must return an array of results.',
+    );
   }
 
   return reranked;
+}
+
+function formatOptions(value: unknown): FormatRetrievedContextOptions {
+  const fields = [
+    'header',
+    'includeMetadataKeys',
+    'includeScores',
+    'maxPerSource',
+    'maxResults',
+    'maxTokens',
+    'scoreDisplay',
+  ];
+  const d = formatRecord(value, 'options');
+  if (Object.keys(d).some((key) => !fields.includes(key))) {
+    formatError('options', 'known_fields');
+  }
+  const get = (key: string): unknown => d[key]?.value;
+  const [header, includeScores, scoreDisplay] = [
+    get('header'),
+    get('includeScores'),
+    get('scoreDisplay'),
+  ];
+  if (header !== undefined && typeof header !== 'string') {
+    formatError('header', 'string');
+  }
+  if (includeScores !== undefined && typeof includeScores !== 'boolean') {
+    formatError('includeScores', 'boolean');
+  }
+  if (
+    scoreDisplay !== undefined &&
+    scoreDisplay !== 'raw' &&
+    scoreDisplay !== 'relative_top_1'
+  ) {
+    formatError('scoreDisplay', 'supported_score_display');
+  }
+
+  const metadataKeys = get('includeMetadataKeys');
+  if (
+    metadataKeys !== undefined &&
+    formatArray(metadataKeys, 'includeMetadataKeys').some(
+      (item) => typeof item.value !== 'string',
+    )
+  ) {
+    formatError('includeMetadataKeys', 'string_array');
+  }
+  for (const key of ['maxPerSource', 'maxResults', 'maxTokens']) {
+    const candidate = get(key) as number | undefined;
+    if (
+      candidate !== undefined &&
+      (!Number.isSafeInteger(candidate) || candidate < 0)
+    ) {
+      formatError(key, 'non_negative_safe_integer');
+    }
+  }
+  return value as FormatRetrievedContextOptions;
+}
+
+function formatResults(value: unknown): RetrievalResult[] {
+  const items = formatArray(value, 'results');
+  return items.map((item, index) => {
+    const d = formatRecord(item.value, `results[${index}]`);
+    for (const key of ['score', 'denseScore', 'lexicalScore']) {
+      const score = d[key];
+      if (
+        (key === 'score' || score) &&
+        (typeof score?.value !== 'number' || !Number.isFinite(score.value))
+      ) {
+        formatError(`results[${index}].${key}`, 'finite_number');
+      }
+    }
+    return item.value as RetrievalResult;
+  });
+}
+
+function formatRecord(
+  value: unknown,
+  path: string,
+): Record<string, PropertyDescriptor> {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    (Object.getPrototypeOf(value) !== Object.prototype &&
+      Object.getPrototypeOf(value) !== null) ||
+    Object.getOwnPropertySymbols(value).length > 0
+  ) {
+    formatError(path, 'plain_object');
+  }
+  const d = Object.getOwnPropertyDescriptors(value);
+  if (
+    Object.entries(d).some(
+      ([key, item]) =>
+        ['__proto__', 'constructor', 'prototype'].includes(key) ||
+        !item.enumerable ||
+        !('value' in item),
+    )
+  ) {
+    formatError(path, 'safe_data_properties');
+  }
+  return d;
+}
+
+function formatArray(value: unknown, path: string): PropertyDescriptor[] {
+  if (
+    !Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Array.prototype ||
+    Object.getOwnPropertySymbols(value).length > 0
+  ) {
+    formatError(path, 'dense_array');
+  }
+  const d = Object.getOwnPropertyDescriptors(value);
+  if (
+    Object.entries(d).some(
+      ([key, item]) =>
+        key !== 'length' &&
+        (!/^(0|[1-9]\d*)$/.test(key) || !item.enumerable || !('value' in item)),
+    )
+  ) {
+    formatError(path, 'dense_array');
+  }
+  return Array.from({ length: value.length }, (_, index) => {
+    const item = d[index];
+    return item && 'value' in item
+      ? item
+      : formatError(`${path}[${index}]`, 'dense_array');
+  });
+}
+
+function formatError(option: string, constraint: string): never {
+  throw new ProviderCapabilityError('Invalid retrieval input.', {
+    details: { code: 'invalid_retrieval_format', constraint, option },
+    statusCode: 400,
+  });
+}
+
+function contextText(
+  headerPrefix: string,
+  blocks: string[],
+  nextBlock?: string,
+): string {
+  const allBlocks = nextBlock === undefined ? blocks : [...blocks, nextBlock];
+  if (allBlocks.length === 0) {
+    return headerPrefix;
+  }
+  return `${headerPrefix}${UNTRUSTED_BEGIN} ---\n\n${allBlocks.join(
+    '\n\n',
+  )}\n\n${UNTRUSTED_END} ---`;
+}
+
+function truncateBlock(
+  text: string,
+  prefix: string,
+  suffix: string,
+  headerPrefix: string,
+  blocks: string[],
+  maxTokens: number,
+): string | undefined {
+  const build = (candidate: string): string =>
+    `${prefix}${candidate}${TRUNCATION_MARKER}${suffix}`;
+  if (
+    estimateTokens(contextText(headerPrefix, blocks, build(''))) > maxTokens
+  ) {
+    return undefined;
+  }
+
+  let low = 0;
+  let high = text.length;
+  let best = '';
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const candidate = text.slice(0, middle).trimEnd();
+    const candidateTokens = estimateTokens(
+      contextText(headerPrefix, blocks, build(candidate)),
+    );
+    if (candidateTokens <= maxTokens) {
+      best = candidate;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return build(best);
 }
 
 function roundNumber(value: number): number {
@@ -775,10 +971,15 @@ function assertInMemoryEmbeddingProfileImmutability(
   if (existing.dimensions !== incoming.dimensions) {
     immutableChanges.push('dimensions');
   }
-  if ((existing.distanceMetric ?? 'cosine') !== (incoming.distanceMetric ?? 'cosine')) {
+  if (
+    (existing.distanceMetric ?? 'cosine') !==
+    (incoming.distanceMetric ?? 'cosine')
+  ) {
     immutableChanges.push('distanceMetric');
   }
-  if ((existing.taskInstruction ?? null) !== (incoming.taskInstruction ?? null)) {
+  if (
+    (existing.taskInstruction ?? null) !== (incoming.taskInstruction ?? null)
+  ) {
     immutableChanges.push('taskInstruction');
   }
 
@@ -805,7 +1006,9 @@ function assertKnowledgeRecordOwnership(
     return;
   }
   if (existing.tenantId !== incoming.tenantId) {
-    throw new LLMError(`Cannot upsert ${kind} "${id}": different tenant; use a new id.`);
+    throw new LLMError(
+      `Cannot upsert ${kind} "${id}": different tenant; use a new id.`,
+    );
   }
   if (existing.botId !== undefined && existing.botId !== incoming.botId) {
     throw new LLMError(`Cannot upsert ${kind} "${id}": different bot.`);
@@ -819,7 +1022,9 @@ function assertUpsertOwnershipResult(
 ): void {
   const affected = result.rowCount ?? result.rows.length;
   if (affected === 0) {
-    throw new LLMError(`Cannot upsert ${kind} "${id}": different tenant or bot; use a new id.`);
+    throw new LLMError(
+      `Cannot upsert ${kind} "${id}": different tenant or bot; use a new id.`,
+    );
   }
 }
 
@@ -838,8 +1043,10 @@ function buildInMemoryRetrievalResult(
     title: chunk.title ?? source.title ?? source.name,
     ...(chunk.endOffset !== undefined ? { endOffset: chunk.endOffset } : {}),
     ...(chunk.metadata ? { metadata: chunk.metadata } : {}),
-    ...(chunk.startOffset !== undefined ? { startOffset: chunk.startOffset } : {}),
-    ...(chunk.url ?? source.canonicalUrl
+    ...(chunk.startOffset !== undefined
+      ? { startOffset: chunk.startOffset }
+      : {}),
+    ...((chunk.url ?? source.canonicalUrl)
       ? { url: chunk.url ?? source.canonicalUrl }
       : {}),
   };
@@ -887,7 +1094,9 @@ function calculateLexicalSearchScore(
   }
 
   const haystack = normalizeLexicalText(
-    [chunk.title, source.title, source.name, chunk.text].filter(Boolean).join('\n'),
+    [chunk.title, source.title, source.name, chunk.text]
+      .filter(Boolean)
+      .join('\n'),
   );
   if (haystack.length === 0) {
     return 0;
@@ -910,7 +1119,9 @@ function calculateLexicalSearchScore(
     score += tokens.length * 3;
   }
 
-  if ((chunk.title ?? source.title ?? '').toLowerCase().includes(normalizedQuery)) {
+  if (
+    (chunk.title ?? source.title ?? '').toLowerCase().includes(normalizedQuery)
+  ) {
     score += 4;
   }
 
@@ -974,10 +1185,16 @@ function matchesInMemoryRetrievalFilter(
   if (filter.botId && chunk.botId !== filter.botId) {
     return false;
   }
-  if (filter.knowledgeSpaceId && chunk.knowledgeSpaceId !== filter.knowledgeSpaceId) {
+  if (
+    filter.knowledgeSpaceId &&
+    chunk.knowledgeSpaceId !== filter.knowledgeSpaceId
+  ) {
     return false;
   }
-  if (filter.embeddingProfileId && chunk.embeddingProfileId !== filter.embeddingProfileId) {
+  if (
+    filter.embeddingProfileId &&
+    chunk.embeddingProfileId !== filter.embeddingProfileId
+  ) {
     return false;
   }
   if (filter.scopeType && (chunk.scopeType ?? 'bot') !== filter.scopeType) {
@@ -986,7 +1203,11 @@ function matchesInMemoryRetrievalFilter(
   if (filter.scopeUserId && chunk.scopeUserId !== filter.scopeUserId) {
     return false;
   }
-  if (filter.sourceIds && filter.sourceIds.length > 0 && !filter.sourceIds.includes(chunk.sourceId)) {
+  if (
+    filter.sourceIds &&
+    filter.sourceIds.length > 0 &&
+    !filter.sourceIds.includes(chunk.sourceId)
+  ) {
     return false;
   }
   if (
@@ -1008,7 +1229,10 @@ function matchesInMemoryRetrievalFilter(
       return false;
     }
   }
-  if (filter.metadata && !matchesJsonRecordSubset(chunk.metadata ?? {}, filter.metadata)) {
+  if (
+    filter.metadata &&
+    !matchesJsonRecordSubset(chunk.metadata ?? {}, filter.metadata)
+  ) {
     return false;
   }
 
@@ -1034,7 +1258,10 @@ function matchesJsonValue(
     }
 
     return expected.every((expectedItem) =>
-      actual.some((actualItem) => JSON.stringify(actualItem) === JSON.stringify(expectedItem)),
+      actual.some(
+        (actualItem) =>
+          JSON.stringify(actualItem) === JSON.stringify(expectedItem),
+      ),
     );
   }
 
@@ -1042,40 +1269,17 @@ function matchesJsonValue(
 }
 
 function normalizeLexicalText(value: string): string {
-  return value.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, ' ').replace(/\s+/g, ' ').trim();
+  return value
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function tokenizeLexicalQuery(query: string): string[] {
-  return Array.from(new Set(query.split(' ').filter((token) => token.length > 0)));
-}
-
-function truncateTextToTokenBudget(text: string, tokenBudget: number): string {
-  if (tokenBudget <= 0 || text.length === 0) {
-    return '';
-  }
-
-  if (estimateTokens(text) <= tokenBudget) {
-    return text;
-  }
-
-  let low = 0;
-  let high = text.length;
-  let best = '';
-
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2);
-    const candidate = text.slice(0, middle).trimEnd();
-    const candidateTokens = estimateTokens(candidate);
-
-    if (candidateTokens <= tokenBudget) {
-      best = candidate;
-      low = middle + 1;
-    } else {
-      high = middle - 1;
-    }
-  }
-
-  return best;
+  return Array.from(
+    new Set(query.split(' ').filter((token) => token.length > 0)),
+  );
 }
 
 function withCitationOrdinal(
@@ -1117,7 +1321,9 @@ function buildEmbeddingRequestOptions(
       ? { dimensions: embeddingOptions.dimensions }
       : {}),
     ...(embeddingOptions?.model ? { model: embeddingOptions.model } : {}),
-    ...(embeddingOptions?.provider ? { provider: embeddingOptions.provider } : {}),
+    ...(embeddingOptions?.provider
+      ? { provider: embeddingOptions.provider }
+      : {}),
     ...(embeddingOptions?.providerOptions
       ? { providerOptions: embeddingOptions.providerOptions }
       : {}),
@@ -1130,7 +1336,10 @@ function buildHybridMergeOptions(
   fusionK: number | undefined,
   lexicalWeight: number | undefined,
   maxPerSource: number | undefined,
-): Omit<MergeRetrievalCandidatesOptions, 'denseResults' | 'lexicalResults' | 'topK'> {
+): Omit<
+  MergeRetrievalCandidatesOptions,
+  'denseResults' | 'lexicalResults' | 'topK'
+> {
   return {
     ...(denseWeight !== undefined ? { denseWeight } : {}),
     ...(fusionK !== undefined ? { fusionK } : {}),
@@ -1172,7 +1381,9 @@ export type KnowledgeSourceStatus =
 
 export type PostgresDistanceMetric = 'cosine' | 'inner_product' | 'l2';
 
-export interface PostgresKnowledgeStoreQueryResult<TRow = Record<string, unknown>> {
+export interface PostgresKnowledgeStoreQueryResult<
+  TRow = Record<string, unknown>,
+> {
   rowCount?: null | number;
   rows: TRow[];
 }
@@ -1236,8 +1447,7 @@ export interface PostgresActiveEmbeddingProfileFilter {
   tenantId: string;
 }
 
-export interface PostgresActivateEmbeddingProfileOptions
-  extends PostgresActiveEmbeddingProfileFilter {
+export interface PostgresActivateEmbeddingProfileOptions extends PostgresActiveEmbeddingProfileFilter {
   embeddingProfileId: string;
 }
 
@@ -1315,7 +1525,8 @@ export interface PgvectorHnswIndexOptions {
 export type KnowledgeSpaceRecord = PostgresKnowledgeSpaceRecord;
 export type EmbeddingProfileRecord = PostgresEmbeddingProfileRecord;
 export type ActiveEmbeddingProfileFilter = PostgresActiveEmbeddingProfileFilter;
-export type ActivateEmbeddingProfileOptions = PostgresActivateEmbeddingProfileOptions;
+export type ActivateEmbeddingProfileOptions =
+  PostgresActivateEmbeddingProfileOptions;
 export type KnowledgeSourceRecord = PostgresKnowledgeSourceRecord;
 export type KnowledgeSourceListOptions = PostgresKnowledgeSourceListOptions;
 export type MarkKnowledgeSourcesNeedingReindexOptions =
@@ -1398,7 +1609,8 @@ export function createPgvectorHnswIndexSql(
 ): string {
   const dimensions = assertPgvectorDimensions(options.dimensions);
   const schemaName = options.schemaName ?? DEFAULT_POSTGRES_SCHEMA;
-  const chunksTableName = options.chunksTableName ?? DEFAULT_POSTGRES_TABLE_NAMES.chunks;
+  const chunksTableName =
+    options.chunksTableName ?? DEFAULT_POSTGRES_TABLE_NAMES.chunks;
   const distanceMetric = options.distanceMetric ?? 'cosine';
   const opClass = getPgvectorOperatorClass(distanceMetric);
   const indexName =
@@ -1432,7 +1644,9 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
     this.now = options.now ?? (() => new Date());
   }
 
-  async searchByEmbedding(options: DenseKnowledgeSearchOptions): Promise<RetrievalResult[]> {
+  async searchByEmbedding(
+    options: DenseKnowledgeSearchOptions,
+  ): Promise<RetrievalResult[]> {
     assertQueryEmbedding(options.queryEmbedding);
     this.assertAllowedFilter(options.filter, 'searchByEmbedding');
 
@@ -1447,7 +1661,10 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
           return [];
         }
 
-        const score = calculateCosineSimilarity(options.queryEmbedding, chunk.embedding);
+        const score = calculateCosineSimilarity(
+          options.queryEmbedding,
+          chunk.embedding,
+        );
         if (!Number.isFinite(score)) {
           return [];
         }
@@ -1465,7 +1682,9 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
     return matches;
   }
 
-  async searchByText(options: LexicalKnowledgeSearchOptions): Promise<RetrievalResult[]> {
+  async searchByText(
+    options: LexicalKnowledgeSearchOptions,
+  ): Promise<RetrievalResult[]> {
     const query = options.query.trim();
     if (query.length === 0) {
       return [];
@@ -1530,7 +1749,10 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
       );
     }
 
-    if (existing.tenantId !== options.tenantId || existing.botId !== options.botId) {
+    if (
+      existing.tenantId !== options.tenantId ||
+      existing.botId !== options.botId
+    ) {
       throw new LLMError(
         `Cannot activate embedding profile "${options.embeddingProfileId}" because knowledge space "${options.knowledgeSpaceId}" does not belong to tenant "${options.tenantId}" and bot "${options.botId}".`,
         {
@@ -1707,7 +1929,9 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
       ...record,
       createdAt: existing?.createdAt ?? record.createdAt ?? timestamp,
       updatedAt: record.updatedAt ?? timestamp,
-      ...(record.distanceMetric === undefined ? { distanceMetric: 'cosine' } : {}),
+      ...(record.distanceMetric === undefined
+        ? { distanceMetric: 'cosine' }
+        : {}),
       ...(record.purposeDefaults === undefined ? { purposeDefaults: [] } : {}),
       ...(record.status === undefined ? { status: 'active' } : {}),
     };
@@ -1763,7 +1987,9 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
       ...record,
       createdAt: existing?.createdAt ?? record.createdAt ?? timestamp,
       updatedAt: record.updatedAt ?? timestamp,
-      ...(record.visibilityScope === undefined ? { visibilityScope: 'bot' } : {}),
+      ...(record.visibilityScope === undefined
+        ? { visibilityScope: 'bot' }
+        : {}),
     };
 
     this.spaces.set(normalized.id, normalized);
@@ -1791,8 +2017,10 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
     this.searchConfig = options.searchConfig ?? DEFAULT_POSTGRES_SEARCH_CONFIG;
     this.tableNames = {
       chunks: options.tableNames?.chunks ?? DEFAULT_POSTGRES_TABLE_NAMES.chunks,
-      profiles: options.tableNames?.profiles ?? DEFAULT_POSTGRES_TABLE_NAMES.profiles,
-      sources: options.tableNames?.sources ?? DEFAULT_POSTGRES_TABLE_NAMES.sources,
+      profiles:
+        options.tableNames?.profiles ?? DEFAULT_POSTGRES_TABLE_NAMES.profiles,
+      sources:
+        options.tableNames?.sources ?? DEFAULT_POSTGRES_TABLE_NAMES.sources,
       spaces: options.tableNames?.spaces ?? DEFAULT_POSTGRES_TABLE_NAMES.spaces,
     };
   }
@@ -1825,16 +2053,26 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
     await this.ensureSchemaPromise;
   }
 
-  async searchByEmbedding(options: DenseKnowledgeSearchOptions): Promise<RetrievalResult[]> {
+  async searchByEmbedding(
+    options: DenseKnowledgeSearchOptions,
+  ): Promise<RetrievalResult[]> {
     await this.ensureSchema();
 
     assertQueryEmbedding(options.queryEmbedding);
     assertRequiredRetrievalFilter(options.filter, 'searchByEmbedding');
 
     const vectorLiteral = toVectorLiteral(options.queryEmbedding);
-    const similarityExpression = buildDenseSimilarityExpression('p.distance_metric', '$1');
+    const similarityExpression = buildDenseSimilarityExpression(
+      'p.distance_metric',
+      '$1',
+    );
     const values: unknown[] = [vectorLiteral];
-    const filterSql = buildPostgresFilterClause(options.filter, values, 'c', 's');
+    const filterSql = buildPostgresFilterClause(
+      options.filter,
+      values,
+      'c',
+      's',
+    );
     const minScoreSql =
       options.minScore !== undefined
         ? ` AND ${similarityExpression} >= ${pushSqlValue(values, options.minScore)}`
@@ -1873,7 +2111,9 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
     return result.rows.map((row) => mapPostgresRetrievalResult(row, 'dense'));
   }
 
-  async searchByText(options: LexicalKnowledgeSearchOptions): Promise<RetrievalResult[]> {
+  async searchByText(
+    options: LexicalKnowledgeSearchOptions,
+  ): Promise<RetrievalResult[]> {
     await this.ensureSchema();
 
     const normalizedQuery = options.query.trim();
@@ -1886,7 +2126,12 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
     const values: unknown[] = [normalizedQuery];
     const queryExpression = buildTsQueryExpression(this.searchConfig, '$1');
     const rankExpression = `ts_rank_cd(c.search_document, ${queryExpression})`;
-    const filterSql = buildPostgresFilterClause(options.filter, values, 'c', 's');
+    const filterSql = buildPostgresFilterClause(
+      options.filter,
+      values,
+      'c',
+      's',
+    );
     const minScoreSql =
       options.minScore !== undefined
         ? ` AND ${rankExpression} >= ${pushSqlValue(values, options.minScore)}`
@@ -2140,7 +2385,9 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
       ...record,
       createdAt,
       updatedAt,
-      ...(record.distanceMetric === undefined ? { distanceMetric: 'cosine' } : {}),
+      ...(record.distanceMetric === undefined
+        ? { distanceMetric: 'cosine' }
+        : {}),
       ...(record.purposeDefaults === undefined ? { purposeDefaults: [] } : {}),
       ...(record.status === undefined ? { status: 'active' } : {}),
     };
@@ -2386,7 +2633,9 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
       ...record,
       createdAt,
       updatedAt,
-      ...(record.visibilityScope === undefined ? { visibilityScope: 'bot' } : {}),
+      ...(record.visibilityScope === undefined
+        ? { visibilityScope: 'bot' }
+        : {}),
     };
   }
 
@@ -2439,14 +2688,21 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
     if (existing.dimensions !== record.dimensions) {
       immutableChanges.push('dimensions');
     }
-    if ((existing.distance_metric ?? 'cosine') !== (record.distanceMetric ?? 'cosine')) {
+    if (
+      (existing.distance_metric ?? 'cosine') !==
+      (record.distanceMetric ?? 'cosine')
+    ) {
       immutableChanges.push('distanceMetric');
     }
-    if ((existing.task_instruction ?? null) !== (record.taskInstruction ?? null)) {
+    if (
+      (existing.task_instruction ?? null) !== (record.taskInstruction ?? null)
+    ) {
       immutableChanges.push('taskInstruction');
     }
 
-    const existingPurposes = JSON.stringify(normalizePurposeDefaults(existing.purpose_defaults));
+    const existingPurposes = JSON.stringify(
+      normalizePurposeDefaults(existing.purpose_defaults),
+    );
     const incomingPurposes = JSON.stringify(record.purposeDefaults ?? []);
     if (existingPurposes !== incomingPurposes) {
       immutableChanges.push('purposeDefaults');
@@ -2536,7 +2792,8 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
       return this.internalPool;
     }
 
-    const connectionString = this.connectionString ?? getEnvironmentVariable('DATABASE_URL');
+    const connectionString =
+      this.connectionString ?? getEnvironmentVariable('DATABASE_URL');
     if (!connectionString) {
       throw new Error(
         'DATABASE_URL is required for PostgresKnowledgeStore. Set it in .env or pass connectionString explicitly.',
@@ -2562,7 +2819,9 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
       await pool.query('CREATE EXTENSION IF NOT EXISTS vector');
     }
 
-    await pool.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(this.schemaName)}`);
+    await pool.query(
+      `CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(this.schemaName)}`,
+    );
     await pool.query(
       `CREATE TABLE IF NOT EXISTS ${spacesTable} (
          id TEXT PRIMARY KEY,
@@ -2693,7 +2952,9 @@ function assertQueryEmbedding(queryEmbedding: number[]): void {
 
   for (const value of queryEmbedding) {
     if (!Number.isFinite(value)) {
-      throw new LLMError('Embedding vectors must contain only finite numeric values.');
+      throw new LLMError(
+        'Embedding vectors must contain only finite numeric values.',
+      );
     }
   }
 }
@@ -2779,19 +3040,27 @@ function buildPostgresFilterClause(
   }
 
   if (filter.metadata) {
-    clauses.push(`${chunkAlias}.metadata @> ${pushSqlValue(values, JSON.stringify(filter.metadata))}::jsonb`);
+    clauses.push(
+      `${chunkAlias}.metadata @> ${pushSqlValue(values, JSON.stringify(filter.metadata))}::jsonb`,
+    );
   }
 
   if (filter.scopeType) {
-    clauses.push(`${chunkAlias}.scope_type = ${pushSqlValue(values, filter.scopeType)}`);
+    clauses.push(
+      `${chunkAlias}.scope_type = ${pushSqlValue(values, filter.scopeType)}`,
+    );
   }
 
   if (filter.scopeUserId) {
-    clauses.push(`${chunkAlias}.scope_user_id = ${pushSqlValue(values, filter.scopeUserId)}`);
+    clauses.push(
+      `${chunkAlias}.scope_user_id = ${pushSqlValue(values, filter.scopeUserId)}`,
+    );
   }
 
   if (filter.sourceIds && filter.sourceIds.length > 0) {
-    clauses.push(`${chunkAlias}.source_id = ANY(${pushSqlValue(values, filter.sourceIds)})`);
+    clauses.push(
+      `${chunkAlias}.source_id = ANY(${pushSqlValue(values, filter.sourceIds)})`,
+    );
   }
 
   if (filter.sourceTypes && filter.sourceTypes.length > 0) {
@@ -2812,11 +3081,16 @@ function buildSafeIndexName(value: string): string {
     .slice(0, 63);
 }
 
-function buildTsQueryExpression(searchConfig: string, queryReference: string): string {
+function buildTsQueryExpression(
+  searchConfig: string,
+  queryReference: string,
+): string {
   return `websearch_to_tsquery(${quoteLiteral(searchConfig)}, ${queryReference})`;
 }
 
-function getPgvectorOperatorClass(distanceMetric: PostgresDistanceMetric): string {
+function getPgvectorOperatorClass(
+  distanceMetric: PostgresDistanceMetric,
+): string {
   switch (distanceMetric) {
     case 'inner_product':
       return 'vector_ip_ops';
@@ -2908,7 +3182,9 @@ function mapPostgresKnowledgeSource(
     ...(row.canonical_url ? { canonicalUrl: row.canonical_url } : {}),
     ...(row.checksum ? { checksum: row.checksum } : {}),
     createdAt: row.created_at,
-    ...(row.embedding_profile_id ? { embeddingProfileId: row.embedding_profile_id } : {}),
+    ...(row.embedding_profile_id
+      ? { embeddingProfileId: row.embedding_profile_id }
+      : {}),
     ...(row.error_message ? { errorMessage: row.error_message } : {}),
     ...(row.external_id ? { externalId: row.external_id } : {}),
     id: row.id,
@@ -3020,10 +3296,14 @@ function serializeCitation(
     return {
       chunkId: record.id,
       sourceId: record.sourceId,
-      ...(record.endOffset !== undefined ? { endOffset: record.endOffset } : {}),
+      ...(record.endOffset !== undefined
+        ? { endOffset: record.endOffset }
+        : {}),
       ...(record.metadata ? { metadata: record.metadata } : {}),
       ...(record.sourceName ? { sourceName: record.sourceName } : {}),
-      ...(record.startOffset !== undefined ? { startOffset: record.startOffset } : {}),
+      ...(record.startOffset !== undefined
+        ? { startOffset: record.startOffset }
+        : {}),
       ...(record.title ? { title: record.title } : {}),
       ...(record.url ? { url: record.url } : {}),
     };
@@ -3032,11 +3312,15 @@ function serializeCitation(
   return {
     chunkId: citation.chunkId,
     sourceId: citation.sourceId,
-    ...(citation.endOffset !== undefined ? { endOffset: citation.endOffset } : {}),
+    ...(citation.endOffset !== undefined
+      ? { endOffset: citation.endOffset }
+      : {}),
     ...(citation.metadata ? { metadata: citation.metadata } : {}),
     ...(citation.ordinal !== undefined ? { ordinal: citation.ordinal } : {}),
     ...(citation.sourceName ? { sourceName: citation.sourceName } : {}),
-    ...(citation.startOffset !== undefined ? { startOffset: citation.startOffset } : {}),
+    ...(citation.startOffset !== undefined
+      ? { startOffset: citation.startOffset }
+      : {}),
     ...(citation.title ? { title: citation.title } : {}),
     ...(citation.url ? { url: citation.url } : {}),
   };

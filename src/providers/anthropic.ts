@@ -6,6 +6,7 @@ import {
   RateLimitError,
 } from 'unified-llm-client/errors';
 import { ModelRegistry } from 'unified-llm-client/models';
+import { validateAnthropicCacheControls } from '../cache-validation.js';
 import {
   discoveryError,
   isPlainObject,
@@ -17,6 +18,10 @@ import {
 import { anthropicUsageToCanonical, usageWithCost } from '../utils/cost.js';
 import { parseSSE } from '../utils/parse-sse.js';
 import { withRetry } from '../utils/retry.js';
+import {
+  validateAndCloneTool,
+  validateAndCloneTools,
+} from '../tool-validation.js';
 import { buildAnthropicOutputConfig } from '../structured-output.js';
 
 import type {
@@ -189,7 +194,9 @@ export class AnthropicAdapter {
     this.retryOptions = config.retryOptions;
   }
 
-  async complete(options: AnthropicCompletionOptions): Promise<CanonicalResponse> {
+  async complete(
+    options: AnthropicCompletionOptions,
+  ): Promise<CanonicalResponse> {
     this.assertCapabilities(options);
 
     const response = await withRetry(
@@ -213,7 +220,11 @@ export class AnthropicAdapter {
     }
 
     const payload = (await response.json()) as AnthropicResponsePayload;
-    return translateAnthropicResponse(payload, this.modelRegistry, options.model);
+    return translateAnthropicResponse(
+      payload,
+      this.modelRegistry,
+      options.model,
+    );
   }
 
   async *stream(
@@ -245,10 +256,13 @@ export class AnthropicAdapter {
     }
 
     if (!response.body) {
-      throw new ProviderError('Anthropic streaming response did not include a body.', {
-        model: options.model,
-        provider: 'anthropic',
-      });
+      throw new ProviderError(
+        'Anthropic streaming response did not include a body.',
+        {
+          model: options.model,
+          provider: 'anthropic',
+        },
+      );
     }
 
     const assembler = new AnthropicStreamAssembler(
@@ -361,15 +375,27 @@ export class AnthropicAdapter {
     }
 
     if (options.tools && options.tools.length > 0) {
-      this.modelRegistry.assertCapability(options.model, 'supportsTools', 'tool calling');
+      this.modelRegistry.assertCapability(
+        options.model,
+        'supportsTools',
+        'tool calling',
+      );
     }
 
     if (options.stream) {
-      this.modelRegistry.assertCapability(options.model, 'supportsStreaming', 'streaming');
+      this.modelRegistry.assertCapability(
+        options.model,
+        'supportsStreaming',
+        'streaming',
+      );
     }
 
     if (options.messages.some(messageContainsVisionContent)) {
-      this.modelRegistry.assertCapability(options.model, 'supportsVision', 'vision');
+      this.modelRegistry.assertCapability(
+        options.model,
+        'supportsVision',
+        'vision',
+      );
     }
 
     if (options.messages.some(messageContainsAudio)) {
@@ -395,10 +421,22 @@ export class AnthropicAdapter {
 export function translateAnthropicRequest(
   options: AnthropicCompletionOptions,
 ): Record<string, unknown> {
-  const systemMessages = options.messages.filter((message) => message.role === 'system');
-  const nonSystemMessages = options.messages.filter((message) => message.role !== 'system');
+  const validatedTools =
+    options.tools === undefined
+      ? undefined
+      : validateAndCloneTools(options.tools, 'anthropic', options.model);
+  const validatedCacheControl = validateAnthropicCacheControls({
+    messages: options.messages,
+    model: options.model,
+    providerOptions: options.providerOptions,
+  });
+  const systemMessages = options.messages.filter(
+    (message) => message.role === 'system',
+  );
+  const nonSystemMessages = options.messages.filter(
+    (message) => message.role !== 'system',
+  );
   const anthropicOptions = options.providerOptions?.anthropic;
-  const cacheControl = anthropicOptions?.cacheControl;
 
   const body: Record<string, unknown> = {
     max_tokens: options.maxTokens,
@@ -429,16 +467,16 @@ export function translateAnthropicRequest(
     body.output_config = outputConfig;
   }
 
-  if (options.tools && options.tools.length > 0) {
-    body.tools = options.tools.map(translateAnthropicTool);
+  if (validatedTools && validatedTools.length > 0) {
+    body.tools = validatedTools.map(translateAnthropicToolDefinition);
   }
 
   if (options.toolChoice) {
     body.tool_choice = translateAnthropicToolChoice(options.toolChoice);
   }
 
-  if (cacheControl) {
-    body.cache_control = cacheControl;
+  if (validatedCacheControl) {
+    body.cache_control = validatedCacheControl;
   }
 
   if (anthropicOptions?.thinking) {
@@ -528,8 +566,18 @@ function translateAnthropicThinking(
 export function translateAnthropicTool(
   tool: CanonicalTool,
 ): AnthropicToolDefinition {
+  return translateAnthropicToolDefinition(
+    validateAndCloneTool(tool, 'anthropic'),
+  );
+}
+
+function translateAnthropicToolDefinition(
+  tool: CanonicalTool,
+): AnthropicToolDefinition {
   return {
-    ...(tool.cacheControl !== undefined ? { cache_control: tool.cacheControl } : {}),
+    ...(tool.cacheControl !== undefined
+      ? { cache_control: tool.cacheControl }
+      : {}),
     description: tool.description,
     input_schema: tool.parameters,
     name: tool.name,
@@ -545,7 +593,8 @@ export function translateAnthropicToolChoice(
       type: 'tool',
     };
     if (toolChoice.disableParallelToolUse !== undefined) {
-      mappedChoice.disable_parallel_tool_use = toolChoice.disableParallelToolUse;
+      mappedChoice.disable_parallel_tool_use =
+        toolChoice.disableParallelToolUse;
     }
     return mappedChoice;
   }
@@ -632,9 +681,13 @@ function resolveAnthropicModelId(
 export async function mapAnthropicError(
   response: Response,
   model?: string,
-): Promise<AuthenticationError | ContextLimitError | ProviderError | RateLimitError> {
+): Promise<
+  AuthenticationError | ContextLimitError | ProviderError | RateLimitError
+> {
   const requestId =
-    response.headers.get('anthropic-request-id') ?? response.headers.get('request-id') ?? undefined;
+    response.headers.get('anthropic-request-id') ??
+    response.headers.get('request-id') ??
+    undefined;
   let body: AnthropicErrorBody | undefined;
 
   try {
@@ -643,7 +696,8 @@ export async function mapAnthropicError(
     body = undefined;
   }
 
-  const message = body?.error?.message ?? `Anthropic request failed with ${response.status}.`;
+  const message =
+    body?.error?.message ?? `Anthropic request failed with ${response.status}.`;
   const type = body?.error?.type;
   const baseOptions = buildAnthropicErrorOptions(
     response.status,
@@ -678,7 +732,10 @@ class AnthropicStreamAssembler {
   private finishReason: CanonicalFinishReason = 'stop';
   private readonly model: string;
   private readonly modelRegistry: ModelRegistry;
-  private toolBuffer = new Map<number, { id: string; json: string; name: string }>();
+  private toolBuffer = new Map<
+    number,
+    { id: string; json: string; name: string }
+  >();
   private usage: AnthropicUsage = {};
 
   constructor(model: string, modelRegistry: ModelRegistry) {
@@ -779,7 +836,9 @@ class AnthropicStreamAssembler {
   }
 }
 
-function translateAnthropicMessage(message: CanonicalMessage): AnthropicMessage {
+function translateAnthropicMessage(
+  message: CanonicalMessage,
+): AnthropicMessage {
   if (message.role === 'system') {
     throw new ProviderCapabilityError(
       'System messages must be lifted into the top-level Anthropic system field.',
@@ -805,14 +864,19 @@ function translateAnthropicPart(
 ): AnthropicContentBlock {
   switch (part.type) {
     case 'audio': {
-      throw new ProviderCapabilityError('Anthropic does not support audio parts.', {
-        provider: 'anthropic',
-      });
+      throw new ProviderCapabilityError(
+        'Anthropic does not support audio parts.',
+        {
+          provider: 'anthropic',
+        },
+      );
     }
     case 'document': {
       if (part.url) {
         const documentBlock: AnthropicDocumentBlock = {
-          ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
+          ...(part.cacheControl !== undefined
+            ? { cache_control: part.cacheControl }
+            : {}),
           source: {
             type: 'url',
             url: part.url,
@@ -826,13 +890,18 @@ function translateAnthropicPart(
       }
 
       if (!part.data) {
-        throw new ProviderCapabilityError('Anthropic documents require data or a URL.', {
-          provider: 'anthropic',
-        });
+        throw new ProviderCapabilityError(
+          'Anthropic documents require data or a URL.',
+          {
+            provider: 'anthropic',
+          },
+        );
       }
 
       const documentBlock: AnthropicDocumentBlock = {
-        ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
+        ...(part.cacheControl !== undefined
+          ? { cache_control: part.cacheControl }
+          : {}),
         source: {
           data: part.data,
           media_type: part.mediaType,
@@ -847,7 +916,9 @@ function translateAnthropicPart(
     }
     case 'image_base64': {
       return {
-        ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
+        ...(part.cacheControl !== undefined
+          ? { cache_control: part.cacheControl }
+          : {}),
         source: {
           data: part.data,
           media_type: part.mediaType,
@@ -858,7 +929,9 @@ function translateAnthropicPart(
     }
     case 'image_url': {
       return {
-        ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
+        ...(part.cacheControl !== undefined
+          ? { cache_control: part.cacheControl }
+          : {}),
         source: {
           type: 'url',
           url: part.url,
@@ -879,7 +952,9 @@ function translateAnthropicPart(
         );
       }
       return {
-        ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
+        ...(part.cacheControl !== undefined
+          ? { cache_control: part.cacheControl }
+          : {}),
         id: part.id,
         input: part.args,
         name: part.name,
@@ -896,7 +971,9 @@ function translateAnthropicPart(
         );
       }
       const toolResultBlock: AnthropicToolResultBlock = {
-        ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
+        ...(part.cacheControl !== undefined
+          ? { cache_control: part.cacheControl }
+          : {}),
         content: stringifyToolResult(part.result),
         tool_use_id: part.toolCallId,
         type: 'tool_result',

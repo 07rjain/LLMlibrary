@@ -1,3 +1,4 @@
+import { ProviderCapabilityError } from 'unified-llm-client/errors';
 import { ModelRegistry } from 'unified-llm-client/models';
 
 import type {
@@ -221,23 +222,42 @@ export function calcSpeechCostUSD(
 
 export function speechUsageWithCost(
   model: ModelInfo,
-  usage: Omit<SpeechUsageMetrics, 'billingUnits' | 'cost' | 'costBreakdown' | 'costUSD'>,
+  usage: Omit<
+    SpeechUsageMetrics,
+    'billingUnits' | 'cost' | 'costBreakdown' | 'costUSD'
+  >,
 ): SpeechUsageMetrics {
   const registry = new ModelRegistry({
     [model.id]: toRegistryEntry(model),
   });
   const cost = calcSpeechCostUSD(
     {
-      ...(usage.audioInputTokens !== undefined ? { audioInputTokens: usage.audioInputTokens } : {}),
-      ...(usage.audioOutputTokens !== undefined ? { audioOutputTokens: usage.audioOutputTokens } : {}),
+      ...(usage.audioInputTokens !== undefined
+        ? { audioInputTokens: usage.audioInputTokens }
+        : {}),
+      ...(usage.audioOutputTokens !== undefined
+        ? { audioOutputTokens: usage.audioOutputTokens }
+        : {}),
       ...(usage.estimated !== undefined ? { estimated: usage.estimated } : {}),
-      ...(usage.inputAudioSeconds !== undefined ? { inputAudioSeconds: usage.inputAudioSeconds } : {}),
-      ...(usage.inputCharacters !== undefined ? { inputCharacters: usage.inputCharacters } : {}),
-      ...(usage.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
+      ...(usage.inputAudioSeconds !== undefined
+        ? { inputAudioSeconds: usage.inputAudioSeconds }
+        : {}),
+      ...(usage.inputCharacters !== undefined
+        ? { inputCharacters: usage.inputCharacters }
+        : {}),
+      ...(usage.inputTokens !== undefined
+        ? { inputTokens: usage.inputTokens }
+        : {}),
       model: model.id,
-      ...(usage.outputAudioSeconds !== undefined ? { outputAudioSeconds: usage.outputAudioSeconds } : {}),
-      ...(usage.outputCharacters !== undefined ? { outputCharacters: usage.outputCharacters } : {}),
-      ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
+      ...(usage.outputAudioSeconds !== undefined
+        ? { outputAudioSeconds: usage.outputAudioSeconds }
+        : {}),
+      ...(usage.outputCharacters !== undefined
+        ? { outputCharacters: usage.outputCharacters }
+        : {}),
+      ...(usage.outputTokens !== undefined
+        ? { outputTokens: usage.outputTokens }
+        : {}),
     },
     registry,
   );
@@ -253,7 +273,20 @@ export function speechUsageWithCost(
 }
 
 export function formatCost(usd: number): string {
-  if (usd === 0) {
+  if (typeof usd !== 'number' || !Number.isFinite(usd) || usd < 0) {
+    throw new ProviderCapabilityError('Invalid cost value.', {
+      details: {
+        code: 'invalid_cost',
+        constraint: 'finite_non_negative_number',
+        option: 'usd',
+        valueType: usd === null ? 'null' : typeof usd,
+      },
+      retryable: false,
+      statusCode: 400,
+    });
+  }
+
+  if (usd === 0 || Object.is(usd, -0)) {
     return '$0.00';
   }
 
@@ -364,7 +397,10 @@ function costForTokens(tokens: number, pricePerMillion: number): number {
   return (tokens / 1_000_000) * pricePerMillion;
 }
 
-function costForCharacters(characters: number, pricePerMillion: number): number {
+function costForCharacters(
+  characters: number,
+  pricePerMillion: number,
+): number {
   return (characters / 1_000_000) * pricePerMillion;
 }
 
@@ -415,14 +451,30 @@ function buildSpeechBillingUnits(
   input: SpeechCostCalculationInput,
 ): SpeechBillingUnits {
   return {
-    ...(input.audioInputTokens !== undefined ? { audioInputTokens: input.audioInputTokens } : {}),
-    ...(input.audioOutputTokens !== undefined ? { audioOutputTokens: input.audioOutputTokens } : {}),
-    ...(input.inputAudioSeconds !== undefined ? { inputAudioSeconds: input.inputAudioSeconds } : {}),
-    ...(input.inputCharacters !== undefined ? { inputCharacters: input.inputCharacters } : {}),
-    ...(input.inputTokens !== undefined ? { inputTokens: input.inputTokens } : {}),
-    ...(input.outputAudioSeconds !== undefined ? { outputAudioSeconds: input.outputAudioSeconds } : {}),
-    ...(input.outputCharacters !== undefined ? { outputCharacters: input.outputCharacters } : {}),
-    ...(input.outputTokens !== undefined ? { outputTokens: input.outputTokens } : {}),
+    ...(input.audioInputTokens !== undefined
+      ? { audioInputTokens: input.audioInputTokens }
+      : {}),
+    ...(input.audioOutputTokens !== undefined
+      ? { audioOutputTokens: input.audioOutputTokens }
+      : {}),
+    ...(input.inputAudioSeconds !== undefined
+      ? { inputAudioSeconds: input.inputAudioSeconds }
+      : {}),
+    ...(input.inputCharacters !== undefined
+      ? { inputCharacters: input.inputCharacters }
+      : {}),
+    ...(input.inputTokens !== undefined
+      ? { inputTokens: input.inputTokens }
+      : {}),
+    ...(input.outputAudioSeconds !== undefined
+      ? { outputAudioSeconds: input.outputAudioSeconds }
+      : {}),
+    ...(input.outputCharacters !== undefined
+      ? { outputCharacters: input.outputCharacters }
+      : {}),
+    ...(input.outputTokens !== undefined
+      ? { outputTokens: input.outputTokens }
+      : {}),
   };
 }
 
