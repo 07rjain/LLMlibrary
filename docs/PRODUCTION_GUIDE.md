@@ -124,6 +124,10 @@ As with text usage, `usage.costUSD` is the numeric field for billing logic. `usa
 
 Use `LLMClient.mock()` for deterministic tests.
 
+Mock operation queues are strict. Queue one entry for every `complete`,
+`stream`, `embed`, `speak`, or `transcribe` call. An empty or exhausted queue
+throws `MockQueueExhaustedError`; mock clients no longer synthesize defaults.
+
 ```ts
 import { LLMClient } from 'unified-llm-client';
 

@@ -20,6 +20,24 @@ try {
   const client = LLMClient.mock({
     defaultModel: 'mock-model',
     defaultProvider: 'mock',
+    responses: [
+      {
+        content: [{ text: 'Pong', type: 'text' }],
+        finishReason: 'stop',
+        model: 'mock-model',
+        provider: 'mock',
+        raw: {},
+        text: 'Pong',
+        toolCalls: [],
+        usage: {
+          cachedTokens: 0,
+          cost: '$0.00',
+          costUSD: 0,
+          inputTokens: 1,
+          outputTokens: 1,
+        },
+      },
+    ],
     sessionStore,
   });
   const conversation = await client.conversation({

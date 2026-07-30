@@ -1,5 +1,8 @@
+import { awaitWithAbort } from '../stream-control.js';
+
 export async function* parseSSE(
   stream: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
 ): AsyncGenerator<string> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -43,7 +46,14 @@ export async function* parseSSE(
   };
 
   while (true) {
-    const { done, value } = await reader.read();
+    let read;
+    try {
+      read = await awaitWithAbort(reader.read(), signal);
+    } catch (error) {
+      void reader.cancel().catch(() => undefined);
+      throw error;
+    }
+    const { done, value } = read;
 
     if (done) {
       buffer += decoder.decode();

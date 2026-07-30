@@ -890,6 +890,139 @@ describe('Gemini adapter', () => {
     });
   });
 
+  it('keeps thought parts private while preserving raw signatures and reasoning usage', () => {
+    const payload = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                text: 'SECRET_INTERNAL_THOUGHT',
+                thought: true,
+                thoughtSignature: 'signature-123',
+              },
+              { text: 'Visible answer.' },
+            ],
+            role: 'model' as const,
+          },
+          finishReason: 'STOP' as const,
+          index: 0,
+        },
+      ],
+      usageMetadata: {
+        candidatesTokenCount: 3,
+        promptTokenCount: 4,
+        thoughtsTokenCount: 9,
+      },
+    };
+
+    const response = translateGeminiResponse(payload, 'gemini-2.5-flash');
+
+    expect(response.text).toBe('Visible answer.');
+    expect(response.content).toEqual([
+      { text: 'Visible answer.', type: 'text' },
+    ]);
+    expect(response.raw).toBe(payload);
+    expect(
+      (response.raw as typeof payload).candidates[0]?.content.parts[0],
+    ).toMatchObject({ thoughtSignature: 'signature-123' });
+    expect(response.usage.reasoningTokens).toBe(9);
+    expect(JSON.stringify(response.content)).not.toContain(
+      'SECRET_INTERNAL_THOUGHT',
+    );
+  });
+
+  it('rejects exported translation of thought-only terminal responses', () => {
+    const payload = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                text: 'SECRET_TRANSLATED_THOUGHT',
+                thought: true,
+                thoughtSignature: 'translated-secret-signature',
+              },
+            ],
+          },
+          finishReason: 'STOP' as const,
+          index: 0,
+        },
+      ],
+    };
+
+    const error = (() => {
+      try {
+        translateGeminiResponse(payload, 'gemini-2.5-flash');
+        return undefined;
+      } catch (caught) {
+        return caught;
+      }
+    })();
+
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error).toMatchObject({
+      details: {
+        code: 'invalid_provider_response',
+        operation: 'complete',
+        path: 'candidates[0].content.parts',
+        phase: 'schema',
+        reason: 'invalid_provider_response',
+      },
+      provider: 'google',
+      retryable: false,
+      statusCode: 502,
+    });
+    expect(JSON.stringify(error)).not.toContain('SECRET_TRANSLATED_THOUGHT');
+    expect(JSON.stringify(error)).not.toContain('translated-secret-signature');
+  });
+
+  it('accepts mixed private-thought and tool output without exposing the thought', () => {
+    const payload = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                text: 'SECRET_TOOL_THOUGHT',
+                thought: true,
+                thoughtSignature: 'tool-secret-signature',
+              },
+              {
+                functionCall: {
+                  args: { city: 'Paris' },
+                  name: 'weather_lookup',
+                },
+              },
+            ],
+          },
+          finishReason: 'STOP' as const,
+          index: 0,
+        },
+      ],
+      usageMetadata: { thoughtsTokenCount: 6 },
+    };
+
+    const response = translateGeminiResponse(payload, 'gemini-2.5-flash');
+
+    expect(response.text).toBe('');
+    expect(response.toolCalls).toEqual([
+      {
+        args: { city: 'Paris' },
+        id: 'gemini_tool_0_1_weather_lookup',
+        name: 'weather_lookup',
+      },
+    ]);
+    expect(response.raw).toBe(payload);
+    expect(response.usage.reasoningTokens).toBe(6);
+    expect(JSON.stringify(response.content)).not.toContain(
+      'SECRET_TOOL_THOUGHT',
+    );
+    expect(JSON.stringify(response.content)).not.toContain(
+      'tool-secret-signature',
+    );
+  });
+
   it('returns content_filter for blocked responses without candidates', () => {
     const response = translateGeminiResponse(
       {
@@ -984,17 +1117,36 @@ describe('Gemini adapter', () => {
   });
 
   it('throws if a response has no candidates and no block reason', () => {
-    expect(() =>
-      translateGeminiResponse(
-        {
-          usageMetadata: {
-            candidatesTokenCount: 0,
-            promptTokenCount: 15,
+    const error = (() => {
+      try {
+        translateGeminiResponse(
+          {
+            usageMetadata: {
+              candidatesTokenCount: 0,
+              promptTokenCount: 15,
+            },
           },
-        },
-        'gemini-2.5-flash',
-      ),
-    ).toThrow(ProviderError);
+          'gemini-2.5-flash',
+        );
+        return undefined;
+      } catch (caught) {
+        return caught;
+      }
+    })();
+
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error).toMatchObject({
+      details: {
+        code: 'invalid_provider_response',
+        operation: 'complete',
+        path: 'candidates',
+        phase: 'schema',
+        reason: 'invalid_provider_response',
+      },
+      provider: 'google',
+      retryable: false,
+      statusCode: 502,
+    });
   });
 
   it('maps Gemini API errors into typed errors', async () => {
@@ -1216,7 +1368,211 @@ describe('Gemini adapter', () => {
     ]);
   });
 
-  it('streams tool calls from complete functionCall chunks', async () => {
+  it('emits opted-in thoughts only as closed reasoning events', async () => {
+    const adapter = new GeminiAdapter({
+      apiKey: 'gemini-key',
+      fetchImplementation: vi.fn(async () =>
+        Promise.resolve(
+          new Response(
+            makeSSEStream([
+              {
+                candidates: [
+                  {
+                    content: {
+                      parts: [
+                        {
+                          text: 'SECRET_REASONING',
+                          thought: true,
+                          thoughtSignature: 'sig',
+                        },
+                      ],
+                    },
+                    finishReason: null,
+                    index: 0,
+                  },
+                ],
+              },
+              {
+                candidates: [
+                  {
+                    content: { parts: [{ text: 'Visible' }] },
+                    finishReason: 'STOP',
+                    index: 0,
+                  },
+                ],
+              },
+            ]),
+            {
+              headers: { 'content-type': 'text/event-stream' },
+              status: 200,
+            },
+          ),
+        ),
+      ),
+    });
+
+    const chunks = [];
+    for await (const chunk of adapter.stream({
+      maxTokens: 32,
+      messages: [{ content: 'hello', role: 'user' }],
+      model: 'gemini-2.5-flash',
+      providerOptions: {
+        google: { thinking: { includeThoughts: true } },
+      },
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.slice(0, 4)).toEqual([
+      { type: 'reasoning-start' },
+      { delta: 'SECRET_REASONING', type: 'reasoning-delta' },
+      { type: 'reasoning-end' },
+      { delta: 'Visible', type: 'text-delta' },
+    ]);
+    expect(chunks.at(-1)).toMatchObject({ type: 'done' });
+    expect(
+      chunks
+        .filter((chunk) => chunk.type === 'text-delta')
+        .map((chunk) => ('delta' in chunk ? chunk.delta : ''))
+        .join(''),
+    ).toBe('Visible');
+  });
+
+  it('keeps streamed thought parts private by default', async () => {
+    const adapter = new GeminiAdapter({
+      apiKey: 'gemini-key',
+      fetchImplementation: vi.fn(async () =>
+        Promise.resolve(
+          new Response(
+            makeSSEStream([
+              {
+                candidates: [
+                  {
+                    content: {
+                      parts: [
+                        {
+                          text: 'SECRET_DEFAULT_REASONING',
+                          thought: true,
+                          thoughtSignature: 'private-signature',
+                        },
+                      ],
+                    },
+                    finishReason: null,
+                    index: 0,
+                  },
+                ],
+              },
+              {
+                candidates: [
+                  {
+                    content: { parts: [{ text: 'Visible answer' }] },
+                    finishReason: 'STOP',
+                    index: 0,
+                  },
+                ],
+                usageMetadata: {
+                  candidatesTokenCount: 2,
+                  promptTokenCount: 1,
+                  thoughtsTokenCount: 5,
+                },
+              },
+            ]),
+            {
+              headers: { 'content-type': 'text/event-stream' },
+              status: 200,
+            },
+          ),
+        ),
+      ),
+    });
+
+    const chunks = [];
+    for await (const chunk of adapter.stream({
+      maxTokens: 32,
+      messages: [{ content: 'hello', role: 'user' }],
+      model: 'gemini-2.5-flash',
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toContainEqual({
+      delta: 'Visible answer',
+      type: 'text-delta',
+    });
+    expect(chunks.some((chunk) => chunk.type.startsWith('reasoning-'))).toBe(
+      false,
+    );
+    expect(JSON.stringify(chunks)).not.toContain('SECRET_DEFAULT_REASONING');
+    expect(JSON.stringify(chunks)).not.toContain('private-signature');
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'done',
+      usage: { reasoningTokens: 5 },
+    });
+  });
+
+  it('accepts thought-only terminal streams when thoughts are explicitly emitted', async () => {
+    const adapter = new GeminiAdapter({
+      apiKey: 'gemini-key',
+      fetchImplementation: vi.fn(async () =>
+        Promise.resolve(
+          new Response(
+            makeSSEStream([
+              {
+                candidates: [
+                  {
+                    content: {
+                      parts: [
+                        {
+                          text: 'Opted-in reasoning',
+                          thought: true,
+                          thoughtSignature: 'private-reasoning-signature',
+                        },
+                      ],
+                    },
+                    finishReason: 'STOP',
+                    index: 0,
+                  },
+                ],
+                usageMetadata: {
+                  promptTokenCount: 1,
+                  thoughtsTokenCount: 7,
+                },
+              },
+            ]),
+            {
+              headers: { 'content-type': 'text/event-stream' },
+              status: 200,
+            },
+          ),
+        ),
+      ),
+    });
+
+    const chunks = [];
+    for await (const chunk of adapter.stream({
+      maxTokens: 32,
+      messages: [{ content: 'hello', role: 'user' }],
+      model: 'gemini-2.5-flash',
+      providerOptions: {
+        google: { thinking: { includeThoughts: true } },
+      },
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual([
+      { type: 'reasoning-start' },
+      { delta: 'Opted-in reasoning', type: 'reasoning-delta' },
+      { type: 'reasoning-end' },
+      expect.objectContaining({
+        type: 'done',
+        usage: expect.objectContaining({ reasoningTokens: 7 }),
+      }),
+    ]);
+    expect(JSON.stringify(chunks)).not.toContain('private-reasoning-signature');
+  });
+
+  it('streams mixed private-thought and functionCall chunks', async () => {
     const adapter = new GeminiAdapter({
       apiKey: 'gemini-key',
       fetchImplementation: vi.fn(
@@ -1228,6 +1584,11 @@ describe('Gemini adapter', () => {
                   {
                     content: {
                       parts: [
+                        {
+                          text: 'SECRET_STREAM_TOOL_THOUGHT',
+                          thought: true,
+                          thoughtSignature: 'stream-tool-secret-signature',
+                        },
                         {
                           functionCall: {
                             args: { city: 'Berlin' },
@@ -1279,21 +1640,25 @@ describe('Gemini adapter', () => {
 
     expect(chunks).toEqual([
       {
-        id: 'gemini_tool_0_0_weather_lookup',
+        id: 'gemini_tool_0_1_weather_lookup',
         name: 'weather_lookup',
         type: 'tool-call-start',
       },
       {
-        id: 'gemini_tool_0_0_weather_lookup',
+        id: 'gemini_tool_0_1_weather_lookup',
         name: 'weather_lookup',
-        result: { city: 'Berlin' },
-        type: 'tool-call-result',
+        args: { city: 'Berlin' },
+        type: 'tool-call-arguments',
       },
       expect.objectContaining({
         finishReason: 'tool_call',
         type: 'done',
       }),
     ]);
+    expect(JSON.stringify(chunks)).not.toContain('SECRET_STREAM_TOOL_THOUGHT');
+    expect(JSON.stringify(chunks)).not.toContain(
+      'stream-tool-secret-signature',
+    );
   });
 
   it('deduplicates repeated streamed functionCall chunks and preserves blocked finish state', async () => {
@@ -1390,8 +1755,8 @@ describe('Gemini adapter', () => {
       {
         id: 'gemini_tool_0_0_weather_lookup',
         name: 'weather_lookup',
-        result: { city: 'Berlin' },
-        type: 'tool-call-result',
+        args: { city: 'Berlin' },
+        type: 'tool-call-arguments',
       },
       expect.objectContaining({
         finishReason: 'tool_call',

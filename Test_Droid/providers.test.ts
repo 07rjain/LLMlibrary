@@ -106,6 +106,21 @@ describe('Provider Adapters', () => {
             start(controller) {
               controller.enqueue(
                 new TextEncoder().encode(
+                  `event: message_start\ndata: ${JSON.stringify({
+                    message: {
+                      content: [],
+                      id: 'msg_stream',
+                      model: 'claude-sonnet-4-6',
+                      role: 'assistant',
+                      stop_reason: null,
+                      usage: { input_tokens: 2, output_tokens: 0 },
+                    },
+                    type: 'message_start',
+                  })}\n\n`,
+                ),
+              );
+              controller.enqueue(
+                new TextEncoder().encode(
                   `event: content_block_start\ndata: ${JSON.stringify({
                     content_block: { text: '', type: 'text' },
                     index: 0,

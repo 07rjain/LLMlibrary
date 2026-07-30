@@ -535,7 +535,7 @@ export interface CanonicalResponse {
   usage: UsageMetrics;
 }
 
-export const STREAM_EVENT_VERSION = 2 as const;
+export const STREAM_EVENT_VERSION = 3 as const;
 export type StreamEventVersion = typeof STREAM_EVENT_VERSION;
 
 export interface StreamEventBase {
@@ -550,7 +550,14 @@ export type StreamChunk =
   | (StreamEventBase & { id: string; name: string; type: 'tool-call-start' })
   | (StreamEventBase & { argsDelta: string; id: string; type: 'tool-call-delta' })
   | (StreamEventBase & {
+      args: JsonObject;
       id: string;
+      name: string;
+      type: 'tool-call-arguments';
+    })
+  | (StreamEventBase & {
+      id: string;
+      isError?: boolean;
       name: string;
       result: JsonValue;
       type: 'tool-call-result';

@@ -67,6 +67,51 @@ export function throwIfAborted(signal: AbortSignal | undefined): void {
   throw buildAbortError(signal.reason);
 }
 
+export async function awaitWithAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  throwIfAborted(signal);
+  if (!signal) {
+    return promise;
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => {
+      signal.removeEventListener('abort', onAbort);
+    };
+    const onAbort = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(buildAbortError(signal.reason));
+    };
+
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
 function subscribeAbortSignal(
   upstreamSignal: AbortSignal | undefined,
   controller: AbortController,

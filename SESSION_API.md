@@ -193,6 +193,7 @@ Supported query parameters:
 - `response.text.delta`
 - `response.tool_call.start`
 - `response.tool_call.delta`
+- `response.tool_call.arguments`
 - `response.tool_call.result`
 - `response.reasoning.started`
 - `response.reasoning.delta`

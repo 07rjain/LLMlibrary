@@ -2,7 +2,9 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
+      "#provider-runtime": ["src/internal/provider-runtime.ts"],
       "unified-llm-client/models": ["src/models/index.ts"],
+      "unified-llm-client/utils": ["src/utils/index.ts"],
       "unified-llm-client/*": ["src/*"]
     }
   },

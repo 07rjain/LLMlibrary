@@ -2,8 +2,8 @@ import {
   AuthenticationError,
   BudgetExceededError,
   LLMError,
+  MockQueueExhaustedError,
   ProviderCapabilityError,
-  ProviderError,
   RateLimitError,
 } from 'unified-llm-client/errors';
 import { ModelRegistry } from 'unified-llm-client/models';
@@ -22,7 +22,8 @@ import { GeminiAdapter } from './providers/gemini.js';
 import { OpenAIAdapter } from './providers/openai.js';
 import { getEnvironmentVariable } from './runtime.js';
 import { PostgresSessionStore } from './session-store.js';
-import { createCancelableStream } from './stream-control.js';
+import { createCancelableStream, throwIfAborted } from './stream-control.js';
+import { STREAM_EVENT_VERSION } from './types.js';
 import {
   assertResponseFormatSupported,
   parseStructuredOutput,
@@ -366,11 +367,13 @@ export class LLMClient {
   /** Executes a single non-streaming completion request. */
   async complete(options: LLMRequestOptions): Promise<CanonicalResponse> {
     const requestOptions = withValidatedRequest(options);
+    throwIfAborted(requestOptions.signal);
     const plan = this.resolveRequestPlan(requestOptions);
     const startedAt = Date.now();
     const attemptedRoutes: string[] = [];
 
     for (const [index, attempt] of plan.attempts.entries()) {
+      throwIfAborted(requestOptions.signal);
       attemptedRoutes.push(attempt.decision);
 
       try {
@@ -399,6 +402,7 @@ export class LLMClient {
           await this.dispatchComplete(attempt.request),
           attempt.request.responseFormat,
         );
+        throwIfAborted(requestOptions.signal);
         await this.logUsageEvent(
           buildUsageEvent({
             durationMs: Date.now() - startedAt,
@@ -412,8 +416,10 @@ export class LLMClient {
               : {}),
           }),
         );
+        throwIfAborted(requestOptions.signal);
         return response;
       } catch (error) {
+        throwIfAborted(requestOptions.signal);
         if (!shouldTryFallback(error) || index === plan.attempts.length - 1) {
           throw error;
         }
@@ -526,16 +532,19 @@ export class LLMClient {
   /** Executes a single non-streaming embedding request. */
   async embed(options: EmbeddingRequestOptions): Promise<EmbeddingResponse> {
     const resolved = this.resolveEmbeddingRequest(options);
+    throwIfAborted(resolved.signal);
     return this.dispatchEmbed(resolved);
   }
 
   /** Executes a single non-streaming text-to-speech request. */
   async speak(options: SpeechRequestOptions): Promise<SpeechResponse> {
     const validated = validateSpeechRequest(options);
+    throwIfAborted(validated.signal);
     const resolved = this.resolveSpeechRequest(validated);
     this.handleSpeechBudgetExceededAction(resolved, 'speech');
     const startedAt = Date.now();
     const response = await this.dispatchSpeak(resolved);
+    throwIfAborted(resolved.signal);
     await this.logSpeechUsageEvent({
       durationMs: Date.now() - startedAt,
       kind: 'speech',
@@ -544,6 +553,7 @@ export class LLMClient {
       provider: response.provider,
       usage: response.usage,
     });
+    throwIfAborted(resolved.signal);
     return response;
   }
 
@@ -552,10 +562,12 @@ export class LLMClient {
     options: TranscriptionRequestOptions,
   ): Promise<TranscriptionResponse> {
     const validated = validateTranscriptionRequest(options);
+    throwIfAborted(validated.signal);
     const resolved = this.resolveTranscriptionRequest(validated);
     this.handleSpeechBudgetExceededAction(resolved, 'transcription');
     const startedAt = Date.now();
     const response = await this.dispatchTranscribe(resolved);
+    throwIfAborted(resolved.signal);
     await this.logSpeechUsageEvent({
       durationMs: Date.now() - startedAt,
       kind: 'transcription',
@@ -564,25 +576,23 @@ export class LLMClient {
       provider: response.provider,
       usage: response.usage,
     });
+    throwIfAborted(resolved.signal);
     return response;
   }
 
   /** Executes a streaming completion request and yields canonical chunks. */
   stream(options: LLMRequestOptions): CancelableStream<StreamChunk> {
     const requestOptions = withValidatedRequest(options);
-    const plan = this.resolveRequestPlan(requestOptions, { stream: true });
-    const startedAt = Date.now();
 
     return createCancelableStream(
-      (signal) =>
-        this.streamWithFallback(
-          plan,
-          {
-            ...requestOptions,
-            signal,
-          },
-          startedAt,
-        ),
+      (signal) => {
+        throwIfAborted(signal);
+        return this.streamWithFallback(
+          this.resolveRequestPlan(requestOptions, { stream: true }),
+          { ...requestOptions, signal },
+          Date.now(),
+        );
+      },
       options.signal,
     );
   }
@@ -1416,10 +1426,11 @@ export class LLMClient {
         : {}),
       sequence: ++sequence,
       timestamp: new Date().toISOString(),
-      version: 2,
+      version: chunk.version ?? STREAM_EVENT_VERSION,
     });
 
     for (const [index, attempt] of plan.attempts.entries()) {
+      throwIfAborted(options.signal);
       attemptedRoutes.push(attempt.decision);
       let emittedUserVisibleChunk = false;
 
@@ -1459,10 +1470,12 @@ export class LLMClient {
         });
 
         for await (const chunk of this.dispatchStream(attempt.request)) {
+          throwIfAborted(options.signal);
           if (
             chunk.type === 'text-delta' ||
             chunk.type === 'tool-call-start' ||
             chunk.type === 'tool-call-delta' ||
+            chunk.type === 'tool-call-arguments' ||
             chunk.type === 'tool-call-result'
           ) {
             emittedUserVisibleChunk = true;
@@ -1490,6 +1503,7 @@ export class LLMClient {
 
         return;
       } catch (error) {
+        throwIfAborted(options.signal);
         if (
           emittedUserVisibleChunk ||
           !shouldTryFallback(error) ||
@@ -1597,20 +1611,11 @@ class MockLLMClient extends LLMClient {
       ...(modelInfo ? { modelInfo } : {}),
       provider: resolved.provider,
     });
+    throwIfAborted(resolved.signal);
     const next = this.embeddingQueue.shift();
 
     if (!next) {
-      return {
-        embeddings: [
-          {
-            index: 0,
-            values: [0.1, 0.2, 0.3],
-          },
-        ],
-        model: resolved.model,
-        provider: resolved.provider,
-        raw: { mock: true },
-      };
+      throw new MockQueueExhaustedError('embed', resolved);
     }
 
     return typeof next === 'function' ? await next(resolved) : next;
@@ -1619,14 +1624,13 @@ class MockLLMClient extends LLMClient {
   override async complete(
     options: LLMRequestOptions,
   ): Promise<CanonicalResponse> {
-    const resolved = this.resolveMockRequest(withValidatedRequest(options));
+    const validated = withValidatedRequest(options);
+    throwIfAborted(validated.signal);
+    const resolved = this.resolveMockRequest(validated);
     const next = this.responseQueue.shift();
 
     if (!next) {
-      return buildMockResponse(
-        extractLastUserText(resolved.messages),
-        resolved,
-      );
+      throw new MockQueueExhaustedError('complete', resolved);
     }
 
     const response = typeof next === 'function' ? await next(resolved) : next;
@@ -1635,25 +1639,12 @@ class MockLLMClient extends LLMClient {
 
   override async speak(options: SpeechRequestOptions): Promise<SpeechResponse> {
     const validated = validateSpeechRequest(options);
+    throwIfAborted(validated.signal);
     const resolved = this.resolveMockSpeechRequest(validated);
     const next = this.speechQueue.shift();
 
     if (!next) {
-      return {
-        audio: new Uint8Array([1, 2, 3]),
-        format: validated.format ?? 'mp3',
-        mediaType: 'audio/mpeg',
-        model: resolved.model,
-        provider: resolved.provider,
-        raw: { mock: true },
-        usage: {
-          cost: '$0.00',
-          costUSD: 0,
-          estimated: true,
-          inputCharacters: validated.input.length,
-          inputTokens: estimateTokens(validated.input),
-        },
-      };
+      throw new MockQueueExhaustedError('speak', resolved);
     }
 
     return typeof next === 'function' ? await next(resolved) : next;
@@ -1662,23 +1653,13 @@ class MockLLMClient extends LLMClient {
   override async transcribe(
     options: TranscriptionRequestOptions,
   ): Promise<TranscriptionResponse> {
-    const resolved = this.resolveMockTranscriptionRequest(
-      validateTranscriptionRequest(options),
-    );
+    const validated = validateTranscriptionRequest(options);
+    throwIfAborted(validated.signal);
+    const resolved = this.resolveMockTranscriptionRequest(validated);
     const next = this.transcriptionQueue.shift();
 
     if (!next) {
-      return {
-        model: resolved.model,
-        provider: resolved.provider,
-        raw: { mock: true },
-        text: '',
-        usage: {
-          cost: '$0.00',
-          costUSD: 0,
-          estimated: true,
-        },
-      };
+      throw new MockQueueExhaustedError('transcribe', resolved);
     }
 
     return typeof next === 'function' ? await next(resolved) : next;
@@ -1689,8 +1670,13 @@ class MockLLMClient extends LLMClient {
     return createCancelableStream(
       async function* (
         this: MockLLMClient,
+        signal: AbortSignal,
       ): AsyncGenerator<StreamChunk, void, void> {
-        const resolved = this.resolveMockRequest(requestOptions);
+        throwIfAborted(signal);
+        const resolved = this.resolveMockRequest({
+          ...requestOptions,
+          signal,
+        });
         const next = this.streamQueue.shift();
         let sequence = 0;
         const decorate = (chunk: StreamChunk): StreamChunk => ({
@@ -1700,7 +1686,7 @@ class MockLLMClient extends LLMClient {
             : {}),
           sequence: ++sequence,
           timestamp: new Date().toISOString(),
-          version: 2,
+          version: chunk.version ?? STREAM_EVENT_VERSION,
         });
 
         yield decorate({
@@ -1710,20 +1696,7 @@ class MockLLMClient extends LLMClient {
         });
 
         if (!next) {
-          const response = buildMockResponse(
-            extractLastUserText(resolved.messages),
-            resolved,
-          );
-          if (response.text.length > 0) {
-            yield decorate({ delta: response.text, type: 'text-delta' });
-          }
-          yield decorate({ type: 'usage-update', usage: response.usage });
-          yield decorate({
-            finishReason: response.finishReason,
-            type: 'done',
-            usage: response.usage,
-          });
-          return;
+          throw new MockQueueExhaustedError('stream', resolved);
         }
 
         const stream = typeof next === 'function' ? await next(resolved) : next;
@@ -1891,51 +1864,6 @@ function buildBudgetSkipResponse(
   };
 }
 
-function buildMockResponse(
-  text: string,
-  request: {
-    model: string;
-    provider: CanonicalProvider;
-  },
-): CanonicalResponse {
-  return {
-    content: text.length > 0 ? [{ text, type: 'text' }] : [],
-    finishReason: 'stop',
-    model: request.model,
-    provider: request.provider,
-    raw: {},
-    text,
-    toolCalls: [],
-    usage: buildZeroUsage(),
-  };
-}
-
-function extractLastUserText(messages: CanonicalMessage[]): string {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== 'user') {
-      continue;
-    }
-
-    if (typeof message.content === 'string') {
-      return message.content;
-    }
-
-    return message.content
-      .map((part) => {
-        if (part.type === 'text') {
-          return part.text;
-        }
-
-        return '';
-      })
-      .join(' ')
-      .trim();
-  }
-
-  return '';
-}
-
 function isAsyncIterable(
   value: AsyncIterable<StreamChunk> | StreamChunk[],
 ): value is AsyncIterable<StreamChunk> {
@@ -2037,7 +1965,6 @@ function joinRoutingDecision(attemptedRoutes: string[]): string | undefined {
 function shouldTryFallback(error: unknown): boolean {
   return (
     error instanceof AuthenticationError ||
-    error instanceof ProviderError ||
     error instanceof RateLimitError ||
     (error instanceof LLMError && error.retryable)
   );

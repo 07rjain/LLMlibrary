@@ -3,11 +3,19 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   resolve: {
     alias: {
+      '#provider-runtime': new URL(
+        './src/internal/provider-runtime.ts',
+        import.meta.url,
+      ).pathname,
       'unified-llm-client/errors': new URL('./src/errors.ts', import.meta.url).pathname,
       'unified-llm-client/models': new URL('./src/models/index.ts', import.meta.url)
         .pathname,
       'unified-llm-client/session-api': new URL(
         './src/session-api.ts',
+        import.meta.url,
+      ).pathname,
+      'unified-llm-client/utils': new URL(
+        './src/utils/index.ts',
         import.meta.url,
       ).pathname,
     },

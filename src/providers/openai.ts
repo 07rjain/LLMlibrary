@@ -27,10 +27,22 @@ import {
   speechUsageWithCost,
   usageWithCost,
 } from '../utils/cost.js';
-import { parseSSE } from '../utils/parse-sse.js';
-import { withRetry } from '../utils/retry.js';
 import { estimateTokens } from '../utils/token-estimator.js';
 import { buildOpenAITextFormat } from '../structured-output.js';
+import {
+  assertProviderArray,
+  assertProviderContentType,
+  assertProviderObject,
+  assertProviderString,
+  assertProviderUsage,
+  awaitWithAbort,
+  invalidProviderResponse,
+  parseProviderEvent,
+  parseSSE,
+  readProviderJson,
+  throwIfAborted,
+  withRetry,
+} from '#provider-runtime';
 
 import type {
   AudioInput,
@@ -304,6 +316,7 @@ export class OpenAIAdapter {
 
   async complete(options: OpenAICompletionOptions): Promise<CanonicalResponse> {
     this.assertCapabilities(options);
+    throwIfAborted(options.signal);
 
     const response = await withRetry(
       async () =>
@@ -319,13 +332,16 @@ export class OpenAIAdapter {
           ),
         ),
       this.retryOptions,
+      options.signal,
     );
 
     if (!response.ok) {
       throw await mapOpenAIError(response, options.model);
     }
 
-    const payload = (await response.json()) as OpenAIResponsePayload;
+    const context = openAIResponseContext(response, options, 'complete');
+    const payload = await readProviderJson(response, context);
+    validateOpenAIResponsePayload(payload, context);
     return translateOpenAIResponse(payload, this.modelRegistry, options.model);
   }
 
@@ -333,6 +349,7 @@ export class OpenAIAdapter {
     options: OpenAICompletionOptions,
   ): AsyncGenerator<StreamChunk, void, void> {
     this.assertCapabilities({ ...options, stream: true });
+    throwIfAborted(options.signal);
 
     const response = await withRetry(
       async () =>
@@ -351,6 +368,7 @@ export class OpenAIAdapter {
           ),
         ),
       this.retryOptions,
+      options.signal,
     );
 
     if (!response.ok) {
@@ -367,18 +385,23 @@ export class OpenAIAdapter {
       );
     }
 
+    const context = openAIResponseContext(response, options, 'stream');
+    assertProviderContentType(response, context, 'sse');
     const assembler = new OpenAIStreamAssembler(
       options.model,
       this.modelRegistry,
+      context,
     );
-    for await (const payload of parseSSE(response.body)) {
-      const event = JSON.parse(payload) as {
-        [key: string]: unknown;
-        type?: string;
-      };
+    for await (const payload of parseSSE(response.body, options.signal)) {
+      throwIfAborted(options.signal);
+      const event = parseProviderEvent(payload, context);
+      assertProviderObject(event, context, 'event');
+      assertProviderString(event.type, context, 'event.type');
+      validateOpenAIStreamEvent(event, context);
       yield* assembler.consume(event);
     }
 
+    throwIfAborted(options.signal);
     yield assembler.finish();
   }
 
@@ -431,6 +454,7 @@ export class OpenAIAdapter {
 
   async speak(options: OpenAIAdapterSpeechOptions): Promise<SpeechResponse> {
     const validated = validateSpeechRequest(options);
+    throwIfAborted(validated.signal);
     const format = validated.format ?? 'mp3';
     const response = await withRetry(
       async () =>
@@ -448,13 +472,18 @@ export class OpenAIAdapter {
           ),
         ),
       this.retryOptions,
+      validated.signal,
     );
 
     if (!response.ok) {
       throw await mapOpenAIError(response, validated.model);
     }
 
-    const audio = new Uint8Array(await response.arrayBuffer());
+    throwIfAborted(validated.signal);
+    const audio = new Uint8Array(
+      await awaitWithAbort(response.arrayBuffer(), validated.signal),
+    );
+    throwIfAborted(validated.signal);
     const model = this.modelRegistry.get(validated.model);
     const outputAudioSeconds =
       validated.estimatedOutputSeconds ??
@@ -486,6 +515,7 @@ export class OpenAIAdapter {
     options: OpenAIAdapterTranscriptionOptions,
   ): Promise<TranscriptionResponse> {
     const validated = validateTranscriptionRequest(options);
+    throwIfAborted(validated.signal);
     const body = await buildOpenAITranscriptionFormData(
       validated,
       this.fetchImplementation,
@@ -504,17 +534,35 @@ export class OpenAIAdapter {
           ),
         ),
       this.retryOptions,
+      validated.signal,
     );
 
     if (!response.ok) {
       throw await mapOpenAIError(response, validated.model);
     }
 
+    throwIfAborted(validated.signal);
     const contentType = response.headers.get('content-type') ?? '';
     const raw =
       contentType.includes('application/json') || contentType.includes('+json')
-        ? ((await response.json()) as OpenAITranscriptionPayload)
+        ? await readProviderJson(
+            response,
+            openAIResponseContext(response, validated, 'transcribe'),
+          )
         : await response.text();
+    if (typeof raw !== 'string') {
+      assertProviderObject(
+        raw,
+        openAIResponseContext(response, validated, 'transcribe'),
+        'response',
+      );
+      assertProviderString(
+        raw.text,
+        openAIResponseContext(response, validated, 'transcribe'),
+        'response.text',
+      );
+    }
+    throwIfAborted(validated.signal);
     const normalized = normalizeOpenAITranscription(raw);
     const model = this.modelRegistry.get(validated.model);
     const inputAudioSeconds =
@@ -778,10 +826,14 @@ async function fetchTranscriptionAudioUrl(
     redirectCount += 1
   ) {
     await assertAllowedTranscriptionUrl(currentUrl, policy);
-    const response = await fetchImplementation(currentUrl.toString(), {
-      redirect: 'manual',
-      ...(signal !== undefined ? { signal } : {}),
-    });
+    throwIfAborted(signal);
+    const response = await awaitWithAbort(
+      fetchImplementation(currentUrl.toString(), {
+        redirect: 'manual',
+        ...(signal !== undefined ? { signal } : {}),
+      }),
+      signal,
+    );
 
     if (isRedirectResponse(response)) {
       if (redirectCount === maxRedirects) {
@@ -823,6 +875,7 @@ async function fetchTranscriptionAudioUrl(
     const bytes = await readResponseBodyWithLimit(
       response,
       policy.maxBytes ?? DEFAULT_TRANSCRIPTION_URL_MAX_BYTES,
+      signal,
     );
     return new Blob([bytesToArrayBuffer(bytes)], { type: mediaType });
   }
@@ -935,6 +988,7 @@ function assertAllowedTranscriptionContentType(
 async function readResponseBodyWithLimit(
   response: Response,
   maxBytes: number,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
   if (!Number.isInteger(maxBytes) || maxBytes <= 0) {
     throw new ProviderCapabilityError(
@@ -946,7 +1000,9 @@ async function readResponseBodyWithLimit(
   }
 
   if (!response.body) {
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const bytes = new Uint8Array(
+      await awaitWithAbort(response.arrayBuffer(), signal),
+    );
     if (bytes.byteLength > maxBytes) {
       throw new ProviderCapabilityError(
         'Transcription audio URL response exceeded maxBytes.',
@@ -963,7 +1019,7 @@ async function readResponseBodyWithLimit(
   let totalBytes = 0;
 
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await awaitWithAbort(reader.read(), signal);
     if (done) {
       break;
     }
@@ -1505,7 +1561,208 @@ function normalizeUnixTimestamp(value: number | undefined): string | undefined {
   return new Date(value * 1000).toISOString();
 }
 
+function openAIResponseContext(
+  response: Response,
+  options: { model?: string; signal?: AbortSignal },
+  operation: string,
+) {
+  return {
+    ...(options.model ? { model: options.model } : {}),
+    operation,
+    provider: 'openai' as const,
+    requestId:
+      response.headers.get('x-request-id') ??
+      response.headers.get('request-id') ??
+      undefined,
+    ...(options.signal ? { signal: options.signal } : {}),
+  };
+}
+
+function validateOpenAIResponsePayload(
+  value: unknown,
+  context: ReturnType<typeof openAIResponseContext>,
+): asserts value is OpenAIResponsePayload {
+  assertProviderObject(value, context, 'response');
+  assertProviderString(value.model, context, 'response.model');
+  assertProviderString(value.status, context, 'response.status');
+  if (
+    !['completed', 'failed', 'in_progress', 'incomplete'].includes(value.status)
+  ) {
+    throw invalidProviderResponse(context, {
+      expected: 'known_response_status',
+      path: 'response.status',
+      phase: 'schema',
+    });
+  }
+  if (context.operation === 'complete' && value.status === 'in_progress') {
+    throw invalidProviderResponse(context, {
+      expected: 'terminal_response_status',
+      path: 'response.status',
+      phase: 'schema',
+    });
+  }
+  if (value.output !== undefined) {
+    assertProviderArray(value.output, context, 'response.output');
+    for (const [index, item] of value.output.entries()) {
+      assertProviderObject(item, context, `response.output[${index}]`);
+      assertProviderString(
+        item.type,
+        context,
+        `response.output[${index}].type`,
+      );
+      if (item.type === 'message') {
+        assertProviderArray(
+          item.content,
+          context,
+          `response.output[${index}].content`,
+        );
+        for (const [partIndex, part] of item.content.entries()) {
+          assertProviderObject(
+            part,
+            context,
+            `response.output[${index}].content[${partIndex}]`,
+          );
+          assertProviderString(
+            part.type,
+            context,
+            `response.output[${index}].content[${partIndex}].type`,
+          );
+          if (part.type === 'output_text') {
+            assertProviderString(
+              part.text,
+              context,
+              `response.output[${index}].content[${partIndex}].text`,
+            );
+          } else if (part.type === 'refusal') {
+            assertProviderString(
+              part.refusal,
+              context,
+              `response.output[${index}].content[${partIndex}].refusal`,
+            );
+          }
+        }
+      } else if (item.type === 'function_call') {
+        for (const key of ['arguments', 'call_id', 'name'] as const) {
+          assertProviderString(
+            item[key],
+            context,
+            `response.output[${index}].${key}`,
+          );
+        }
+      }
+    }
+  }
+  if (
+    (value.status === 'completed' || value.status === 'incomplete') &&
+    (!Array.isArray(value.output) ||
+      !value.output.some(
+        (item) =>
+          isPlainObject(item) &&
+          (item.type !== 'message' ||
+            (Array.isArray(item.content) && item.content.length > 0)),
+      ))
+  ) {
+    throw invalidProviderResponse(context, {
+      expected: 'non_empty_output',
+      path: 'response.output',
+      phase: 'schema',
+    });
+  }
+  assertProviderUsage(
+    value.usage,
+    ['input_tokens', 'output_tokens', 'total_tokens'],
+    context,
+    'response.usage',
+  );
+  if (isPlainObject(value.usage)) {
+    assertProviderUsage(
+      value.usage.input_tokens_details,
+      ['cached_tokens'],
+      context,
+      'response.usage.input_tokens_details',
+    );
+    assertProviderUsage(
+      value.usage.output_tokens_details,
+      ['reasoning_tokens'],
+      context,
+      'response.usage.output_tokens_details',
+    );
+  }
+}
+
+function validateOpenAIStreamEvent(
+  event: Record<string, unknown>,
+  context: ReturnType<typeof openAIResponseContext>,
+): void {
+  const requireIndex = (): void => {
+    if (
+      typeof event.output_index !== 'number' ||
+      !Number.isSafeInteger(event.output_index) ||
+      event.output_index < 0
+    ) {
+      throw invalidProviderResponse(context, {
+        expected: 'non_negative_safe_integer',
+        path: 'event.output_index',
+        phase: 'schema',
+      });
+    }
+  };
+  switch (event.type) {
+    case 'response.output_text.delta':
+      assertProviderString(event.delta, context, 'event.delta');
+      return;
+    case 'response.function_call_arguments.delta':
+      requireIndex();
+      assertProviderString(event.item_id, context, 'event.item_id');
+      assertProviderString(event.delta, context, 'event.delta');
+      return;
+    case 'response.function_call_arguments.done':
+      requireIndex();
+      assertProviderString(event.item_id, context, 'event.item_id');
+      assertProviderString(event.arguments, context, 'event.arguments');
+      assertProviderString(event.name, context, 'event.name');
+      return;
+    case 'response.output_item.added':
+    case 'response.output_item.done':
+      requireIndex();
+      assertProviderObject(event.item, context, 'event.item');
+      assertProviderString(event.item.type, context, 'event.item.type');
+      if (event.item.type === 'function_call') {
+        for (const key of ['arguments', 'call_id', 'id', 'name'] as const) {
+          assertProviderString(
+            event.item[key],
+            context,
+            `event.item.${key}`,
+          );
+        }
+      }
+      return;
+    case 'response.completed':
+    case 'response.incomplete':
+    case 'response.failed':
+      validateOpenAIResponsePayload(event.response, context);
+      if (
+        (event.type === 'response.completed' &&
+          event.response.status !== 'completed') ||
+        (event.type === 'response.incomplete' &&
+          event.response.status !== 'incomplete') ||
+        (event.type === 'response.failed' &&
+          event.response.status !== 'failed')
+      ) {
+        throw invalidProviderResponse(context, {
+          expected: event.type.slice('response.'.length),
+          path: 'event.response.status',
+          phase: 'schema',
+        });
+      }
+      return;
+    default:
+      return;
+  }
+}
+
 class OpenAIStreamAssembler {
+  private readonly context: ReturnType<typeof openAIResponseContext>;
   private finalResponse: OpenAIResponsePayload | undefined;
   private finishReason: CanonicalFinishReason = 'stop';
   private readonly model: string;
@@ -1514,10 +1771,16 @@ class OpenAIStreamAssembler {
     string,
     { args: string; callId: string; name: string }
   >();
+  private terminal = false;
 
-  constructor(model: string, modelRegistry: ModelRegistry) {
+  constructor(
+    model: string,
+    modelRegistry: ModelRegistry,
+    context: ReturnType<typeof openAIResponseContext>,
+  ) {
     this.model = model;
     this.modelRegistry = modelRegistry;
+    this.context = context;
   }
 
   *consume(event: {
@@ -1572,6 +1835,8 @@ class OpenAIStreamAssembler {
             | OpenAIResponseIncompleteEvent
         ).response;
         this.finishReason = normalizeOpenAIFinishReason(this.finalResponse);
+        validateOpenAIResponsePayload(this.finalResponse, this.context);
+        this.terminal = true;
         return;
       case 'response.failed':
         this.finalResponse = (
@@ -1589,6 +1854,12 @@ class OpenAIStreamAssembler {
   }
 
   finish(): StreamChunk {
+    if (!this.terminal || this.toolBuffer.size > 0) {
+      throw invalidProviderResponse(this.context, {
+        expected: 'terminal_event_with_complete_tool_calls',
+        phase: 'stream',
+      });
+    }
     const responseModel = this.finalResponse?.model ?? this.model;
     const resolvedModelId = resolveOpenAIModelId(
       responseModel,
@@ -1696,10 +1967,10 @@ class OpenAIStreamAssembler {
     this.toolBuffer.delete(item.id);
     this.finishReason = 'tool_call';
     yield {
+      args: parseOpenAIToolArguments(tool.args, this.model, tool.name),
       id: tool.callId,
       name: tool.name,
-      result: parseOpenAIToolArguments(tool.args, this.model, tool.name),
-      type: 'tool-call-result',
+      type: 'tool-call-arguments',
     };
   }
 
@@ -1907,14 +2178,20 @@ function parseOpenAIToolArguments(
 
     return parsed;
   } catch (error) {
-    throw new ProviderError(
-      `Failed to parse OpenAI tool arguments for "${toolName}".`,
-      {
-        cause: error,
-        model,
-        provider: 'openai',
+    void error;
+    void toolName;
+    throw new ProviderError('Provider returned invalid tool-call arguments.', {
+      details: {
+        code: 'invalid_provider_response',
+        operation: 'stream',
+        path: 'tool_call.arguments',
+        phase: 'schema',
       },
-    );
+      model,
+      provider: 'openai',
+      retryable: false,
+      statusCode: 502,
+    });
   }
 }
 

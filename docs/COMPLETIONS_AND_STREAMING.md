@@ -232,7 +232,7 @@ await client.complete({
 });
 ```
 
-Reasoning and thinking tokens can increase latency and cost, and they may consume part of the provider's output budget. The library exposes provider-reported counts as `usage.reasoningTokens` when the upstream response includes them. Gemini reports thought tokens separately from candidate output tokens, so they are included in `usage.costUSD` at the model output-token rate. OpenAI reports reasoning tokens inside output usage, so they are not billed a second time by the library. Explicit Gemini `thinking.budgetTokens` values are also included in `budgetUsd` preflight estimates. Reasoning summaries, Anthropic thinking blocks, and Gemini thoughts are not merged into `response.text` by default.
+Reasoning and thinking tokens can increase latency and cost, and they may consume part of the provider's output budget. The library exposes provider-reported counts as `usage.reasoningTokens` when the upstream response includes them. Gemini reports thought tokens separately from candidate output tokens, so they are included in `usage.costUSD` at the model output-token rate. OpenAI reports reasoning tokens inside output usage, so they are not billed a second time by the library. Explicit Gemini `thinking.budgetTokens` values are also included in `budgetUsd` preflight estimates. Reasoning summaries, Anthropic thinking blocks, and Gemini thoughts are not merged into `response.text` by default. Raw Gemini provider payloads may retain thought parts and signatures, but normalized visible content, conversation history, and session output never expose them.
 
 ## Message Shapes
 
@@ -299,12 +299,22 @@ for await (const chunk of stream) {
   The model started building a tool call
 - `tool-call-delta`
   Partial tool-call argument JSON
+- `tool-call-arguments`
+  Completed, parsed tool-call arguments. This event does not mean the tool ran.
 - `tool-call-result`
-  Executed tool result surfaced back into the stream
+  Actual tool execution result, including `isError`, emitted by conversations
+  only after execution settles
 - `done`
   Final usage and finish reason
 - `error`
   Terminal error frame
+
+Stream event version 3 separates completed arguments from executed results.
+Consumers written for v2 should rename provider-side `tool-call-result` handling
+to `tool-call-arguments`. Public output events use version 3. During migration,
+`Conversation.sendStream()` accepts only an explicitly `version: 2`
+`tool-call-result` as an internal argument alias; unversioned results follow v3
+semantics and reject before execution. The legacy alias is never forwarded.
 
 ## Cancel A Stream
 

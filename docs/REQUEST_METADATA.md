@@ -13,7 +13,7 @@ const response = await client.complete({
 
 The values are copied to the corresponding `UsageEvent` sent to the configured
 usage logger. Metadata is application context; it is not sent to providers.
-`requestId` is also copied to v2 stream events.
+`requestId` is also copied to v3 stream events.
 
 Metadata is validated and cloned before dispatch. It may contain only null,
 booleans, strings, finite numbers, arrays, and plain or null-prototype objects.

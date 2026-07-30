@@ -16,6 +16,7 @@ vi.mock('pg', () => {
 import {
   AuthenticationError,
   BudgetExceededError,
+  MockQueueExhaustedError,
   ProviderCapabilityError,
 } from '../src/errors.js';
 import { LLMClient } from '../src/client.js';
@@ -260,7 +261,7 @@ describe('LLMClient - Core Functionality', () => {
       }
 
       expect(chunks.find((chunk) => chunk.type === 'text-delta')).toEqual(
-        expect.objectContaining({ delta: 'Hi', version: 2 }),
+        expect.objectContaining({ delta: 'Hi', version: 3 }),
       );
       expect(chunks.at(-1)).toEqual(expect.objectContaining({ finishReason: 'stop', type: 'done' }));
     });
@@ -301,7 +302,7 @@ describe('LLMClient - Core Functionality', () => {
       }
 
       expect(chunks.find((chunk) => chunk.type === 'text-delta')).toEqual(
-        expect.objectContaining({ delta: 'Hello from Gemini', version: 2 }),
+        expect.objectContaining({ delta: 'Hello from Gemini', version: 3 }),
       );
       expect(chunks.at(-1)).toEqual(expect.objectContaining({ finishReason: 'stop', type: 'done' }));
     });
@@ -471,14 +472,17 @@ describe('LLMClient - Core Functionality', () => {
         'done',
       ]);
       expect(chunks.map((chunk) => chunk.sequence)).toEqual([1, 2, 3, 4]);
-      expect(chunks.every((chunk) => chunk.version === 2)).toBe(true);
+      expect(chunks.every((chunk) => chunk.version === 3)).toBe(true);
       expect(chunks.every((chunk) => chunk.requestId === 'mock-request')).toBe(true);
     });
 
-    it('should echo user message when no response is queued', async () => {
+    it('should reject when no response is queued', async () => {
       const client = LLMClient.mock();
-      const response = await client.complete({ messages: [{ content: 'Echo this', role: 'user' }] });
-      expect(response.text).toBe('Echo this');
+      await expect(
+        client.complete({
+          messages: [{ content: 'Echo this', role: 'user' }],
+        }),
+      ).rejects.toBeInstanceOf(MockQueueExhaustedError);
     });
 
     it('should support dynamic response functions', async () => {

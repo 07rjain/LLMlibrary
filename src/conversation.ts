@@ -13,6 +13,7 @@ import { validateAndCloneMetadata } from './json-metadata.js';
 import { validateAndCloneCanonicalMessages } from './message-validation.js';
 import { validateAndCloneTools } from './tool-validation.js';
 import { formatCost } from './utils/cost.js';
+import { STREAM_EVENT_VERSION } from './types.js';
 
 import type { ContextManager } from './context-manager.js';
 import type { SessionStore } from './session-store.js';
@@ -46,6 +47,17 @@ const FORBIDDEN_TOOL_ARGUMENT_KEYS = new Set([
   'constructor',
   'prototype',
 ]);
+
+type LegacyToolCallArgumentsAlias = Omit<
+  Extract<StreamChunk, { type: 'tool-call-result' }>,
+  'version'
+> & {
+  version: 2;
+};
+
+type ConversationInputStreamChunk =
+  | LegacyToolCallArgumentsAlias
+  | StreamChunk;
 
 export type ToolValidationMode = 'permissive' | 'strict';
 
@@ -319,6 +331,7 @@ export class Conversation {
         ? undefined
         : validateAndCloneMetadata(options.metadata);
     const userMessage = buildUserMessage(input);
+    throwIfAborted(options.signal);
     const initialMessages = [...this.messages, userMessage];
     const route = this.resolveConversationRoute(initialMessages);
     const nextMessages = await this.prepareMessages(
@@ -326,6 +339,7 @@ export class Conversation {
       options.requestId,
       route,
     );
+    throwIfAborted(options.signal);
     const result = await this.runCompleteToolLoop(
       nextMessages,
       options.signal,
@@ -334,6 +348,7 @@ export class Conversation {
       route,
     );
 
+    throwIfAborted(options.signal);
     await this.finalizeExecution(result);
     return result.response;
   }
@@ -353,6 +368,7 @@ export class Conversation {
         signal: AbortSignal,
       ): AsyncGenerator<StreamChunk, void, void> {
         const userMessage = buildUserMessage(input);
+        throwIfAborted(signal);
         const initialMessages = [...this.messages, userMessage];
         const route = this.resolveConversationRoute(initialMessages);
         const nextMessages = await this.prepareMessages(
@@ -360,6 +376,7 @@ export class Conversation {
           options.requestId,
           route,
         );
+        throwIfAborted(signal);
         const result = yield* this.runStreamToolLoop(
           nextMessages,
           signal,
@@ -367,6 +384,7 @@ export class Conversation {
           metadata,
           route,
         );
+        throwIfAborted(signal);
         await this.finalizeExecution(result);
       }.bind(this),
       options.signal,
@@ -790,7 +808,7 @@ export class Conversation {
       ...(requestId !== undefined ? { requestId } : {}),
       sequence: ++sequence,
       timestamp: new Date().toISOString(),
-      version: 2,
+      version: chunk.version ?? STREAM_EVENT_VERSION,
     });
 
     while (true) {
@@ -852,7 +870,8 @@ export class Conversation {
       let finishReason: CanonicalResponse['finishReason'] | undefined;
       let usage: UsageMetrics | undefined;
 
-      for await (const chunk of this.client.stream(requestOptions)) {
+      for await (const streamChunk of this.client.stream(requestOptions)) {
+        const chunk = streamChunk as ConversationInputStreamChunk;
         if (chunk.type === 'response-start') {
           model = chunk.model;
           provider = chunk.provider;
@@ -875,26 +894,76 @@ export class Conversation {
         }
 
         if (chunk.type === 'tool-call-start') {
+          if (pendingToolCalls.has(chunk.id)) {
+            throw invalidToolStreamState(
+              model,
+              provider,
+              'duplicate_tool_call_start',
+            );
+          }
           pendingToolCalls.set(chunk.id, { name: chunk.name });
           yield decorate(chunk);
           continue;
         }
 
-        if (chunk.type === 'tool-call-result') {
+        if (
+          chunk.type === 'tool-call-arguments' ||
+          (chunk.type === 'tool-call-result' && chunk.version === 2)
+        ) {
           const current = pendingToolCalls.get(chunk.id);
-          pendingToolCalls.set(chunk.id, {
-            args: isPlainJsonObject(chunk.result)
-              ? chunk.result
-              : { result: chunk.result },
-            name: current?.name ?? chunk.name,
-          });
-          yield decorate(chunk);
+          if (!current) {
+            throw invalidToolStreamState(
+              model,
+              provider,
+              'orphan_tool_call_arguments',
+            );
+          }
+          if (current.name !== chunk.name || current.args !== undefined) {
+            throw invalidToolStreamState(
+              model,
+              provider,
+              'mismatched_or_duplicate_tool_call_arguments',
+            );
+          }
+          const args =
+            chunk.type === 'tool-call-arguments'
+              ? chunk.args
+              : isPlainJsonObject(chunk.result)
+                ? chunk.result
+                : undefined;
+          if (!args) {
+            throw invalidToolStreamState(
+              model,
+              provider,
+              'non_object_tool_call_arguments',
+            );
+          }
+          current.args = args;
+          if (chunk.type === 'tool-call-arguments') {
+            yield decorate(chunk);
+          }
           continue;
         }
 
         if (chunk.type === 'tool-call-delta') {
+          const current = pendingToolCalls.get(chunk.id);
+          if (!current || current.args !== undefined) {
+            throw invalidToolStreamState(
+              model,
+              provider,
+              'orphan_or_late_tool_call_delta',
+            );
+          }
           yield decorate(chunk);
           continue;
+        }
+
+        if (chunk.type === 'tool-call-result') {
+          throw invalidToolStreamState(
+            model,
+            provider,
+            'provider_emitted_tool_result_before_execution',
+          );
         }
 
         if (chunk.type === 'error') {
@@ -916,6 +985,24 @@ export class Conversation {
           'Streaming conversation ended without a done chunk.',
         );
       }
+      if (
+        [...pendingToolCalls.values()].some((call) => call.args === undefined)
+      ) {
+        throw invalidToolStreamState(
+          model,
+          provider,
+          'incomplete_tool_call_arguments',
+        );
+      }
+      if (
+        (finishReason === 'tool_call') !== (pendingToolCalls.size > 0)
+      ) {
+        throw invalidToolStreamState(
+          model,
+          provider,
+          'tool_finish_reason_mismatch',
+        );
+      }
 
       aggregateUsage = accumulateUsage(aggregateUsage, usage);
       workingMessages = [
@@ -924,7 +1011,7 @@ export class Conversation {
       ];
 
       const toolCalls = buildToolCallsFromPendingToolCalls(pendingToolCalls);
-      if (!this.shouldContinueToolLoop(finishReason, toolCalls)) {
+      if (!this.shouldContinueToolLoop(finishReason, toolCalls, true)) {
         yield decorate({
           finishReason,
           type: 'done',
@@ -939,24 +1026,71 @@ export class Conversation {
       }
 
       toolRounds = this.assertNextToolRound(toolRounds + 1, model, provider);
+      const toolResultMessage = await this.executeToolCalls(
+        toolCalls,
+        model,
+        provider,
+        signal,
+      );
+      throwIfAborted(signal);
+      if (Array.isArray(toolResultMessage.content)) {
+        for (const [index, part] of toolResultMessage.content.entries()) {
+          if (part.type !== 'tool_result') {
+            continue;
+          }
+          const call = toolCalls[index];
+          if (!call) {
+            throw invalidToolStreamState(
+              model,
+              provider,
+              'tool_result_order_mismatch',
+            );
+          }
+          yield decorate({
+            id: part.toolCallId,
+            isError: part.isError === true,
+            name: part.name ?? call.name,
+            result: part.result,
+            type: 'tool-call-result',
+          });
+        }
+      }
       workingMessages = [
         ...workingMessages,
-        await this.executeToolCalls(toolCalls, model, provider, signal),
+        toolResultMessage,
       ];
+      if (!this.hasToolExecutor()) {
+        yield decorate({
+          finishReason,
+          type: 'done',
+          usage: aggregateUsage,
+        });
+        return {
+          messages: workingMessages,
+          usage: aggregateUsage,
+          ...(model !== undefined ? { model } : {}),
+          ...(provider !== undefined ? { provider } : {}),
+        };
+      }
     }
   }
 
   private shouldContinueToolLoop(
     finishReason: CanonicalResponse['finishReason'],
     toolCalls: CanonicalResponse['toolCalls'],
+    includeMissingExecutor = false,
   ): boolean {
     return (
       finishReason === 'tool_call' &&
       toolCalls.length > 0 &&
-      Boolean(
-        this.toolCallDispatcher ||
+      (includeMissingExecutor || this.hasToolExecutor())
+    );
+  }
+
+  private hasToolExecutor(): boolean {
+    return Boolean(
+      this.toolCallDispatcher ||
         this.tools?.some((tool) => typeof tool.execute === 'function'),
-      )
     );
   }
 
@@ -1068,6 +1202,7 @@ export class Conversation {
         type: 'tool_result',
       };
     } catch (error) {
+      throwIfAborted(signal);
       return buildToolErrorPart(toolCall, error);
     }
   }
@@ -1538,6 +1673,26 @@ function buildToolErrorPart(
     toolCallId: toolCall.id,
     type: 'tool_result',
   };
+}
+
+function invalidToolStreamState(
+  model: string | undefined,
+  provider: CanonicalProvider | undefined,
+  reason: string,
+): ProviderError {
+  return new ProviderError('Provider returned invalid streaming tool state.', {
+    details: {
+      code: 'invalid_provider_response',
+      operation: 'stream',
+      path: 'tool_calls',
+      phase: 'stream',
+      reason,
+    },
+    ...(model !== undefined ? { model } : {}),
+    ...(provider !== undefined ? { provider } : {}),
+    retryable: false,
+    statusCode: 502,
+  });
 }
 
 function serializeToolError(error: unknown): JsonValue {

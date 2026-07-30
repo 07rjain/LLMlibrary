@@ -10,6 +10,7 @@ import {
   BudgetExceededError,
   MaxToolRoundsError,
   ProviderCapabilityError,
+  ProviderError,
 } from '../src/errors.js';
 import { ModelRouter } from '../src/router.js';
 import { InMemorySessionStore } from '../src/session-store.js';
@@ -401,17 +402,17 @@ describe('Conversation', () => {
       expect.objectContaining({
         delta: 'Hello ',
         type: 'text-delta',
-        version: 2,
+        version: 3,
       }),
       expect.objectContaining({
         delta: 'world',
         type: 'text-delta',
-        version: 2,
+        version: 3,
       }),
       expect.objectContaining({
         finishReason: 'stop',
         type: 'done',
-        version: 2,
+        version: 3,
       }),
     ]);
     expect(conversation.history).toEqual([
@@ -431,10 +432,10 @@ describe('Conversation', () => {
       > {
         yield { id: 'tool_1', name: 'lookup', type: 'tool-call-start' };
         yield {
+          args: { city: 'Berlin' },
           id: 'tool_1',
           name: 'lookup',
-          result: { city: 'Berlin' },
-          type: 'tool-call-result',
+          type: 'tool-call-arguments',
         };
         yield {
           finishReason: 'tool_call',
@@ -470,6 +471,23 @@ describe('Conversation', () => {
           },
         ],
         role: 'assistant',
+      },
+      {
+        content: [
+          {
+            isError: true,
+            name: 'lookup',
+            result: {
+              error: {
+                message: 'No executable tool registered for "lookup".',
+                name: 'Error',
+              },
+            },
+            toolCallId: 'tool_1',
+            type: 'tool_result',
+          },
+        ],
+        role: 'user',
       },
     ]);
   });
@@ -824,10 +842,10 @@ describe('Conversation', () => {
         yield { delta: 'Checking ', type: 'text-delta' };
         yield { id: 'tool_1', name: 'lookup_weather', type: 'tool-call-start' };
         yield {
+          args: { city: 'Berlin' },
           id: 'tool_1',
           name: 'lookup_weather',
-          result: { city: 'Berlin' },
-          type: 'tool-call-result',
+          type: 'tool-call-arguments',
         };
         yield {
           finishReason: 'tool_call',
@@ -869,25 +887,33 @@ describe('Conversation', () => {
       expect.objectContaining({
         delta: 'Checking ',
         type: 'text-delta',
-        version: 2,
+        version: 3,
       }),
       expect.objectContaining({
         id: 'tool_1',
         name: 'lookup_weather',
         type: 'tool-call-start',
-        version: 2,
+        version: 3,
+      }),
+      expect.objectContaining({
+        args: { city: 'Berlin' },
+        id: 'tool_1',
+        name: 'lookup_weather',
+        type: 'tool-call-arguments',
+        version: 3,
       }),
       expect.objectContaining({
         id: 'tool_1',
+        isError: false,
         name: 'lookup_weather',
-        result: { city: 'Berlin' },
+        result: { forecast: 'Sunny' },
         type: 'tool-call-result',
-        version: 2,
+        version: 3,
       }),
       expect.objectContaining({
         delta: 'Sunny in Berlin.',
         type: 'text-delta',
-        version: 2,
+        version: 3,
       }),
       expect.objectContaining({
         finishReason: 'stop',
@@ -899,7 +925,7 @@ describe('Conversation', () => {
           inputTokens: 11,
           outputTokens: 5,
         },
-        version: 2,
+        version: 3,
       }),
     ]);
     expect(stream).toHaveBeenCalledTimes(2);
@@ -2747,15 +2773,20 @@ describe('Conversation', () => {
       > {
         yield { error: new Error('intermediate warning'), type: 'error' };
         yield {
+          id: 'tool_1',
+          name: 'lookup_weather',
+          type: 'tool-call-start',
+        };
+        yield {
           argsDelta: '{"value":"Ber',
           id: 'tool_1',
           type: 'tool-call-delta',
         };
         yield {
+          args: { result: 'Berlin' },
           id: 'tool_1',
           name: 'lookup_weather',
-          result: 'Berlin',
-          type: 'tool-call-result',
+          type: 'tool-call-arguments',
         };
         yield {
           finishReason: 'tool_call',
@@ -2812,10 +2843,17 @@ describe('Conversation', () => {
     );
     expect(chunks[1]).toEqual(
       expect.objectContaining({
+        id: 'tool_1',
+        name: 'lookup_weather',
+        type: 'tool-call-start',
+      }),
+    );
+    expect(chunks[2]).toEqual(
+      expect.objectContaining({
         argsDelta: '{"value":"Ber',
         id: 'tool_1',
         type: 'tool-call-delta',
-        version: 2,
+        version: 3,
       }),
     );
     expect(execute).toHaveBeenCalledWith(
@@ -2855,6 +2893,40 @@ describe('Conversation', () => {
     stream.cancel(new Error('conversation stream cancelled'));
 
     await expect(nextChunk).rejects.toThrow('conversation stream cancelled');
+  });
+
+  it('does not resolve context or dispatch pre-aborted conversation turns', async () => {
+    const reason = new Error('already aborted');
+    const controller = new AbortController();
+    controller.abort(reason);
+    const shouldTrim = vi.fn(async () => true);
+    const trim = vi.fn(async (messages: CanonicalMessage[]) => messages);
+    const complete = vi.fn<ConversationClient['complete']>();
+    const stream = vi.fn<ConversationClient['stream']>();
+    const conversation = new Conversation(
+      { complete, stream },
+      {
+        contextManager: { shouldTrim, trim },
+        model: 'gpt-4o',
+      },
+    );
+
+    await expect(
+      conversation.send('complete', { signal: controller.signal }),
+    ).rejects.toBe(reason);
+    await expect(
+      (async () => {
+        for await (const chunk of conversation.sendStream('stream', {
+          signal: controller.signal,
+        })) {
+          void chunk;
+        }
+      })(),
+    ).rejects.toBe(reason);
+    expect(shouldTrim).not.toHaveBeenCalled();
+    expect(trim).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+    expect(stream).not.toHaveBeenCalled();
   });
 
   it('returns structured errors when a called tool has no execute callback', async () => {
@@ -3042,10 +3114,10 @@ describe('Conversation stream event contract', () => {
         };
         yield { id: 'call-1', name: 'lookup', type: 'tool-call-start' };
         yield {
+          args: { city: 'Berlin' },
           id: 'call-1',
           name: 'lookup',
-          result: { city: 'Berlin' },
-          type: 'tool-call-result',
+          type: 'tool-call-arguments',
         };
         yield { finishReason: 'tool_call', type: 'done', usage };
       })
@@ -3181,7 +3253,7 @@ describe('Conversation stream event contract', () => {
           sequence: 1,
           timestamp: '2020-01-01T00:00:00.000Z',
           type: 'response-start',
-          version: 2,
+          version: 3,
         };
         yield {
           id: 'call-1',
@@ -3189,16 +3261,16 @@ describe('Conversation stream event contract', () => {
           sequence: 2,
           timestamp: '2020-01-01T00:00:00.001Z',
           type: 'tool-call-start',
-          version: 2,
+          version: 3,
         };
         yield {
+          args: { city: 'Paris' },
           id: 'call-1',
           name: 'weather',
-          result: { city: 'Paris' },
           sequence: 3,
           timestamp: '2020-01-01T00:00:00.002Z',
-          type: 'tool-call-result',
-          version: 2,
+          type: 'tool-call-arguments',
+          version: 3,
         };
         yield {
           finishReason: 'tool_call',
@@ -3206,7 +3278,7 @@ describe('Conversation stream event contract', () => {
           timestamp: '2020-01-01T00:00:00.003Z',
           type: 'done',
           usage,
-          version: 2,
+          version: 3,
         };
       })
       .mockImplementationOnce(async function* (): AsyncGenerator<
@@ -3220,14 +3292,14 @@ describe('Conversation stream event contract', () => {
           sequence: 1,
           timestamp: '2020-01-01T00:00:01.000Z',
           type: 'response-start',
-          version: 2,
+          version: 3,
         };
         yield {
           delta: 'done',
           sequence: 2,
           timestamp: '2020-01-01T00:00:01.001Z',
           type: 'text-delta',
-          version: 2,
+          version: 3,
         };
         yield {
           finishReason: 'stop',
@@ -3235,7 +3307,7 @@ describe('Conversation stream event contract', () => {
           timestamp: '2020-01-01T00:00:01.002Z',
           type: 'done',
           usage,
-          version: 2,
+          version: 3,
         };
       });
     const conversation = new Conversation(
@@ -3268,7 +3340,7 @@ describe('Conversation stream event contract', () => {
     expect(chunks.map((chunk) => chunk.sequence)).toEqual(
       chunks.map((_, index) => index + 1),
     );
-    expect(chunks.every((chunk) => chunk.version === 2)).toBe(true);
+    expect(chunks.every((chunk) => chunk.version === 3)).toBe(true);
     expect(
       chunks.every((chunk) => chunk.requestId === 'conversation-request'),
     ).toBe(true);
@@ -3281,7 +3353,7 @@ describe('Conversation stream event contract', () => {
         finishReason: 'stop',
         requestId: 'conversation-request',
         type: 'done',
-        version: 2,
+        version: 3,
       }),
     );
     expect(stream).toHaveBeenNthCalledWith(
@@ -3881,6 +3953,149 @@ describe('InMemorySessionStore', () => {
 
     expect(capturedMetadata).toEqual({ nested: { enabled: true } });
     expect(capturedMetadata).not.toBe(metadata);
+  });
+
+  it('accepts a v2 tool result only as an internal argument alias', async () => {
+    const execute = vi.fn(async () => ({ temperature: 21 }));
+    const stream = vi
+      .fn<ConversationClient['stream']>()
+      .mockImplementationOnce(async function* () {
+        yield {
+          id: 'legacy-call',
+          name: 'weather',
+          type: 'tool-call-start' as const,
+        };
+        yield {
+          id: 'legacy-call',
+          name: 'weather',
+          result: { city: 'Paris' },
+          type: 'tool-call-result' as const,
+          version: 2 as const,
+        } as unknown as StreamChunk;
+        yield {
+          finishReason: 'tool_call' as const,
+          type: 'done' as const,
+          usage: usage(1, 1, 0),
+        };
+      })
+      .mockImplementationOnce(async function* () {
+        yield { delta: '21 C', type: 'text-delta' as const };
+        yield {
+          finishReason: 'stop' as const,
+          type: 'done' as const,
+          usage: usage(1, 1, 0),
+        };
+      });
+    const conversation = new Conversation(
+      { complete: vi.fn(), stream },
+      { tools: [buildTool('weather', execute)] },
+    );
+    const chunks: StreamChunk[] = [];
+
+    for await (const chunk of conversation.sendStream('weather')) {
+      chunks.push(chunk);
+    }
+
+    expect(execute).toHaveBeenCalledWith(
+      { city: 'Paris' },
+      expect.any(Object),
+    );
+    expect(chunks.filter((chunk) => chunk.type === 'tool-call-result')).toEqual([
+      expect.objectContaining({
+        id: 'legacy-call',
+        isError: false,
+        result: { temperature: 21 },
+        version: 3,
+      }),
+    ]);
+    expect(
+      chunks.some((chunk) => chunk.type === 'tool-call-arguments'),
+    ).toBe(false);
+  });
+
+  it.each([
+    [
+      'orphan delta',
+      [
+        { argsDelta: '{}', id: 'missing', type: 'tool-call-delta' },
+      ] satisfies StreamChunk[],
+    ],
+    [
+      'duplicate start',
+      [
+        { id: 'call', name: 'weather', type: 'tool-call-start' },
+        { id: 'call', name: 'weather', type: 'tool-call-start' },
+      ] satisfies StreamChunk[],
+    ],
+    [
+      'incomplete arguments',
+      [
+        { id: 'call', name: 'weather', type: 'tool-call-start' },
+        {
+          finishReason: 'tool_call',
+          type: 'done',
+          usage: usage(1, 1, 0),
+        },
+      ] satisfies StreamChunk[],
+    ],
+    [
+      'unversioned premature provider result',
+      [
+        { id: 'call', name: 'weather', type: 'tool-call-start' },
+        {
+          id: 'call',
+          name: 'weather',
+          result: { city: 'Paris' },
+          type: 'tool-call-result',
+        },
+      ] satisfies StreamChunk[],
+    ],
+    [
+      'mismatched name',
+      [
+        { id: 'call', name: 'weather', type: 'tool-call-start' },
+        {
+          args: { city: 'Paris' },
+          id: 'call',
+          name: 'other',
+          type: 'tool-call-arguments',
+        },
+      ] satisfies StreamChunk[],
+    ],
+  ])('rejects sanitized invalid tool stream state: %s', async (_name, chunks) => {
+    const execute = vi.fn(async () => ({ temperature: 21 }));
+    const conversation = new Conversation(
+      {
+        complete: vi.fn(),
+        stream: vi.fn(async function* () {
+          yield* chunks;
+        }),
+      },
+      { tools: [buildTool('weather', execute)] },
+    );
+
+    const error = await (async () => {
+      try {
+        for await (const chunk of conversation.sendStream('weather')) {
+          void chunk;
+        }
+        return undefined;
+      } catch (caught) {
+        return caught;
+      }
+    })();
+
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error).toMatchObject({
+      details: {
+        code: 'invalid_provider_response',
+        operation: 'stream',
+        path: 'tool_calls',
+      },
+      retryable: false,
+      statusCode: 502,
+    });
+    expect(execute).not.toHaveBeenCalled();
   });
 });
 

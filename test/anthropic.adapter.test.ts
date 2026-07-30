@@ -1122,6 +1122,22 @@ describe('Anthropic adapter', () => {
         type: 'message_start',
       },
       {
+        content_block: {
+          text: '',
+          type: 'text',
+        },
+        index: 0,
+        type: 'content_block_start',
+      },
+      {
+        delta: {
+          text: 'Done',
+          type: 'text_delta',
+        },
+        index: 0,
+        type: 'content_block_delta',
+      },
+      {
         delta: {
           stop_reason: 'end_turn',
         },
@@ -1149,10 +1165,18 @@ describe('Anthropic adapter', () => {
               output_tokens: 1,
             },
           }),
-          { status: 200 },
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+          },
         ),
       )
-      .mockResolvedValueOnce(new Response(stream, { status: 200 }));
+      .mockResolvedValueOnce(
+        new Response(stream, {
+          headers: { 'content-type': 'text/event-stream' },
+          status: 200,
+        }),
+      );
     const adapter = new AnthropicAdapter({
       apiKey: 'anthropic-key',
       fetchImplementation,
@@ -1231,7 +1255,10 @@ describe('Anthropic adapter', () => {
             output_tokens: 1,
           },
         }),
-        { status: 200 },
+        {
+          headers: { 'content-type': 'application/json' },
+          status: 200,
+        },
       );
     });
     const adapter = new AnthropicAdapter({
@@ -1371,8 +1398,8 @@ describe('Anthropic adapter', () => {
       {
         id: 'tool_1',
         name: 'weather_lookup',
-        result: { city: 'Berlin' },
-        type: 'tool-call-result',
+        args: { city: 'Berlin' },
+        type: 'tool-call-arguments',
       },
       expect.objectContaining({
         finishReason: 'tool_call',

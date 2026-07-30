@@ -151,4 +151,31 @@ describe('withRetry', () => {
     expect(response.status).toBe(200);
     expect(sleep).toHaveBeenCalledWith(1000);
   });
+
+  it('aborts retry sleep and preserves Error reason identity', async () => {
+    const reason = new Error('stop retrying');
+    const controller = new AbortController();
+    const fn = vi.fn(async () => new Response(null, { status: 503 }));
+    const sleep = vi.fn(
+      async () =>
+        new Promise<void>(() => {
+          controller.abort(reason);
+        }),
+    );
+
+    await expect(
+      withRetry(
+        fn,
+        {
+          baseMs: 1000,
+          jitterMs: 0,
+          maxAttempts: 3,
+          sleep,
+        },
+        controller.signal,
+      ),
+    ).rejects.toBe(reason);
+    expect(fn).toHaveBeenCalledOnce();
+    expect(sleep).toHaveBeenCalledOnce();
+  });
 });

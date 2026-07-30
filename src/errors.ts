@@ -69,5 +69,22 @@ export class BudgetExceededError extends LLMError {}
 /** Tool loop exceeded the configured maximum number of rounds. */
 export class MaxToolRoundsError extends LLMError {}
 
+/** A deterministic mock operation was invoked without a queued result. */
+export class MockQueueExhaustedError extends LLMError {
+  constructor(
+    operation: 'complete' | 'embed' | 'speak' | 'stream' | 'transcribe',
+    options: Pick<LLMErrorOptions, 'model' | 'provider'> = {},
+  ) {
+    super(`Mock queue exhausted for ${operation}.`, {
+      ...options,
+      details: {
+        code: 'mock_queue_exhausted',
+        operation,
+      },
+      retryable: false,
+    });
+  }
+}
+
 /** Generic provider-side failure that does not fit a narrower subtype. */
 export class ProviderError extends LLMError {}

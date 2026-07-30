@@ -934,6 +934,20 @@ export class SessionApi {
               continue;
             }
 
+            if (chunk.type === 'tool-call-arguments') {
+              controller.enqueue(
+                encoder.encode(
+                  formatSseEvent('response.tool_call.arguments', {
+                    args: chunk.args,
+                    id: chunk.id,
+                    name: chunk.name,
+                    ...streamEventData(chunk),
+                  }),
+                ),
+              );
+              continue;
+            }
+
             if (chunk.type === 'tool-call-result') {
               const resultPayload = this.exposeToolResults
                 ? { result: chunk.result }
@@ -942,6 +956,7 @@ export class SessionApi {
                 encoder.encode(
                   formatSseEvent('response.tool_call.result', {
                     id: chunk.id,
+                    isError: chunk.isError === true,
                     name: chunk.name,
                     ...resultPayload,
                     ...streamEventData(chunk),

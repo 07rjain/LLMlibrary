@@ -16,6 +16,7 @@ vi.mock('pg', () => {
 import {
   AuthenticationError,
   BudgetExceededError,
+  MockQueueExhaustedError,
   ProviderCapabilityError,
   ProviderError,
 } from '../src/errors.js';
@@ -24,6 +25,7 @@ import { ModelRouter } from '../src/router.js';
 import { InMemorySessionStore } from '../src/session-store.js';
 
 import type { ConversationSnapshot } from '../src/conversation.js';
+import type { StreamChunk } from '../src/types.js';
 import type { SpeechUsageSummary, UsageSummary } from '../src/usage.js';
 
 const createdPools = pgMockState.createdPools as MockPool[];
@@ -561,6 +563,41 @@ describe('LLMClient', () => {
     });
   });
 
+  it('pre-aborts embeddings without fetching or consuming a mock queue entry', async () => {
+    const controller = new AbortController();
+    const abortReason = new Error('embedding canceled before dispatch');
+    controller.abort(abortReason);
+    const fetchImplementation = vi.fn<typeof fetch>();
+    const client = new LLMClient({
+      defaultEmbeddingModel: 'gemini-embedding-2',
+      fetchImplementation,
+      geminiApiKey: 'gemini-key',
+    });
+
+    await expect(
+      client.embed({
+        input: 'do not fetch',
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(abortReason);
+    expect(fetchImplementation).not.toHaveBeenCalled();
+
+    const queued = {
+      embeddings: [{ index: 0, values: [0.1, 0.2] }],
+      model: 'mock-embedding-model',
+      provider: 'mock' as const,
+      raw: { queued: true },
+    };
+    const mock = LLMClient.mock({ embeddings: [queued] });
+    await expect(
+      mock.embed({
+        input: 'do not consume',
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(abortReason);
+    await expect(mock.embed({ input: 'consume now' })).resolves.toBe(queued);
+  });
+
   it('rejects unsupported embedding providers in v1', async () => {
     const client = new LLMClient({
       defaultEmbeddingModel: 'gemini-embedding-2',
@@ -747,7 +784,10 @@ describe('LLMClient', () => {
               values: [bodies.length],
             },
           }),
-          { status: 200 },
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+          },
         );
       },
     );
@@ -834,6 +874,7 @@ describe('LLMClient', () => {
           new Response(
             JSON.stringify({ embedding: { values: [dimensions] } }),
             {
+              headers: { 'content-type': 'application/json' },
               status: 200,
             },
           ),
@@ -855,6 +896,7 @@ describe('LLMClient', () => {
     const fetchImplementation = vi.fn(
       async () =>
         new Response(JSON.stringify({ embedding: { values: [1] } }), {
+          headers: { 'content-type': 'application/json' },
           status: 200,
         }),
     );
@@ -1766,7 +1808,7 @@ describe('LLMClient', () => {
     }
 
     expect(chunks.find((chunk) => chunk.type === 'text-delta')).toEqual(
-      expect.objectContaining({ delta: 'Hi', version: 2 }),
+      expect.objectContaining({ delta: 'Hi', version: 3 }),
     );
     expect(chunks.at(-1)).toEqual(
       expect.objectContaining({
@@ -1825,7 +1867,7 @@ describe('LLMClient', () => {
     }
 
     expect(chunks.find((chunk) => chunk.type === 'text-delta')).toEqual(
-      expect.objectContaining({ delta: 'Hello from Gemini', version: 2 }),
+      expect.objectContaining({ delta: 'Hello from Gemini', version: 3 }),
     );
     expect(chunks.at(-1)).toEqual(
       expect.objectContaining({
@@ -1833,6 +1875,54 @@ describe('LLMClient', () => {
         type: 'done',
       }),
     );
+  });
+
+  it('preserves explicitly supplied versions in routed and mock stream decorators', async () => {
+    const legacyArguments = {
+      id: 'legacy-call',
+      name: 'weather',
+      result: { city: 'Paris' },
+      type: 'tool-call-result',
+      version: 2,
+    } as unknown as StreamChunk;
+    const routedClient = new LLMClient({
+      defaultModel: 'gpt-4o-mini',
+      openaiApiKey: 'openai-key',
+    });
+    const routedAdapter = (
+      routedClient as unknown as {
+        openaiAdapter: {
+          stream: () => AsyncIterable<StreamChunk>;
+        };
+      }
+    ).openaiAdapter;
+    routedAdapter.stream = async function* () {
+      yield legacyArguments;
+    };
+
+    const routedChunks: StreamChunk[] = [];
+    for await (const chunk of routedClient.stream({
+      messages: [{ content: 'route legacy arguments', role: 'user' }],
+    })) {
+      routedChunks.push(chunk);
+    }
+
+    const mockClient = LLMClient.mock({
+      streams: [[legacyArguments]],
+    });
+    const mockChunks: StreamChunk[] = [];
+    for await (const chunk of mockClient.stream({
+      messages: [{ content: 'mock legacy arguments', role: 'user' }],
+    })) {
+      mockChunks.push(chunk);
+    }
+
+    expect(
+      routedChunks.find((chunk) => chunk.type === 'tool-call-result'),
+    ).toMatchObject({ version: 2 });
+    expect(
+      mockChunks.find((chunk) => chunk.type === 'tool-call-result'),
+    ).toMatchObject({ version: 2 });
   });
 
   it('loads API keys from env via fromEnv()', async () => {
@@ -2222,7 +2312,7 @@ describe('LLMClient', () => {
       'done',
     ]);
     expect(chunks.map((chunk) => chunk.sequence)).toEqual([1, 2, 3, 4]);
-    expect(chunks.every((chunk) => chunk.version === 2)).toBe(true);
+    expect(chunks.every((chunk) => chunk.version === 3)).toBe(true);
     expect(chunks.every((chunk) => chunk.requestId === 'mock-request')).toBe(
       true,
     );
@@ -2502,7 +2592,7 @@ describe('LLMClient', () => {
     }
 
     expect(chunks.find((chunk) => chunk.type === 'text-delta')).toEqual(
-      expect.objectContaining({ delta: 'Fallback stream', version: 2 }),
+      expect.objectContaining({ delta: 'Fallback stream', version: 3 }),
     );
     expect(chunks.at(-1)).toEqual(
       expect.objectContaining({
@@ -2594,7 +2684,7 @@ describe('LLMClient', () => {
       expect.objectContaining({
         delta: 'partial',
         type: 'text-delta',
-        version: 2,
+        version: 3,
       }),
     );
     expect(fetchImplementation).toHaveBeenCalledTimes(1);
@@ -2964,7 +3054,7 @@ describe('LLMClient', () => {
 
     await expect(iterator.next()).resolves.toEqual({
       done: false,
-      value: expect.objectContaining({ type: 'response-start', version: 2 }),
+      value: expect.objectContaining({ type: 'response-start', version: 3 }),
     });
 
     await expect(iterator.next()).resolves.toEqual({
@@ -2972,7 +3062,7 @@ describe('LLMClient', () => {
       value: expect.objectContaining({
         delta: 'first',
         type: 'text-delta',
-        version: 2,
+        version: 3,
       }),
     });
 
@@ -3400,6 +3490,302 @@ describe('LLMClient', () => {
       values: [null, 'ok', 2],
     });
     expect(capturedMetadata).not.toBe(metadata);
+  });
+
+  it('throws a typed error for all exhausted mock operation queues', async () => {
+    const client = LLMClient.mock();
+    const assertExhausted = async (
+      operation: string,
+      promise: Promise<unknown>,
+    ): Promise<void> => {
+      const error = await promise.catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(MockQueueExhaustedError);
+      expect(error).toMatchObject({
+        details: { code: 'mock_queue_exhausted', operation },
+        retryable: false,
+        statusCode: undefined,
+      });
+    };
+
+    await assertExhausted(
+      'complete',
+      client.complete({ messages: [{ content: 'hello', role: 'user' }] }),
+    );
+    await assertExhausted('embed', client.embed({ input: 'hello' }));
+    await assertExhausted('speak', client.speak({ input: 'hello' }));
+    await assertExhausted(
+      'transcribe',
+      client.transcribe({
+        input: {
+          file: new Uint8Array([1, 2, 3]),
+          mediaType: 'audio/wav',
+        },
+      }),
+    );
+    await assertExhausted(
+      'stream',
+      (async () => {
+        for await (const chunk of client.stream({
+          messages: [{ content: 'hello', role: 'user' }],
+        })) {
+          void chunk;
+        }
+      })(),
+    );
+  });
+
+  it('does not consume a mock queue entry for a pre-aborted request', async () => {
+    const abortReason = new Error('cancel before mock dispatch');
+    const controller = new AbortController();
+    controller.abort(abortReason);
+    const response = {
+      content: [],
+      finishReason: 'stop' as const,
+      model: 'mock-model',
+      provider: 'mock' as const,
+      raw: {},
+      text: 'queued',
+      toolCalls: [],
+      usage: {
+        cachedTokens: 0,
+        cost: '$0.00',
+        costUSD: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      },
+    };
+    const client = LLMClient.mock({ responses: [response] });
+
+    await expect(
+      client.complete({
+        messages: [{ content: 'first', role: 'user' }],
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(abortReason);
+    await expect(
+      client.complete({
+        messages: [{ content: 'second', role: 'user' }],
+      }),
+    ).resolves.toBe(response);
+
+    const streamClient = LLMClient.mock({
+      streams: [
+        [
+          { delta: 'queued', type: 'text-delta' },
+          {
+            finishReason: 'stop',
+            type: 'done',
+            usage: response.usage,
+          },
+        ],
+      ],
+    });
+    const collect = async (signal?: AbortSignal): Promise<StreamChunk[]> => {
+      const chunks: StreamChunk[] = [];
+      for await (const chunk of streamClient.stream({
+        messages: [{ content: 'stream', role: 'user' }],
+        ...(signal ? { signal } : {}),
+      })) {
+        chunks.push(chunk);
+      }
+      return chunks;
+    };
+    await expect(collect(controller.signal)).rejects.toBe(abortReason);
+    await expect(collect()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ delta: 'queued', type: 'text-delta' }),
+      ]),
+    );
+  });
+
+  it('consumes rejecting mock factories once and preserves concurrent FIFO', async () => {
+    const factoryError = new Error('factory failed');
+    const makeResponse = (text: string) => ({
+      content: [{ text, type: 'text' as const }],
+      finishReason: 'stop' as const,
+      model: 'mock-model',
+      provider: 'mock' as const,
+      raw: {},
+      text,
+      toolCalls: [],
+      usage: {
+        cachedTokens: 0,
+        cost: '$0.00',
+        costUSD: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      },
+    });
+    const client = LLMClient.mock({
+      responses: [
+        async () => Promise.reject(factoryError),
+        async () => makeResponse('second'),
+        async () => makeResponse('third'),
+      ],
+    });
+
+    await expect(
+      client.complete({ messages: [{ content: 'first', role: 'user' }] }),
+    ).rejects.toBe(factoryError);
+    const [second, third] = await Promise.all([
+      client.complete({ messages: [{ content: 'second', role: 'user' }] }),
+      client.complete({ messages: [{ content: 'third', role: 'user' }] }),
+    ]);
+    expect([second.text, third.text]).toEqual(['second', 'third']);
+    await expect(
+      client.complete({ messages: [{ content: 'fourth', role: 'user' }] }),
+    ).rejects.toBeInstanceOf(MockQueueExhaustedError);
+  });
+
+  it('aborts an in-flight non-compliant fetch without logging or succeeding', async () => {
+    const reason = new Error('disconnect');
+    const controller = new AbortController();
+    const usageLogger = { log: vi.fn(async () => undefined) };
+    const fetchImplementation = vi.fn(
+      async () => new Promise<Response>(() => undefined),
+    );
+    const client = new LLMClient({
+      fetchImplementation,
+      openaiApiKey: 'test',
+      usageLogger,
+    });
+    const pending = client.complete({
+      messages: [{ content: 'hello', role: 'user' }],
+      model: 'gpt-4o-mini',
+      signal: controller.signal,
+    });
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+    expect(fetchImplementation).toHaveBeenCalledOnce();
+    expect(usageLogger.log).not.toHaveBeenCalled();
+  });
+
+  it('does not route, fetch, or log a pre-aborted completion', async () => {
+    const reason = new Error('already cancelled');
+    const controller = new AbortController();
+    controller.abort(reason);
+    const router = new ModelRouter({
+      rules: [{ name: 'primary', target: 'gpt-4o-mini' }],
+    });
+    const resolveRoute = vi.spyOn(router, 'resolve');
+    const fetchImplementation = vi.fn();
+    const usageLogger = { log: vi.fn(async () => undefined) };
+    const client = new LLMClient({
+      fetchImplementation,
+      modelRouter: router,
+      openaiApiKey: 'test',
+      usageLogger,
+    });
+
+    await expect(
+      client.complete({
+        messages: [{ content: 'hello', role: 'user' }],
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+    expect(resolveRoute).not.toHaveBeenCalled();
+    expect(fetchImplementation).not.toHaveBeenCalled();
+    expect(usageLogger.log).not.toHaveBeenCalled();
+  });
+
+  it('does not route-fallback after a malformed successful response', async () => {
+    const fetchImplementation = vi.fn(async () =>
+      Promise.resolve(
+        new Response('not-json', {
+          headers: { 'content-type': 'application/json' },
+          status: 200,
+        }),
+      ),
+    );
+    const client = new LLMClient({
+      anthropicApiKey: 'anthropic',
+      fetchImplementation,
+      modelRouter: new ModelRouter({
+        rules: [
+          {
+            fallback: ['claude-haiku-4-5'],
+            name: 'malformed-no-fallback',
+            target: 'gpt-4o-mini',
+          },
+        ],
+      }),
+      openaiApiKey: 'openai',
+    });
+
+    await expect(
+      client.complete({
+        messages: [{ content: 'hello', role: 'user' }],
+      }),
+    ).rejects.toMatchObject({
+      details: { code: 'invalid_provider_response' },
+      retryable: false,
+      statusCode: 502,
+    });
+    expect(fetchImplementation).toHaveBeenCalledOnce();
+  });
+
+  it('does not retry or route-fallback after an empty Gemini success', async () => {
+    const fetchImplementation = vi.fn(async () =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      text: 'SECRET_ROUTED_THOUGHT',
+                      thought: true,
+                      thoughtSignature: 'secret-routed-signature',
+                    },
+                  ],
+                },
+                finishReason: 'STOP',
+                index: 0,
+              },
+            ],
+          }),
+          {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+          },
+        ),
+      ),
+    );
+    const client = new LLMClient({
+      fetchImplementation,
+      geminiApiKey: 'gemini',
+      modelRouter: new ModelRouter({
+        rules: [
+          {
+            fallback: ['gpt-4o-mini'],
+            name: 'empty-gemini-no-fallback',
+            target: 'gemini-2.5-flash',
+          },
+        ],
+      }),
+      openaiApiKey: 'openai',
+    });
+
+    const error = await client
+      .complete({
+        messages: [{ content: 'hello', role: 'user' }],
+      })
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
+      details: {
+        code: 'invalid_provider_response',
+        path: 'candidates[0].content.parts',
+        reason: 'invalid_provider_response',
+      },
+      provider: 'google',
+      retryable: false,
+      statusCode: 502,
+    });
+    expect(JSON.stringify(error)).not.toContain('SECRET_ROUTED_THOUGHT');
+    expect(JSON.stringify(error)).not.toContain('secret-routed-signature');
+    expect(fetchImplementation).toHaveBeenCalledOnce();
   });
 });
 

@@ -16,13 +16,24 @@ import {
   readRequiredModelId,
 } from '../model-discovery.js';
 import { anthropicUsageToCanonical, usageWithCost } from '../utils/cost.js';
-import { parseSSE } from '../utils/parse-sse.js';
-import { withRetry } from '../utils/retry.js';
 import {
   validateAndCloneTool,
   validateAndCloneTools,
 } from '../tool-validation.js';
 import { buildAnthropicOutputConfig } from '../structured-output.js';
+import {
+  assertProviderArray,
+  assertProviderContentType,
+  assertProviderObject,
+  assertProviderString,
+  assertProviderUsage,
+  invalidProviderResponse,
+  parseProviderEvent,
+  parseSSE,
+  readProviderJson,
+  throwIfAborted,
+  withRetry,
+} from '#provider-runtime';
 
 import type {
   CacheControl,
@@ -198,6 +209,7 @@ export class AnthropicAdapter {
     options: AnthropicCompletionOptions,
   ): Promise<CanonicalResponse> {
     this.assertCapabilities(options);
+    throwIfAborted(options.signal);
 
     const response = await withRetry(
       async () =>
@@ -213,13 +225,16 @@ export class AnthropicAdapter {
           ),
         ),
       this.retryOptions,
+      options.signal,
     );
 
     if (!response.ok) {
       throw await mapAnthropicError(response, options.model);
     }
 
-    const payload = (await response.json()) as AnthropicResponsePayload;
+    const context = anthropicResponseContext(response, options, 'complete');
+    const payload = await readProviderJson(response, context);
+    validateAnthropicResponsePayload(payload, context);
     return translateAnthropicResponse(
       payload,
       this.modelRegistry,
@@ -231,6 +246,7 @@ export class AnthropicAdapter {
     options: AnthropicCompletionOptions,
   ): AsyncGenerator<StreamChunk, void, void> {
     this.assertCapabilities({ ...options, stream: true });
+    throwIfAborted(options.signal);
 
     const response = await withRetry(
       async () =>
@@ -249,6 +265,7 @@ export class AnthropicAdapter {
           ),
         ),
       this.retryOptions,
+      options.signal,
     );
 
     if (!response.ok) {
@@ -265,16 +282,24 @@ export class AnthropicAdapter {
       );
     }
 
+    const context = anthropicResponseContext(response, options, 'stream');
+    assertProviderContentType(response, context, 'sse');
     const assembler = new AnthropicStreamAssembler(
       options.model,
       this.modelRegistry,
+      context,
     );
 
-    for await (const payload of parseSSE(response.body)) {
-      const event = JSON.parse(payload) as AnthropicSSEEvent;
-      yield* assembler.consume(event);
+    for await (const payload of parseSSE(response.body, options.signal)) {
+      throwIfAborted(options.signal);
+      const event = parseProviderEvent(payload, context);
+      assertProviderObject(event, context, 'event');
+      assertProviderString(event.type, context, 'event.type');
+      validateAnthropicStreamEvent(event, context);
+      yield* assembler.consume(event as unknown as AnthropicSSEEvent);
     }
 
+    throwIfAborted(options.signal);
     const doneChunk = assembler.finish();
     if (doneChunk) {
       yield doneChunk;
@@ -728,24 +753,200 @@ export async function mapAnthropicError(
   return new ProviderError(message, baseOptions);
 }
 
+function anthropicResponseContext(
+  response: Response,
+  options: { model?: string; signal?: AbortSignal },
+  operation: string,
+) {
+  return {
+    ...(options.model ? { model: options.model } : {}),
+    operation,
+    provider: 'anthropic' as const,
+    requestId:
+      response.headers.get('request-id') ??
+      response.headers.get('x-request-id') ??
+      undefined,
+    ...(options.signal ? { signal: options.signal } : {}),
+  };
+}
+
+function validateAnthropicResponsePayload(
+  value: unknown,
+  context: ReturnType<typeof anthropicResponseContext>,
+): asserts value is AnthropicResponsePayload {
+  assertProviderObject(value, context, 'response');
+  assertProviderString(value.model, context, 'response.model');
+  assertProviderArray(value.content, context, 'response.content');
+  if (value.stop_reason !== null) {
+    assertProviderString(
+      value.stop_reason,
+      context,
+      'response.stop_reason',
+    );
+  }
+  if (
+    context.operation === 'complete' &&
+    value.content.length === 0 &&
+    value.stop_reason !== 'refusal'
+  ) {
+    throw invalidProviderResponse(context, {
+      expected: 'non_empty_array',
+      path: 'response.content',
+      phase: 'schema',
+    });
+  }
+  for (const [index, block] of value.content.entries()) {
+    assertProviderObject(block, context, `response.content[${index}]`);
+    assertProviderString(
+      block.type,
+      context,
+      `response.content[${index}].type`,
+    );
+    if (block.type === 'text') {
+      assertProviderString(
+        block.text,
+        context,
+        `response.content[${index}].text`,
+      );
+    } else if (block.type === 'tool_use') {
+      assertProviderString(
+        block.id,
+        context,
+        `response.content[${index}].id`,
+      );
+      assertProviderString(
+        block.name,
+        context,
+        `response.content[${index}].name`,
+      );
+      assertProviderObject(
+        block.input,
+        context,
+        `response.content[${index}].input`,
+      );
+    }
+  }
+  assertProviderUsage(
+    value.usage,
+    [
+      'cache_creation_input_tokens',
+      'cache_read_input_tokens',
+      'input_tokens',
+      'output_tokens',
+    ],
+    context,
+    'response.usage',
+  );
+}
+
+function validateAnthropicStreamEvent(
+  event: Record<string, unknown>,
+  context: ReturnType<typeof anthropicResponseContext>,
+): void {
+  const requireIndex = (): void => {
+    if (
+      typeof event.index !== 'number' ||
+      !Number.isSafeInteger(event.index) ||
+      event.index < 0
+    ) {
+      throw invalidProviderResponse(context, {
+        expected: 'non_negative_safe_integer',
+        path: 'event.index',
+        phase: 'schema',
+      });
+    }
+  };
+  switch (event.type) {
+    case 'message_start':
+      validateAnthropicResponsePayload(event.message, context);
+      return;
+    case 'content_block_start':
+      requireIndex();
+      assertProviderObject(event.content_block, context, 'event.content_block');
+      assertProviderString(
+        event.content_block.type,
+        context,
+        'event.content_block.type',
+      );
+      if (event.content_block.type === 'tool_use') {
+        assertProviderString(
+          event.content_block.id,
+          context,
+          'event.content_block.id',
+        );
+        assertProviderString(
+          event.content_block.name,
+          context,
+          'event.content_block.name',
+        );
+      }
+      return;
+    case 'content_block_delta':
+      requireIndex();
+      assertProviderObject(event.delta, context, 'event.delta');
+      assertProviderString(event.delta.type, context, 'event.delta.type');
+      if (event.delta.type === 'text_delta') {
+        assertProviderString(event.delta.text, context, 'event.delta.text');
+      } else if (event.delta.type === 'input_json_delta') {
+        assertProviderString(
+          event.delta.partial_json,
+          context,
+          'event.delta.partial_json',
+        );
+      }
+      return;
+    case 'content_block_stop':
+      requireIndex();
+      return;
+    case 'message_delta':
+      assertProviderObject(event.delta, context, 'event.delta');
+      if (event.delta.stop_reason !== null) {
+        assertProviderString(
+          event.delta.stop_reason,
+          context,
+          'event.delta.stop_reason',
+        );
+      }
+      assertProviderUsage(
+        event.usage,
+        ['output_tokens'],
+        context,
+        'event.usage',
+      );
+      return;
+    default:
+      return;
+  }
+}
+
 class AnthropicStreamAssembler {
+  private readonly context: ReturnType<typeof anthropicResponseContext>;
   private finishReason: CanonicalFinishReason = 'stop';
   private readonly model: string;
   private readonly modelRegistry: ModelRegistry;
+  private started = false;
+  private outputObserved = false;
   private toolBuffer = new Map<
     number,
     { id: string; json: string; name: string }
   >();
   private usage: AnthropicUsage = {};
+  private terminal = false;
 
-  constructor(model: string, modelRegistry: ModelRegistry) {
+  constructor(
+    model: string,
+    modelRegistry: ModelRegistry,
+    context: ReturnType<typeof anthropicResponseContext>,
+  ) {
     this.model = model;
     this.modelRegistry = modelRegistry;
+    this.context = context;
   }
 
   *consume(event: AnthropicSSEEvent): Generator<StreamChunk> {
     switch (event.type) {
       case 'message_start':
+        this.started = true;
         this.usage = event.message?.usage ?? {};
         return;
       case 'content_block_start':
@@ -753,6 +954,7 @@ class AnthropicStreamAssembler {
           event.content_block?.type === 'tool_use' &&
           event.index !== undefined
         ) {
+          this.outputObserved = true;
           this.toolBuffer.set(event.index, {
             id: event.content_block.id,
             json: '',
@@ -763,10 +965,16 @@ class AnthropicStreamAssembler {
             name: event.content_block.name,
             type: 'tool-call-start',
           };
+        } else if (
+          event.content_block &&
+          event.content_block.type !== 'text'
+        ) {
+          this.outputObserved = true;
         }
         return;
       case 'content_block_delta':
         if (event.delta?.type === 'text_delta' && event.delta.text) {
+          this.outputObserved = true;
           yield {
             delta: event.delta.text,
             type: 'text-delta',
@@ -806,11 +1014,25 @@ class AnthropicStreamAssembler {
         };
         return;
       case 'message_stop':
+        this.terminal = true;
         return;
     }
   }
 
   finish(): StreamChunk | null {
+    if (!this.started || !this.terminal || this.toolBuffer.size > 0) {
+      throw invalidProviderResponse(this.context, {
+        expected: 'message_stop_with_complete_tool_calls',
+        phase: 'stream',
+      });
+    }
+    if (!this.outputObserved && this.finishReason !== 'content_filter') {
+      throw invalidProviderResponse(this.context, {
+        expected: 'non_empty_content',
+        path: 'response.content',
+        phase: 'stream',
+      });
+    }
     const modelInfo = this.modelRegistry.get(this.model);
     return {
       finishReason: this.finishReason,
@@ -826,12 +1048,38 @@ class AnthropicStreamAssembler {
     }
 
     this.toolBuffer.delete(index);
-    const parsed = tool.json ? (JSON.parse(tool.json) as JsonValue) : {};
+    let parsed: JsonValue;
+    try {
+      parsed = tool.json ? (JSON.parse(tool.json) as JsonValue) : {};
+    } catch {
+      throw invalidProviderResponse(this.context, {
+        expected: 'json_object',
+        path: 'content_block.input',
+        phase: 'schema',
+      });
+    }
+    if (!isPlainObject(parsed)) {
+      throw new ProviderError(
+        'Anthropic returned invalid tool-call arguments.',
+        {
+          details: {
+            code: 'invalid_provider_response',
+            operation: 'stream',
+            path: 'content_block.input',
+            phase: 'schema',
+          },
+          model: this.model,
+          provider: 'anthropic',
+          retryable: false,
+          statusCode: 502,
+        },
+      );
+    }
     yield {
+      args: parsed,
       id: tool.id,
       name: tool.name,
-      result: parsed,
-      type: 'tool-call-result',
+      type: 'tool-call-arguments',
     };
   }
 }

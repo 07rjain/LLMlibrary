@@ -14,4 +14,4 @@ export * from './session-store.js';
 export * from './tools.js';
 export * from './types.js';
 export * from './usage.js';
-export * from './utils/index.js';
+export * from 'unified-llm-client/utils';

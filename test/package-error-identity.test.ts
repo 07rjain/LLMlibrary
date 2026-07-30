@@ -27,10 +27,17 @@ const gemini = await import('unified-llm-client/providers/gemini');
 const openai = await import('unified-llm-client/providers/openai');
 
 assert.equal(errors.ProviderCapabilityError, root.ProviderCapabilityError);
+assert.equal(errors.MockQueueExhaustedError, root.MockQueueExhaustedError);
 assert.equal(models.ModelRegistry, root.ModelRegistry);
 assert.equal(models.defaultModelPrices, root.defaultModelPrices);
 assert.equal(sessionApiModule.SessionApi, root.SessionApi);
 assert.equal(sessionApiModule.createSessionApi, root.createSessionApi);
+
+const mockQueueError = await root.LLMClient.mock()
+  .complete({ messages: [{ role: 'user', content: 'x' }] })
+  .catch((error) => error);
+assert.equal(mockQueueError instanceof errors.MockQueueExhaustedError, true);
+assert.equal(mockQueueError instanceof root.MockQueueExhaustedError, true);
 
 async function capture(operation) {
   try {
@@ -284,10 +291,17 @@ const assert = require('node:assert/strict');
   const openai = require('unified-llm-client/providers/openai');
 
   assert.equal(errors.ProviderCapabilityError, root.ProviderCapabilityError);
+  assert.equal(errors.MockQueueExhaustedError, root.MockQueueExhaustedError);
   assert.equal(models.ModelRegistry, root.ModelRegistry);
   assert.equal(models.defaultModelPrices, root.defaultModelPrices);
   assert.equal(sessionApiModule.SessionApi, root.SessionApi);
   assert.equal(sessionApiModule.createSessionApi, root.createSessionApi);
+
+  const mockQueueError = await root.LLMClient.mock()
+    .complete({ messages: [{ role: 'user', content: 'x' }] })
+    .catch((error) => error);
+  assert.equal(mockQueueError instanceof errors.MockQueueExhaustedError, true);
+  assert.equal(mockQueueError instanceof root.MockQueueExhaustedError, true);
 
   async function capture(operation) {
     try {

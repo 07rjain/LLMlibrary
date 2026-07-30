@@ -12,7 +12,7 @@ Completion and streaming requests accept:
 }
 ```
 
-The request ID is copied to v2 stream events, per-step context callbacks, provider attempts, and UsageEvents. Requests also accept JSON-safe application metadata; see [Request Metadata](./REQUEST_METADATA.md).
+The request ID is copied to v3 stream events, per-step context callbacks, provider attempts, and UsageEvents. Requests also accept JSON-safe application metadata; see [Request Metadata](./REQUEST_METADATA.md).
 
 ## 2. Request Cost Quotes
 
@@ -59,7 +59,7 @@ const conversation = await client.conversation({
 
 ## 5. Versioned Stream Events
 
-`client.stream()` emits canonical stream events with `version: 2`, monotonic `sequence`, an emission timestamp, and the request ID when supplied.
+`client.stream()` emits canonical stream events with `version: 3`, monotonic `sequence`, an emission timestamp, and the request ID when supplied.
 
 In addition to text, tool, error, and done events, consumers may receive:
 

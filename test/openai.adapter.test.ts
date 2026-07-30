@@ -1527,8 +1527,8 @@ describe('OpenAI adapter', () => {
       {
         id: 'call_1',
         name: 'weather_lookup',
-        result: { city: 'Berlin' },
-        type: 'tool-call-result',
+        args: { city: 'Berlin' },
+        type: 'tool-call-arguments',
       },
       expect.objectContaining({
         finishReason: 'tool_call',
@@ -1961,10 +1961,10 @@ describe('OpenAI adapter', () => {
         type: 'tool-call-delta',
       },
       {
+        args: { q: 'weather' },
         id: 'call_search',
         name: 'web_search',
-        result: { q: 'weather' },
-        type: 'tool-call-result',
+        type: 'tool-call-arguments',
       },
       expect.objectContaining({
         finishReason: 'tool_call',
@@ -2226,11 +2226,13 @@ describe('OpenAI adapter', () => {
     );
     const resultA = chunks.find(
       (c) =>
-        c.type === 'tool-call-result' && (c as { id: string }).id === 'call_a',
+        c.type === 'tool-call-arguments' &&
+        (c as { id: string }).id === 'call_a',
     );
     const resultB = chunks.find(
       (c) =>
-        c.type === 'tool-call-result' && (c as { id: string }).id === 'call_b',
+        c.type === 'tool-call-arguments' &&
+        (c as { id: string }).id === 'call_b',
     );
 
     expect(startA).toMatchObject({
@@ -2248,12 +2250,12 @@ describe('OpenAI adapter', () => {
     expect(resultA).toMatchObject({
       id: 'call_a',
       name: 'tool_alpha',
-      result: { x: 1 },
+      args: { x: 1 },
     });
     expect(resultB).toMatchObject({
       id: 'call_b',
       name: 'tool_beta',
-      result: { y: 2 },
+      args: { y: 2 },
     });
   });
 

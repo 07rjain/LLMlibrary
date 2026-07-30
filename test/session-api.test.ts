@@ -393,10 +393,10 @@ describe('SessionApi', () => {
             type: 'tool-call-delta',
           },
           {
+            args: { city: 'Berlin' },
             id: 'tool_1',
             name: 'lookup',
-            result: { city: 'Berlin', secret: 'raw-tool-secret' },
-            type: 'tool-call-result',
+            type: 'tool-call-arguments',
           },
           { type: 'reasoning-start' },
           { delta: 'checking', type: 'reasoning-delta' },
@@ -404,7 +404,7 @@ describe('SessionApi', () => {
           { status: 'structured-output', type: 'response-status' },
           { attempt: 1, type: 'retry' },
           {
-            finishReason: 'stop',
+            finishReason: 'tool_call',
             type: 'done',
             usage: {
               cachedTokens: 0,
@@ -450,6 +450,7 @@ describe('SessionApi', () => {
     expect(text).toContain('event: response.text.delta');
     expect(text).toContain('event: response.tool_call.start');
     expect(text).toContain('event: response.tool_call.delta');
+    expect(text).toContain('event: response.tool_call.arguments');
     expect(text).toContain('event: response.tool_call.result');
     expect(text).toContain('[tool result withheld]');
     expect(text).toContain('"redacted":true');
@@ -461,7 +462,8 @@ describe('SessionApi', () => {
     expect(text).toContain('event: response.retry');
     expect(text).toContain('event: response.usage.updated');
     expect(text).toContain('event: response.completed');
-    expect(text).toContain('"version":2');
+    expect(text).toContain('"version":3');
+    expect(text).toContain('"isError":true');
     expect(text).toContain('"requestId":"session-request-123"');
     expect(text).toMatch(
       /event: session\.message\.started\ndata: .*"requestId":"session-request-123"/,

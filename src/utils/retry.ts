@@ -1,3 +1,5 @@
+import { awaitWithAbort, throwIfAborted } from '../stream-control.js';
+
 export interface RetryOptions {
   baseMs?: number;
   jitterMs?: number;
@@ -78,6 +80,7 @@ export function parseGeminiRetryDelayMs(
 export async function withRetry(
   fn: (attempt: number) => Promise<Response>,
   options: RetryOptions = {},
+  signal?: AbortSignal,
 ): Promise<Response> {
   const maxAttempts = options.maxAttempts ?? 3;
   const baseMs = options.baseMs ?? 1000;
@@ -89,7 +92,9 @@ export async function withRetry(
   let lastResponse: Response | null = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const response = await fn(attempt);
+    throwIfAborted(signal);
+    const response = await awaitWithAbort(fn(attempt), signal);
+    throwIfAborted(signal);
     lastResponse = response;
 
     if (response.ok) {
@@ -117,7 +122,10 @@ export async function withRetry(
       delayMs = Math.min(baseMs * 2 ** (attempt - 1), maxMs);
     }
 
-    await sleep(delayMs + Math.floor(random() * jitterMs));
+    await awaitWithAbort(
+      sleep(delayMs + Math.floor(random() * jitterMs)),
+      signal,
+    );
   }
 
   if (!lastResponse) {

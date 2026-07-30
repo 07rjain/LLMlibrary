@@ -52,7 +52,7 @@ conformanceDescribe('live provider conformance', () => {
       expect(stream.done).toBeDefined();
       expect(stream.text).toContain(`${provider.name.toUpperCase()}_STREAM_OK`);
       expect(stream.chunks.filter((chunk) => chunk.type === 'done')).toHaveLength(1);
-      expect(stream.chunks.every((chunk) => chunk.version === 2)).toBe(true);
+      expect(stream.chunks.every((chunk) => chunk.version === 3)).toBe(true);
       expect(stream.chunks.map((chunk) => chunk.sequence)).toEqual(
         stream.chunks.map((_, index) => index + 1),
       );

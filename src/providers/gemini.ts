@@ -18,8 +18,19 @@ import {
   readRequiredModelId,
 } from '../model-discovery.js';
 import { geminiUsageToCanonical, usageWithCost } from '../utils/cost.js';
-import { parseSSE } from '../utils/parse-sse.js';
-import { withRetry } from '../utils/retry.js';
+import {
+  assertProviderArray,
+  assertProviderContentType,
+  assertProviderObject,
+  assertProviderString,
+  assertProviderUsage,
+  invalidProviderResponse,
+  parseProviderEvent,
+  parseSSE,
+  readProviderJson,
+  throwIfAborted,
+  withRetry,
+} from '#provider-runtime';
 import {
   validateAndCloneTool,
   validateAndCloneTools,
@@ -64,6 +75,8 @@ type GeminiPart =
 
 interface GeminiTextPart {
   text: string;
+  thought?: boolean;
+  thoughtSignature?: string;
 }
 
 interface GeminiInlineDataPart {
@@ -85,6 +98,8 @@ interface GeminiFunctionCallPart {
     args: JsonObject;
     name: string;
   };
+  thought?: boolean;
+  thoughtSignature?: string;
 }
 
 interface GeminiFunctionResponsePart {
@@ -279,6 +294,7 @@ export class GeminiAdapter {
 
   async complete(options: GeminiCompletionOptions): Promise<CanonicalResponse> {
     this.assertCapabilities(options);
+    throwIfAborted(options.signal);
 
     const response = await withRetry(
       async () =>
@@ -294,13 +310,16 @@ export class GeminiAdapter {
           ),
         ),
       this.retryOptions,
+      options.signal,
     );
 
     if (!response.ok) {
       throw await mapGeminiError(response, options.model);
     }
 
-    const payload = (await response.json()) as GeminiGenerateContentResponse;
+    const context = geminiResponseContext(response, options, 'complete');
+    const payload = await readProviderJson(response, context);
+    validateGeminiResponsePayload(payload, context);
     return translateGeminiResponse(payload, options.model, this.modelRegistry);
   }
 
@@ -312,6 +331,7 @@ export class GeminiAdapter {
       modelInfo,
       provider: 'google',
     });
+    throwIfAborted(options.signal);
 
     const embeddings: EmbeddingResponse['embeddings'] = [];
     let lastPayload: GeminiEmbedContentResponse | undefined;
@@ -319,6 +339,7 @@ export class GeminiAdapter {
     let observedPromptTokens = false;
 
     for (const [index, input] of requests.entries()) {
+      throwIfAborted(options.signal);
       const response = await withRetry(
         async () =>
           this.fetchImplementation(
@@ -335,13 +356,17 @@ export class GeminiAdapter {
             ),
           ),
         this.retryOptions,
+        options.signal,
       );
 
       if (!response.ok) {
         throw await mapGeminiError(response, options.model);
       }
 
-      const payload = (await response.json()) as GeminiEmbedContentResponse;
+      const context = geminiResponseContext(response, options, 'embed');
+      const payload = await readProviderJson(response, context);
+      validateGeminiEmbeddingPayload(payload, context);
+      throwIfAborted(options.signal);
       const translated = translateGeminiEmbeddingResponse(
         payload,
         options.model,
@@ -388,6 +413,7 @@ export class GeminiAdapter {
     options: GeminiCompletionOptions,
   ): AsyncGenerator<StreamChunk, void, void> {
     this.assertCapabilities({ ...options, stream: true });
+    throwIfAborted(options.signal);
 
     const response = await withRetry(
       async () =>
@@ -403,6 +429,7 @@ export class GeminiAdapter {
           ),
         ),
       this.retryOptions,
+      options.signal,
     );
 
     if (!response.ok) {
@@ -419,16 +446,23 @@ export class GeminiAdapter {
       );
     }
 
+    const context = geminiResponseContext(response, options, 'stream');
+    assertProviderContentType(response, context, 'sse');
     const assembler = new GeminiStreamAssembler(
       options.model,
       this.modelRegistry,
+      options.providerOptions?.google?.thinking?.includeThoughts === true,
+      context,
     );
-    for await (const payload of parseSSE(response.body)) {
-      const chunk = JSON.parse(payload) as GeminiGenerateContentResponse;
+    for await (const payload of parseSSE(response.body, options.signal)) {
+      throwIfAborted(options.signal);
+      const chunk = parseProviderEvent(payload, context);
+      validateGeminiResponsePayload(chunk, context, true);
       yield* assembler.consume(chunk);
     }
 
-    yield assembler.finish();
+    throwIfAborted(options.signal);
+    yield* assembler.finish();
   }
 
   async createCache(
@@ -964,18 +998,52 @@ export function translateGeminiResponse(
       };
     }
 
-    throw new ProviderError('Gemini response contained no candidates.', {
-      model: requestedModel,
-      provider: 'google',
-    });
+    throw invalidProviderResponse(
+      {
+        model: requestedModel,
+        operation: 'complete',
+        provider: 'google',
+      },
+      {
+        expected: 'non_empty_candidates_or_block_reason',
+        path: 'candidates',
+        phase: 'schema',
+      },
+    );
+  }
+
+  const parts = candidate.content?.parts ?? [];
+  const finishReason = normalizeGeminiFinishReason(
+    candidate.finishReason ?? null,
+    parts,
+  );
+  if (
+    !hasObservableGeminiCandidateOutput(parts) &&
+    finishReason !== 'content_filter'
+  ) {
+    throw invalidProviderResponse(
+      {
+        model: requestedModel,
+        operation: 'complete',
+        provider: 'google',
+      },
+      {
+        expected: 'visible_text_or_function_call',
+        path: 'candidates[0].content.parts',
+        phase: 'schema',
+      },
+    );
   }
 
   const content: CanonicalPart[] = [];
   const toolCalls: CanonicalToolCall[] = [];
   let text = '';
 
-  for (const [partIndex, part] of (candidate.content?.parts ?? []).entries()) {
+  for (const [partIndex, part] of parts.entries()) {
     if ('text' in part) {
+      if (part.thought === true) {
+        continue;
+      }
       content.push({
         text: part.text,
         type: 'text',
@@ -1006,10 +1074,7 @@ export function translateGeminiResponse(
 
   return {
     content,
-    finishReason: normalizeGeminiFinishReason(
-      candidate.finishReason ?? null,
-      candidate.content?.parts ?? [],
-    ),
+    finishReason,
     model: requestedModel,
     provider: 'google',
     raw: payload,
@@ -1113,15 +1178,27 @@ export async function mapGeminiError(
 }
 
 class GeminiStreamAssembler {
+  private readonly context: ReturnType<typeof geminiResponseContext>;
   private emittedToolCalls = new Set<string>();
   private finishReason: CanonicalFinishReason = 'stop';
+  private readonly includeThoughts: boolean;
   private readonly model: string;
   private readonly modelRegistry: ModelRegistry;
+  private reasoningOpen = false;
+  private outputObserved = false;
+  private terminal = false;
   private usage: GeminiUsageMetadata | undefined;
 
-  constructor(model: string, modelRegistry: ModelRegistry) {
+  constructor(
+    model: string,
+    modelRegistry: ModelRegistry,
+    includeThoughts: boolean,
+    context: ReturnType<typeof geminiResponseContext>,
+  ) {
     this.model = model;
     this.modelRegistry = modelRegistry;
+    this.includeThoughts = includeThoughts;
+    this.context = context;
   }
 
   *consume(chunk: GeminiGenerateContentResponse): Generator<StreamChunk> {
@@ -1133,6 +1210,7 @@ class GeminiStreamAssembler {
     if (!candidate) {
       if (chunk.promptFeedback?.blockReason) {
         this.finishReason = 'content_filter';
+        this.terminal = true;
       }
       return;
     }
@@ -1140,14 +1218,33 @@ class GeminiStreamAssembler {
     const parts = candidate.content?.parts ?? [];
     for (const [partIndex, part] of parts.entries()) {
       if ('text' in part) {
-        yield {
-          delta: part.text,
-          type: 'text-delta',
-        };
+        if (part.thought === true) {
+          if (this.includeThoughts && part.text.length > 0) {
+            this.outputObserved = true;
+            if (!this.reasoningOpen) {
+              this.reasoningOpen = true;
+              yield { type: 'reasoning-start' };
+            }
+            yield { delta: part.text, type: 'reasoning-delta' };
+          }
+          continue;
+        }
+        yield* this.closeReasoning();
+        if (part.text.length > 0) {
+          this.outputObserved = true;
+          yield {
+            delta: part.text,
+            type: 'text-delta',
+          };
+        }
         continue;
       }
 
       if ('functionCall' in part) {
+        yield* this.closeReasoning();
+        if (part.functionCall.name.length > 0) {
+          this.outputObserved = true;
+        }
         const id = buildGeminiToolCallId(
           candidate.index,
           partIndex,
@@ -1164,29 +1261,289 @@ class GeminiStreamAssembler {
           type: 'tool-call-start',
         };
         yield {
+          args: part.functionCall.args,
           id,
           name: part.functionCall.name,
-          result: part.functionCall.args,
-          type: 'tool-call-result',
+          type: 'tool-call-arguments',
         };
       }
     }
 
-    if (candidate.finishReason !== undefined) {
+    if (
+      candidate.finishReason !== undefined &&
+      candidate.finishReason !== null
+    ) {
       this.finishReason = normalizeGeminiFinishReason(
         candidate.finishReason,
         parts,
       );
+      this.terminal = true;
     }
   }
 
-  finish(): StreamChunk {
+  *finish(): Generator<StreamChunk> {
+    yield* this.closeReasoning();
+    if (!this.terminal) {
+      throw invalidProviderResponse(this.context, {
+        expected: 'candidate.finishReason_or_promptFeedback.blockReason',
+        phase: 'stream',
+      });
+    }
+    if (!this.outputObserved && this.finishReason !== 'content_filter') {
+      throw invalidProviderResponse(this.context, {
+        expected: 'non_empty_candidate_content',
+        path: 'candidates[0].content.parts',
+        phase: 'stream',
+      });
+    }
     const model = this.modelRegistry.get(this.model);
-    return {
+    yield {
       finishReason: this.finishReason,
       type: 'done',
       usage: usageWithCost(model, geminiUsageToCanonical(this.usage)),
     };
+  }
+
+  private *closeReasoning(): Generator<StreamChunk> {
+    if (!this.reasoningOpen) {
+      return;
+    }
+    this.reasoningOpen = false;
+    yield { type: 'reasoning-end' };
+  }
+}
+
+function geminiResponseContext(
+  response: Response,
+  options: { model?: string; signal?: AbortSignal },
+  operation: string,
+) {
+  return {
+    ...(options.model ? { model: options.model } : {}),
+    operation,
+    provider: 'google' as const,
+    requestId:
+      response.headers.get('x-goog-request-id') ??
+      response.headers.get('x-request-id') ??
+      undefined,
+    ...(options.signal ? { signal: options.signal } : {}),
+  };
+}
+
+function validateGeminiResponsePayload(
+  value: unknown,
+  context: ReturnType<typeof geminiResponseContext>,
+  stream = false,
+): asserts value is GeminiGenerateContentResponse {
+  assertProviderObject(value, context, 'response');
+  if (value.candidates !== undefined) {
+    assertProviderArray(value.candidates, context, 'candidates');
+    for (const [index, candidate] of value.candidates.entries()) {
+      assertProviderObject(candidate, context, `candidates[${index}]`);
+      assertNonNegativeProviderInteger(
+        candidate.index,
+        context,
+        `candidates[${index}].index`,
+      );
+      if (
+        candidate.finishReason !== undefined &&
+        candidate.finishReason !== null
+      ) {
+        assertProviderString(
+          candidate.finishReason,
+          context,
+          `candidates[${index}].finishReason`,
+        );
+      }
+      if (candidate.content !== undefined) {
+        assertProviderObject(
+          candidate.content,
+          context,
+          `candidates[${index}].content`,
+        );
+        assertProviderArray(
+          candidate.content.parts,
+          context,
+          `candidates[${index}].content.parts`,
+        );
+        for (const [partIndex, part] of candidate.content.parts.entries()) {
+          assertProviderObject(
+            part,
+            context,
+            `candidates[${index}].content.parts[${partIndex}]`,
+          );
+          if (part.text !== undefined) {
+            assertProviderString(
+              part.text,
+              context,
+              `candidates[${index}].content.parts[${partIndex}].text`,
+            );
+          }
+          if (part.thought !== undefined && typeof part.thought !== 'boolean') {
+            throw invalidProviderResponse(context, {
+              expected: 'boolean',
+              path: `candidates[${index}].content.parts[${partIndex}].thought`,
+              phase: 'schema',
+            });
+          }
+          if (part.thoughtSignature !== undefined) {
+            assertProviderString(
+              part.thoughtSignature,
+              context,
+              `candidates[${index}].content.parts[${partIndex}].thoughtSignature`,
+            );
+          }
+          if (part.functionCall !== undefined) {
+            assertProviderObject(
+              part.functionCall,
+              context,
+              `candidates[${index}].content.parts[${partIndex}].functionCall`,
+            );
+            assertProviderString(
+              part.functionCall.name,
+              context,
+              `candidates[${index}].content.parts[${partIndex}].functionCall.name`,
+            );
+            assertProviderObject(
+              part.functionCall.args,
+              context,
+              `candidates[${index}].content.parts[${partIndex}].functionCall.args`,
+            );
+          }
+        }
+      }
+    }
+  }
+  assertProviderUsage(
+    value.usageMetadata,
+    [
+      'cachedContentTokenCount',
+      'candidatesTokenCount',
+      'promptTokenCount',
+      'thoughtsTokenCount',
+      'totalTokenCount',
+    ],
+    context,
+    'usageMetadata',
+  );
+  if (
+    !stream &&
+    (!Array.isArray(value.candidates) || value.candidates.length === 0) &&
+    !(
+      isPlainObject(value.promptFeedback) &&
+      typeof value.promptFeedback.blockReason === 'string' &&
+      value.promptFeedback.blockReason.length > 0
+    )
+  ) {
+    throw invalidProviderResponse(context, {
+      expected: 'non_empty_candidates_or_block_reason',
+      path: 'candidates',
+      phase: 'schema',
+    });
+  }
+  if (
+    !stream &&
+    Array.isArray(value.candidates) &&
+    value.candidates.length > 0
+  ) {
+    const candidate = value.candidates[0];
+    const parts =
+      isPlainObject(candidate) &&
+      isPlainObject(candidate.content) &&
+      Array.isArray(candidate.content.parts)
+        ? candidate.content.parts
+        : [];
+    const finishReason =
+      isPlainObject(candidate) && typeof candidate.finishReason === 'string'
+        ? normalizeGeminiFinishReason(
+            candidate.finishReason as GeminiFinishReason,
+            [],
+          )
+        : undefined;
+    if (
+      !hasObservableGeminiCandidateOutput(parts as GeminiPart[]) &&
+      finishReason !== 'content_filter'
+    ) {
+      throw invalidProviderResponse(context, {
+        expected: 'visible_text_or_function_call',
+        path: 'candidates[0].content.parts',
+        phase: 'schema',
+      });
+    }
+  }
+}
+
+function hasObservableGeminiCandidateOutput(
+  parts: readonly GeminiPart[],
+): boolean {
+  return parts.some(
+    (part) =>
+      ('text' in part && part.thought !== true && part.text.length > 0) ||
+      ('functionCall' in part && part.functionCall.name.length > 0),
+  );
+}
+
+function validateGeminiEmbeddingPayload(
+  value: unknown,
+  context: ReturnType<typeof geminiResponseContext>,
+): asserts value is GeminiEmbedContentResponse {
+  assertProviderObject(value, context, 'response');
+  const embeddings =
+    value.embeddings ??
+    (value.embedding === undefined ? undefined : [value.embedding]);
+  assertProviderArray(embeddings, context, 'embeddings');
+  if (embeddings.length === 0) {
+    throw invalidProviderResponse(context, {
+      expected: 'non_empty_array',
+      path: 'embeddings',
+      phase: 'schema',
+    });
+  }
+  for (const [index, embedding] of embeddings.entries()) {
+    assertProviderObject(embedding, context, `embeddings[${index}]`);
+    assertProviderArray(
+      embedding.values,
+      context,
+      `embeddings[${index}].values`,
+    );
+    if (embedding.values.length === 0) {
+      throw invalidProviderResponse(context, {
+        expected: 'non_empty_finite_number_array',
+        path: `embeddings[${index}].values`,
+        phase: 'schema',
+      });
+    }
+    if (
+      embedding.values.some(
+        (item) => typeof item !== 'number' || !Number.isFinite(item),
+      )
+    ) {
+      throw invalidProviderResponse(context, {
+        expected: 'finite_number_array',
+        path: `embeddings[${index}].values`,
+        phase: 'schema',
+      });
+    }
+  }
+  assertProviderUsage(
+    value.usageMetadata,
+    ['promptTokenCount', 'totalTokenCount'],
+    context,
+    'usageMetadata',
+  );
+}
+
+function assertNonNegativeProviderInteger(
+  value: unknown,
+  context: ReturnType<typeof geminiResponseContext>,
+  path: string,
+): void {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw invalidProviderResponse(context, {
+      expected: 'non_negative_safe_integer',
+      path,
+      phase: 'schema',
+    });
   }
 }
 
