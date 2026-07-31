@@ -62,9 +62,7 @@ Example body:
 
 ```json
 {
-  "messages": [
-    { "role": "user", "content": "Initial history item" }
-  ]
+  "messages": [{ "role": "user", "content": "Initial history item" }]
 }
 ```
 
@@ -178,11 +176,34 @@ Lists tenant-scoped sessions with pagination.
 
 Supported query parameters:
 
-- `cursor`
-- `limit`
+- `cursor` — an opaque, versioned keyset cursor returned by the core session
+  stores. It is bound to the tenant, model/provider filters, and direction;
+  malformed or mismatched cursors return HTTP 400.
+- `direction` — `forward` (default) or `backward`
+- `limit` — `1..100` (default `20`)
 - `model`
-- `provider`
+- `provider` — a canonical provider id
 - `tenantId`
+
+Core stores order pages deterministically by `updatedAt DESC`, normalized
+tenant id, then `sessionId ASC`, and use `direction=forward` (default) or
+`direction=backward` for keyset traversal. The Session API forwards filters and
+pagination directly to a store's optional `listPage()` method without applying
+a second filter or page operation. Third-party stores that only implement
+`list()` remain supported through a bounded in-memory compatibility path using
+numeric cursors; new core cursors are never numeric. The API always scopes this
+route to a tenant context, while global listing is reserved for direct trusted
+store callers.
+
+To return from a forward page to the preceding page, pair its
+`previousCursor` with the backward direction:
+
+```text
+GET /sessions?cursor=<previousCursor>&direction=backward&limit=20
+```
+
+Opaque cursors are direction-bound, so omitting `direction=backward` for a
+`previousCursor` returns HTTP 400 instead of silently traversing the wrong way.
 
 ## Streaming Event Mapping
 
@@ -218,7 +239,9 @@ const sessionApi = createSessionApi({
   middleware: [
     async (request) => {
       const tenantId = request.headers.get('x-tenant-id');
-      return tenantId ? { tenantId } : Response.json({ error: 'Unauthorized' }, { status: 401 });
+      return tenantId
+        ? { tenantId }
+        : Response.json({ error: 'Unauthorized' }, { status: 401 });
     },
   ],
   sessionStore,

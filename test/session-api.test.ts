@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { SlidingWindowStrategy } from '../src/context-manager.js';
 import { LLMError, ProviderCapabilityError } from '../src/errors.js';
 import { createSessionApi as createSessionApiSource } from '../src/session-api.js';
-import { InMemorySessionStore } from '../src/session-store.js';
+import {
+  InMemorySessionStore,
+  type SessionStore,
+} from '../src/session-store.js';
 import { LLMClient } from '../src/client.js';
 
 import type { ConversationSnapshot } from '../src/conversation.js';
@@ -23,6 +26,98 @@ function createSessionApi(options: SessionApiOptions) {
 }
 
 describe('SessionApi', () => {
+  it('forwards canonical filters and opaque pagination to listPage without double work', async () => {
+    const listPage = vi.fn(async () => ({
+      items: [
+        {
+          createdAt: '2026-07-31T00:00:00.000Z',
+          messageCount: 0,
+          model: 'gpt-4o',
+          provider: 'openai' as const,
+          sessionId: 'core-page',
+          tenantId: 'tenant-a',
+          totalCostUSD: 0,
+          updatedAt: '2026-07-31T00:00:00.000Z',
+        },
+      ],
+      nextCursor: 'opaque-core-cursor',
+    }));
+    const list = vi.fn();
+    const store = {
+      delete: vi.fn(),
+      get: vi.fn(),
+      list,
+      listPage,
+      set: vi.fn(),
+    } as unknown as SessionStore<ConversationSnapshot>;
+    const api = createSessionApi({
+      client: LLMClient.mock({ defaultModel: 'mock-model' }),
+      sessionStore: store,
+    });
+
+    const response = await api.handle(
+      new Request(
+        'https://example.test/sessions?model=gpt-4o&provider=openai&limit=1',
+      ),
+    );
+    const payload = (await response.json()) as {
+      sessions: { nextCursor?: string };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.sessions.nextCursor).toBe('opaque-core-cursor');
+    expect(listPage).toHaveBeenCalledWith({
+      direction: 'forward',
+      limit: 1,
+      model: 'gpt-4o',
+      provider: 'openai',
+      tenantId: '',
+    });
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('keeps numeric cursor pagination only for third-party list-only stores', async () => {
+    const list = vi.fn(async () => [
+      {
+        createdAt: '2026-07-31T00:00:00.000Z',
+        messageCount: 0,
+        sessionId: 'first',
+        totalCostUSD: 0,
+        updatedAt: '2026-07-31T00:00:00.000Z',
+      },
+      {
+        createdAt: '2026-07-31T00:00:00.000Z',
+        messageCount: 0,
+        sessionId: 'second',
+        totalCostUSD: 0,
+        updatedAt: '2026-07-30T00:00:00.000Z',
+      },
+    ]);
+    const store = {
+      delete: vi.fn(),
+      get: vi.fn(),
+      list,
+      set: vi.fn(),
+    } as unknown as SessionStore<ConversationSnapshot>;
+    const api = createSessionApi({
+      client: LLMClient.mock({ defaultModel: 'mock-model' }),
+      sessionStore: store,
+    });
+
+    const response = await api.handle(
+      new Request('https://example.test/sessions?cursor=1&limit=1'),
+    );
+    const payload = (await response.json()) as {
+      sessions: { items: Array<{ sessionId: string }> };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.sessions.items.map((item) => item.sessionId)).toEqual([
+      'second',
+    ]);
+    expect(list).toHaveBeenCalledWith({ tenantId: '' });
+  });
+
   it('requires a session store and allows middleware to short-circuit requests', async () => {
     const client = LLMClient.mock({
       defaultModel: 'mock-model',
@@ -230,7 +325,8 @@ describe('SessionApi', () => {
     };
 
     expect(listed.sessions.items).toHaveLength(1);
-    expect(listed.sessions.nextCursor).toBe('1');
+    expect(listed.sessions.nextCursor).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(listed.sessions.nextCursor).not.toBe('1');
 
     const deleteResponse = await api.handle(
       new Request('https://example.test/sessions/session-1-fork', {

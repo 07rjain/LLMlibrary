@@ -7,6 +7,7 @@ import {
   RateLimitError,
 } from 'unified-llm-client/errors';
 import { ModelRegistry } from 'unified-llm-client/models';
+import { PostgresSessionStore } from 'unified-llm-client/session-store';
 import { validateBudgetUsd } from './budget-validation.js';
 import { validateCompletionCacheOptions } from './cache-validation.js';
 import { validateEmbeddingRequest } from './embedding-validation.js';
@@ -21,7 +22,6 @@ import { AnthropicAdapter } from './providers/anthropic.js';
 import { GeminiAdapter } from './providers/gemini.js';
 import { OpenAIAdapter } from './providers/openai.js';
 import { getEnvironmentVariable } from './runtime.js';
-import { PostgresSessionStore } from './session-store.js';
 import { createCancelableStream, throwIfAborted } from './stream-control.js';
 import { STREAM_EVENT_VERSION } from './types.js';
 import {
@@ -52,7 +52,7 @@ import type {
   GeminiListCachesOptions,
   GeminiUpdateCacheOptions,
 } from './providers/gemini.js';
-import type { SessionStore } from './session-store.js';
+import type { SessionStore } from 'unified-llm-client/session-store';
 import type {
   ModelRouter,
   ResolvedModelRoute,
@@ -584,17 +584,14 @@ export class LLMClient {
   stream(options: LLMRequestOptions): CancelableStream<StreamChunk> {
     const requestOptions = withValidatedRequest(options);
 
-    return createCancelableStream(
-      (signal) => {
-        throwIfAborted(signal);
-        return this.streamWithFallback(
-          this.resolveRequestPlan(requestOptions, { stream: true }),
-          { ...requestOptions, signal },
-          Date.now(),
-        );
-      },
-      options.signal,
-    );
+    return createCancelableStream((signal) => {
+      throwIfAborted(signal);
+      return this.streamWithFallback(
+        this.resolveRequestPlan(requestOptions, { stream: true }),
+        { ...requestOptions, signal },
+        Date.now(),
+      );
+    }, options.signal);
   }
 
   /**

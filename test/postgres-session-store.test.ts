@@ -73,14 +73,20 @@ describe('PostgresSessionStore', () => {
       },
     );
 
-    expect(pool.queries).toHaveLength(5);
-    expect(pool.queries[0]?.text).toContain('CREATE SCHEMA IF NOT EXISTS "llm"');
-    expect(pool.queries[1]?.text).toContain('CREATE TABLE IF NOT EXISTS "llm"."sessions"');
+    expect(pool.queries).toHaveLength(7);
+    expect(pool.queries[0]?.text).toContain(
+      'CREATE SCHEMA IF NOT EXISTS "llm"',
+    );
+    expect(pool.queries[1]?.text).toContain(
+      'CREATE TABLE IF NOT EXISTS "llm"."sessions"',
+    );
     expect(pool.queries[2]?.text).toContain(
       'CREATE INDEX IF NOT EXISTS "sessions_tenant_updated_at_idx"',
     );
-    expect(pool.queries[4]?.text).toContain('ON CONFLICT (tenant_id, session_id)');
-    expect(pool.queries[4]?.values).toEqual([
+    expect(pool.queries[6]?.text).toContain(
+      'ON CONFLICT (tenant_id, session_id)',
+    );
+    expect(pool.queries[6]?.values).toEqual([
       'tenant-1',
       'session-1',
       JSON.stringify({
@@ -244,6 +250,88 @@ describe('PostgresSessionStore', () => {
     expect(pool.queries.at(-1)?.values).toEqual(['tenant-1']);
   });
 
+  it('uses metadata-only keyset SQL for filtered Postgres pages', async () => {
+    const pool = new MockPool();
+    pool.queueRows([
+      {
+        created_at: '2026-04-15T09:00:00.000Z',
+        message_count: 1,
+        model: 'gpt-4o',
+        provider: 'openai',
+        session_id: 'session-1',
+        tenant_id: 'tenant-1',
+        total_cost_usd: 0,
+        updated_at: '2026-04-15T10:00:00.000Z',
+        updated_at_cursor: '2026-04-15T10:00:00.000001Z',
+      },
+      {
+        created_at: '2026-04-15T09:00:00.000Z',
+        message_count: 2,
+        model: 'gpt-4o',
+        provider: 'openai',
+        session_id: 'session-2',
+        tenant_id: 'tenant-1',
+        total_cost_usd: 0,
+        updated_at: '2026-04-15T09:00:00.000Z',
+        updated_at_cursor: '2026-04-15T09:00:00.000002Z',
+      },
+    ]);
+    const store = new PostgresSessionStore({ pool });
+
+    const page = await store.listPage({
+      limit: 1,
+      model: 'gpt-4o',
+      provider: 'openai',
+      tenantId: 'tenant-1',
+    });
+    const query = pool.queries.at(-1);
+
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]?.updatedAt).toBe('2026-04-15T10:00:00.000001Z');
+    expect(page.nextCursor).toBeDefined();
+    expect(query?.text).toContain('model = $2');
+    expect(query?.text).toContain('provider = $3');
+    expect(query?.text).toContain('ORDER BY updated_at DESC');
+    expect(query?.text).toContain('session_id COLLATE "C" ASC');
+    expect(query?.text).toContain('LIMIT $4');
+    expect(query?.text).not.toContain('snapshot');
+    expect(query?.text).not.toContain('OFFSET');
+    expect(query?.values).toEqual(['tenant-1', 'gpt-4o', 'openai', 2]);
+
+    pool.queueRows([
+      {
+        created_at: '2026-04-15T08:00:00.000Z',
+        message_count: 2,
+        model: 'gpt-4o',
+        provider: 'openai',
+        session_id: 'session-2',
+        tenant_id: 'tenant-1',
+        total_cost_usd: 0,
+        updated_at: '2026-04-15T09:00:00.000Z',
+        updated_at_cursor: '2026-04-15T09:00:00.000002Z',
+      },
+    ]);
+    await store.listPage({
+      cursor: page.nextCursor as string,
+      limit: 1,
+      model: 'gpt-4o',
+      provider: 'openai',
+      tenantId: 'tenant-1',
+    });
+    const cursorQuery = pool.queries.at(-1);
+
+    expect(cursorQuery?.text).toContain('updated_at < $4::timestamptz');
+    expect(cursorQuery?.values).toEqual([
+      'tenant-1',
+      'gpt-4o',
+      'openai',
+      '2026-04-15T10:00:00.000001000Z',
+      'tenant-1',
+      'session-1',
+      2,
+    ]);
+  });
+
   it('uses DATABASE_URL through fromEnv() and closes owned pools', async () => {
     process.env.DATABASE_URL = 'postgresql://example.test/db';
 
@@ -274,7 +362,7 @@ describe('PostgresSessionStore', () => {
     await store.ensureSchema();
     await store.ensureSchema();
 
-    expect(pool.queries).toHaveLength(4);
+    expect(pool.queries).toHaveLength(6);
   });
 
   it('throws when DATABASE_URL is missing and no pool is provided', async () => {
@@ -302,7 +390,8 @@ class MockPool implements PostgresSessionStorePool {
   readonly end = vi.fn(async () => undefined);
   readonly options: unknown;
   readonly queries: Array<{ text: string; values: unknown[] }> = [];
-  private readonly responses: Array<PostgresSessionStoreQueryResult<unknown>> = [];
+  private readonly responses: Array<PostgresSessionStoreQueryResult<unknown>> =
+    [];
 
   constructor(options?: unknown) {
     this.options = options;
@@ -322,7 +411,10 @@ class MockPool implements PostgresSessionStorePool {
       values,
     });
 
-    if (!/^(INSERT|SELECT)\b/i.test(normalizedText) || this.responses.length === 0) {
+    if (
+      !/^(INSERT|SELECT)\b/i.test(normalizedText) ||
+      this.responses.length === 0
+    ) {
       return { rows: [] };
     }
 

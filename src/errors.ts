@@ -106,6 +106,26 @@ export class MockQueueExhaustedError extends LLMError {
   }
 }
 
+/** Session-store listing options or an opaque keyset cursor are invalid. */
+export class InvalidSessionStoreListOptionsError extends LLMError {
+  constructor(
+    code:
+      | 'invalid_session_cursor'
+      | 'invalid_session_list_direction'
+      | 'invalid_session_list_filter'
+      | 'invalid_session_list_limit',
+  ) {
+    super('Session listing options are invalid.', {
+      details: {
+        code,
+        operation: 'list',
+      },
+      retryable: false,
+      statusCode: 400,
+    });
+  }
+}
+
 /** Redis session listing cannot proceed safely with the supplied scan adapter. */
 export class RedisSessionStoreCapabilityError extends LLMError {
   constructor(

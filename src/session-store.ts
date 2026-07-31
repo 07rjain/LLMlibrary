@@ -1,6 +1,7 @@
 import { loadPgPoolConstructor } from './node-pg-loader.js';
 import { getEnvironmentVariable } from './runtime.js';
 import {
+  InvalidSessionStoreListOptionsError,
   RedisSessionStoreCapabilityError,
   RedisSessionStoreKeyConflictError,
 } from 'unified-llm-client/errors';
@@ -25,9 +26,24 @@ export interface SessionRecord<TSnapshot = unknown> {
   snapshot: TSnapshot;
 }
 
-/** Filter options for `SessionStore.list()`. */
+/** Direction used by keyset-based session listing. */
+export type SessionStoreListDirection = 'backward' | 'forward';
+
+/** Filter and pagination options for session-store listing. */
 export interface SessionStoreListOptions {
+  cursor?: string;
+  direction?: SessionStoreListDirection;
+  limit?: number;
+  model?: string;
+  provider?: CanonicalProvider;
   tenantId?: string;
+}
+
+/** Opaque keyset page returned by core session stores. */
+export interface SessionStorePage {
+  items: SessionMeta[];
+  nextCursor?: string;
+  previousCursor?: string;
 }
 
 /** Write metadata for `SessionStore.set()`. */
@@ -41,8 +57,12 @@ export interface SessionStoreSetOptions {
 /** Contract for durable conversation persistence backends. */
 export interface SessionStore<TSnapshot = unknown> {
   delete(sessionId: string, tenantId?: string): Promise<void>;
-  get(sessionId: string, tenantId?: string): Promise<null | SessionRecord<TSnapshot>>;
+  get(
+    sessionId: string,
+    tenantId?: string,
+  ): Promise<null | SessionRecord<TSnapshot>>;
   list(options?: SessionStoreListOptions): Promise<SessionMeta[]>;
+  listPage?(options?: SessionStoreListOptions): Promise<SessionStorePage>;
   set(
     sessionId: string,
     snapshot: TSnapshot,
@@ -63,8 +83,18 @@ export interface PostgresSessionStoreRow<TSnapshot> {
   updated_at: Date | string;
 }
 
+/** Metadata-only row returned by paginated Postgres session listing. */
+export type PostgresSessionMetaRow = Omit<
+  PostgresSessionStoreRow<never>,
+  'snapshot'
+> & {
+  updated_at_cursor?: string;
+};
+
 /** Minimal query result contract used by Postgres-backed stores/loggers. */
-export interface PostgresSessionStoreQueryResult<TRow = Record<string, unknown>> {
+export interface PostgresSessionStoreQueryResult<
+  TRow = Record<string, unknown>,
+> {
   rowCount?: null | number;
   rows: TRow[];
 }
@@ -122,14 +152,19 @@ export interface RedisSessionStoreOptions {
 }
 
 /** Simple in-process store intended for tests and single-process development. */
-export class InMemorySessionStore<TSnapshot extends { messages: unknown[]; totalCostUSD: number }>
-  implements SessionStore<TSnapshot>
-{
+export class InMemorySessionStore<
+  TSnapshot extends { messages: unknown[]; totalCostUSD: number },
+> implements SessionStore<TSnapshot> {
   private readonly now: () => Date;
   private readonly records = new Map<string, SessionRecord<TSnapshot>>();
 
   constructor(options: { now?: () => Date } = {}) {
     this.now = options.now ?? (() => new Date());
+  }
+
+  /** Removes every record owned by this in-memory store instance. */
+  async clear(): Promise<void> {
+    this.records.clear();
   }
 
   async delete(sessionId: string, tenantId?: string): Promise<void> {
@@ -149,12 +184,27 @@ export class InMemorySessionStore<TSnapshot extends { messages: unknown[]; total
   }
 
   async list(options: SessionStoreListOptions = {}): Promise<SessionMeta[]> {
-    return [...this.records.values()]
-      .filter((record) =>
-        options.tenantId === undefined ? true : record.meta.tenantId === options.tenantId,
-      )
-      .map((record) => cloneMeta(record.meta))
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    if (hasSessionPaginationOptions(options)) {
+      return (await this.listPage(options)).items;
+    }
+
+    validateSessionListOptions(options);
+    return filterAndSortSessionMetas(
+      [...this.records.values()].map((record) => record.meta),
+      options,
+    );
+  }
+
+  async listPage(
+    options: SessionStoreListOptions = {},
+  ): Promise<SessionStorePage> {
+    return paginateSessionMetas(
+      filterAndSortSessionMetas(
+        [...this.records.values()].map((record) => record.meta),
+        options,
+      ),
+      options,
+    );
   }
 
   async set(
@@ -171,8 +221,10 @@ export class InMemorySessionStore<TSnapshot extends { messages: unknown[]; total
       sessionId,
       totalCostUSD: snapshot.totalCostUSD,
       updatedAt: timestamp,
-      ...(existing?.meta.model ?? options.model ? { model: existing?.meta.model ?? options.model } : {}),
-      ...(existing?.meta.provider ?? options.provider
+      ...((existing?.meta.model ?? options.model)
+        ? { model: existing?.meta.model ?? options.model }
+        : {}),
+      ...((existing?.meta.provider ?? options.provider)
         ? { provider: existing?.meta.provider ?? options.provider }
         : {}),
       ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
@@ -198,8 +250,7 @@ export class InMemorySessionStore<TSnapshot extends { messages: unknown[]; total
  */
 export class PostgresSessionStore<
   TSnapshot extends { messages: unknown[]; totalCostUSD: number },
-> implements SessionStore<TSnapshot>
-{
+> implements SessionStore<TSnapshot> {
   private readonly connectionString: string | undefined;
   private ensureSchemaPromise: null | Promise<void> = null;
   private internalPool: PostgresSessionStorePool | undefined;
@@ -216,7 +267,9 @@ export class PostgresSessionStore<
     this.tableName = options.tableName ?? 'llm_sessions';
   }
 
-  static fromEnv<TSnapshot extends { messages: unknown[]; totalCostUSD: number }>(
+  static fromEnv<
+    TSnapshot extends { messages: unknown[]; totalCostUSD: number },
+  >(
     options: Omit<PostgresSessionStoreOptions, 'connectionString'> = {},
   ): PostgresSessionStore<TSnapshot> {
     const connectionString = getEnvironmentVariable('DATABASE_URL');
@@ -269,19 +322,55 @@ export class PostgresSessionStore<
   }
 
   async list(options: SessionStoreListOptions = {}): Promise<SessionMeta[]> {
-    await this.ensureSchema();
+    if (hasSessionPaginationOptions(options)) {
+      return (await this.listPage(options)).items;
+    }
 
-    const filterByTenant = options.tenantId !== undefined;
+    await this.ensureSchema();
+    validateSessionListOptions(options);
     const pool = await this.getPool();
-    const result = await pool.query<PostgresSessionStoreRow<TSnapshot>>(
-      `SELECT session_id, tenant_id, snapshot, message_count, model, provider, total_cost_usd, created_at, updated_at
-       FROM ${this.qualifiedTableName()}
-       ${filterByTenant ? 'WHERE tenant_id = $1' : ''}
-       ORDER BY updated_at DESC`,
-      filterByTenant ? [normalizeTenantId(options.tenantId)] : [],
+    const query = buildPostgresSessionListQuery(
+      this.qualifiedTableName(),
+      options,
+    );
+    const result = await pool.query<PostgresSessionMetaRow>(
+      query.text,
+      query.values,
     );
 
     return result.rows.map((row) => mapPostgresMeta(row));
+  }
+
+  async listPage(
+    options: SessionStoreListOptions = {},
+  ): Promise<SessionStorePage> {
+    await this.ensureSchema();
+    const normalized = normalizeSessionListOptions(options);
+    const pool = await this.getPool();
+    const query = buildPostgresSessionListQuery(
+      this.qualifiedTableName(),
+      options,
+      normalized,
+    );
+    const result = await pool.query<PostgresSessionMetaRow>(
+      query.text,
+      query.values,
+    );
+    const rows =
+      normalized.direction === 'backward'
+        ? [...result.rows].reverse()
+        : result.rows;
+    const hasMore = rows.length > normalized.limit;
+    const window =
+      normalized.direction === 'backward'
+        ? rows.slice(hasMore ? 1 : 0)
+        : rows.slice(0, normalized.limit);
+
+    return buildSessionStorePage(
+      window.map((row) => mapPostgresMeta(row)),
+      normalized,
+      hasMore,
+    );
   }
 
   async set(
@@ -358,7 +447,8 @@ export class PostgresSessionStore<
       return this.internalPool;
     }
 
-    const connectionString = this.connectionString ?? getEnvironmentVariable('DATABASE_URL');
+    const connectionString =
+      this.connectionString ?? getEnvironmentVariable('DATABASE_URL');
     if (!connectionString) {
       throw new Error(
         'DATABASE_URL is required for PostgresSessionStore. Set it in .env or pass connectionString explicitly.',
@@ -379,9 +469,19 @@ export class PostgresSessionStore<
     const updatedAtIndexName = quoteIdentifier(
       `${this.tableName}_tenant_updated_at_idx`,
     );
-    const snapshotIndexName = quoteIdentifier(`${this.tableName}_snapshot_gin_idx`);
+    const tenantPageIndexName = quoteIdentifier(
+      `${this.tableName}_tenant_updated_at_session_idx`,
+    );
+    const filteredPageIndexName = quoteIdentifier(
+      `${this.tableName}_tenant_model_provider_updated_at_session_idx`,
+    );
+    const snapshotIndexName = quoteIdentifier(
+      `${this.tableName}_snapshot_gin_idx`,
+    );
 
-    await pool.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(this.schemaName)}`);
+    await pool.query(
+      `CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(this.schemaName)}`,
+    );
     await pool.query(
       `CREATE TABLE IF NOT EXISTS ${qualifiedTableName} (
          tenant_id TEXT NOT NULL DEFAULT '',
@@ -399,6 +499,24 @@ export class PostgresSessionStore<
     await pool.query(
       `CREATE INDEX IF NOT EXISTS ${updatedAtIndexName}
        ON ${qualifiedTableName} (tenant_id, updated_at DESC)`,
+    );
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS ${tenantPageIndexName}
+       ON ${qualifiedTableName} (
+         tenant_id COLLATE "C" ASC,
+         updated_at DESC,
+         session_id COLLATE "C" ASC
+       )`,
+    );
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS ${filteredPageIndexName}
+       ON ${qualifiedTableName} (
+         tenant_id COLLATE "C" ASC,
+         model COLLATE "C" ASC,
+         provider COLLATE "C" ASC,
+         updated_at DESC,
+         session_id COLLATE "C" ASC
+       )`,
     );
     await pool.query(
       `CREATE INDEX IF NOT EXISTS ${snapshotIndexName}
@@ -420,8 +538,7 @@ export class PostgresSessionStore<
  */
 export class RedisSessionStore<
   TSnapshot extends { messages: unknown[]; totalCostUSD: number },
-> implements SessionStore<TSnapshot>
-{
+> implements SessionStore<TSnapshot> {
   private readonly client: RedisSessionStoreClient;
   private readonly keyPrefix: string;
   private readonly maxScanIterations: number;
@@ -496,6 +613,24 @@ export class RedisSessionStore<
   }
 
   async list(options: SessionStoreListOptions = {}): Promise<SessionMeta[]> {
+    if (hasSessionPaginationOptions(options)) {
+      return (await this.listPage(options)).items;
+    }
+
+    validateSessionListOptions(options);
+    return filterAndSortSessionMetas(await this.collectSessionMetas(), options);
+  }
+
+  async listPage(
+    options: SessionStoreListOptions = {},
+  ): Promise<SessionStorePage> {
+    return paginateSessionMetas(
+      filterAndSortSessionMetas(await this.collectSessionMetas(), options),
+      options,
+    );
+  }
+
+  private async collectSessionMetas(): Promise<SessionMeta[]> {
     const records = new Map<string, { meta: SessionMeta; version: 1 | 2 }>();
 
     for await (const key of this.iterateKeys()) {
@@ -523,14 +658,6 @@ export class RedisSessionStore<
       if (version === undefined) {
         continue;
       }
-      if (
-        options.tenantId !== undefined &&
-        normalizeTenantId(record.meta.tenantId) !==
-          normalizeTenantId(options.tenantId)
-      ) {
-        continue;
-      }
-
       const tupleKey = buildSessionKey(
         record.meta.sessionId,
         record.meta.tenantId,
@@ -541,9 +668,7 @@ export class RedisSessionStore<
       }
     }
 
-    return [...records.values()]
-      .map((record) => record.meta)
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    return [...records.values()].map((record) => record.meta);
   }
 
   async set(
@@ -573,8 +698,10 @@ export class RedisSessionStore<
       sessionId,
       totalCostUSD: snapshot.totalCostUSD,
       updatedAt: timestamp,
-      ...(existing?.meta.model ?? options.model ? { model: existing?.meta.model ?? options.model } : {}),
-      ...(existing?.meta.provider ?? options.provider
+      ...((existing?.meta.model ?? options.model)
+        ? { model: existing?.meta.model ?? options.model }
+        : {}),
+      ...((existing?.meta.provider ?? options.provider)
         ? { provider: existing?.meta.provider ?? options.provider }
         : {}),
       ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
@@ -686,6 +813,459 @@ export class RedisSessionStore<
   }
 }
 
+const DEFAULT_SESSION_PAGE_LIMIT = 20;
+const MAX_SESSION_FILTER_LENGTH = 8_192;
+const MAX_SESSION_CURSOR_LENGTH = 16_384;
+const SESSION_PROVIDERS: readonly CanonicalProvider[] = [
+  'anthropic',
+  'openai',
+  'google',
+  'mistral',
+  'cohere',
+  'groq',
+  'bedrock',
+  'azure-openai',
+  'ollama',
+  'mock',
+];
+
+interface SessionCursorKey {
+  sessionId: string;
+  tenantId: string;
+  updatedAt: string;
+}
+
+interface SessionCursorPayload {
+  direction: SessionStoreListDirection;
+  key: SessionCursorKey;
+  model: null | string;
+  provider: CanonicalProvider | null;
+  tenantId: null | string;
+  version: 1;
+}
+
+interface NormalizedSessionListOptions {
+  cursor?: SessionCursorPayload;
+  direction: SessionStoreListDirection;
+  limit: number;
+  model?: string;
+  provider?: CanonicalProvider;
+  tenantId?: string;
+}
+
+interface PostgresSessionListQuery {
+  text: string;
+  values: unknown[];
+}
+
+function hasSessionPaginationOptions(
+  options: SessionStoreListOptions,
+): boolean {
+  return (
+    options.cursor !== undefined ||
+    options.direction !== undefined ||
+    options.limit !== undefined
+  );
+}
+
+function validateSessionListOptions(options: SessionStoreListOptions): void {
+  if (options === null || typeof options !== 'object') {
+    throw new InvalidSessionStoreListOptionsError(
+      'invalid_session_list_filter',
+    );
+  }
+
+  if (
+    options.direction !== undefined &&
+    options.direction !== 'forward' &&
+    options.direction !== 'backward'
+  ) {
+    throw new InvalidSessionStoreListOptionsError(
+      'invalid_session_list_direction',
+    );
+  }
+  if (
+    options.limit !== undefined &&
+    (!Number.isSafeInteger(options.limit) ||
+      options.limit < 1 ||
+      options.limit > 100)
+  ) {
+    throw new InvalidSessionStoreListOptionsError('invalid_session_list_limit');
+  }
+  for (const value of [options.tenantId, options.model]) {
+    if (
+      value !== undefined &&
+      (value.length > MAX_SESSION_FILTER_LENGTH || /\p{C}/u.test(value))
+    ) {
+      throw new InvalidSessionStoreListOptionsError(
+        'invalid_session_list_filter',
+      );
+    }
+  }
+  if (options.model !== undefined && options.model.length === 0) {
+    throw new InvalidSessionStoreListOptionsError(
+      'invalid_session_list_filter',
+    );
+  }
+  if (
+    options.provider !== undefined &&
+    !SESSION_PROVIDERS.includes(options.provider)
+  ) {
+    throw new InvalidSessionStoreListOptionsError(
+      'invalid_session_list_filter',
+    );
+  }
+  if (options.cursor !== undefined && typeof options.cursor !== 'string') {
+    throw new InvalidSessionStoreListOptionsError('invalid_session_cursor');
+  }
+}
+
+function normalizeSessionListOptions(
+  options: SessionStoreListOptions,
+): NormalizedSessionListOptions {
+  validateSessionListOptions(options);
+  const direction = options.direction ?? 'forward';
+  const normalized: NormalizedSessionListOptions = {
+    direction,
+    limit: options.limit ?? DEFAULT_SESSION_PAGE_LIMIT,
+    ...(options.model !== undefined ? { model: options.model } : {}),
+    ...(options.provider !== undefined ? { provider: options.provider } : {}),
+    ...(options.tenantId !== undefined
+      ? { tenantId: normalizeTenantId(options.tenantId) }
+      : {}),
+  };
+  if (options.cursor !== undefined) {
+    normalized.cursor = decodeSessionCursor(options.cursor, normalized);
+  }
+  return normalized;
+}
+
+function filterAndSortSessionMetas(
+  metas: SessionMeta[],
+  options: SessionStoreListOptions,
+): SessionMeta[] {
+  validateSessionListOptions(options);
+  return metas
+    .filter((meta) =>
+      options.tenantId === undefined
+        ? true
+        : normalizeTenantId(meta.tenantId) ===
+          normalizeTenantId(options.tenantId),
+    )
+    .filter(
+      (meta) => options.model === undefined || meta.model === options.model,
+    )
+    .filter(
+      (meta) =>
+        options.provider === undefined || meta.provider === options.provider,
+    )
+    .map((meta) => cloneMeta(meta))
+    .sort(compareSessionMeta);
+}
+
+function paginateSessionMetas(
+  sortedMetas: SessionMeta[],
+  options: SessionStoreListOptions,
+): SessionStorePage {
+  const normalized = normalizeSessionListOptions(options);
+  const candidates = normalized.cursor
+    ? sortedMetas.filter((meta) =>
+        normalized.direction === 'forward'
+          ? compareSessionMetaToCursor(
+              meta,
+              normalized.cursor as SessionCursorPayload,
+            ) > 0
+          : compareSessionMetaToCursor(
+              meta,
+              normalized.cursor as SessionCursorPayload,
+            ) < 0,
+      )
+    : sortedMetas;
+  const window =
+    normalized.direction === 'backward'
+      ? candidates.slice(Math.max(0, candidates.length - normalized.limit - 1))
+      : candidates.slice(0, normalized.limit + 1);
+  const hasMore = window.length > normalized.limit;
+  const items =
+    normalized.direction === 'backward'
+      ? window.slice(hasMore ? 1 : 0)
+      : window.slice(0, normalized.limit);
+
+  return buildSessionStorePage(items, normalized, hasMore);
+}
+
+function buildSessionStorePage(
+  items: SessionMeta[],
+  options: NormalizedSessionListOptions,
+  hasMore: boolean,
+): SessionStorePage {
+  if (items.length === 0) {
+    return { items: [] };
+  }
+
+  const first = items[0] as SessionMeta;
+  const last = items[items.length - 1] as SessionMeta;
+  const page: SessionStorePage = { items };
+  if (hasMore) {
+    page.nextCursor = encodeSessionCursor(
+      options.direction === 'forward' ? last : first,
+      {
+        ...options,
+        direction: options.direction,
+      },
+    );
+  }
+  if (options.cursor) {
+    page.previousCursor = encodeSessionCursor(
+      options.direction === 'forward' ? first : last,
+      {
+        ...options,
+        direction: options.direction === 'forward' ? 'backward' : 'forward',
+      },
+    );
+  }
+  return page;
+}
+
+function encodeSessionCursor(
+  meta: SessionMeta,
+  options: Pick<
+    NormalizedSessionListOptions,
+    'direction' | 'model' | 'provider' | 'tenantId'
+  >,
+): string {
+  const payload: SessionCursorPayload = {
+    direction: options.direction,
+    key: {
+      sessionId: meta.sessionId,
+      tenantId: normalizeTenantId(meta.tenantId),
+      updatedAt: normalizeCursorTimestamp(meta.updatedAt),
+    },
+    model: options.model ?? null,
+    provider: options.provider ?? null,
+    tenantId: options.tenantId ?? null,
+    version: 1,
+  };
+  return encodeSessionCursorFromPayload(payload);
+}
+
+function decodeSessionCursor(
+  encoded: string,
+  options: NormalizedSessionListOptions,
+): SessionCursorPayload {
+  if (encoded.length === 0 || encoded.length > MAX_SESSION_CURSOR_LENGTH) {
+    throw new InvalidSessionStoreListOptionsError('invalid_session_cursor');
+  }
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(decodeBase64Url(encoded));
+  } catch {
+    throw new InvalidSessionStoreListOptionsError('invalid_session_cursor');
+  }
+  if (
+    !isPlainRecord(decoded) ||
+    !hasExactKeys(decoded, ['d', 'k', 'm', 'p', 't', 'v'])
+  ) {
+    throw new InvalidSessionStoreListOptionsError('invalid_session_cursor');
+  }
+  const key = decoded.k;
+  if (
+    !isPlainRecord(key) ||
+    !hasExactKeys(key, ['s', 't', 'u']) ||
+    decoded.v !== 1 ||
+    (decoded.d !== 'forward' && decoded.d !== 'backward') ||
+    (decoded.m !== null && typeof decoded.m !== 'string') ||
+    (decoded.p !== null &&
+      !SESSION_PROVIDERS.includes(decoded.p as CanonicalProvider)) ||
+    (decoded.t !== null && typeof decoded.t !== 'string') ||
+    typeof key.s !== 'string' ||
+    typeof key.t !== 'string' ||
+    typeof key.u !== 'string' ||
+    key.s.length > MAX_SESSION_FILTER_LENGTH ||
+    key.t.length > MAX_SESSION_FILTER_LENGTH ||
+    !isCursorTimestamp(key.u)
+  ) {
+    throw new InvalidSessionStoreListOptionsError('invalid_session_cursor');
+  }
+  const payload: SessionCursorPayload = {
+    direction: decoded.d as SessionStoreListDirection,
+    key: {
+      sessionId: key.s as string,
+      tenantId: key.t as string,
+      updatedAt: key.u as string,
+    },
+    model: decoded.m as null | string,
+    provider: decoded.p as CanonicalProvider | null,
+    tenantId: decoded.t as null | string,
+    version: 1,
+  };
+  if (
+    payload.direction !== options.direction ||
+    payload.model !== (options.model ?? null) ||
+    payload.provider !== (options.provider ?? null) ||
+    payload.tenantId !== (options.tenantId ?? null)
+  ) {
+    throw new InvalidSessionStoreListOptionsError('invalid_session_cursor');
+  }
+  if (encodeSessionCursorFromPayload(payload) !== encoded) {
+    throw new InvalidSessionStoreListOptionsError('invalid_session_cursor');
+  }
+  return payload;
+}
+
+function encodeSessionCursorFromPayload(payload: SessionCursorPayload): string {
+  return encodeBase64Url(
+    JSON.stringify({
+      d: payload.direction,
+      k: {
+        s: payload.key.sessionId,
+        t: payload.key.tenantId,
+        u: payload.key.updatedAt,
+      },
+      m: payload.model,
+      p: payload.provider,
+      t: payload.tenantId,
+      v: payload.version,
+    }),
+  );
+}
+
+function compareSessionMeta(left: SessionMeta, right: SessionMeta): number {
+  const updatedAt = compareUtf8(
+    normalizeCursorTimestamp(left.updatedAt),
+    normalizeCursorTimestamp(right.updatedAt),
+  );
+  if (updatedAt !== 0) {
+    return -updatedAt;
+  }
+  const tenant = compareUtf8(
+    normalizeTenantId(left.tenantId),
+    normalizeTenantId(right.tenantId),
+  );
+  return tenant !== 0 ? tenant : compareUtf8(left.sessionId, right.sessionId);
+}
+
+function compareSessionMetaToCursor(
+  meta: SessionMeta,
+  cursor: SessionCursorPayload,
+): number {
+  const updatedAt = compareUtf8(
+    normalizeCursorTimestamp(meta.updatedAt),
+    cursor.key.updatedAt,
+  );
+  if (updatedAt !== 0) {
+    return -updatedAt;
+  }
+  const tenant = compareUtf8(
+    normalizeTenantId(meta.tenantId),
+    cursor.key.tenantId,
+  );
+  return tenant !== 0
+    ? tenant
+    : compareUtf8(meta.sessionId, cursor.key.sessionId);
+}
+
+function normalizeCursorTimestamp(value: string): string {
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z$/.exec(
+    value,
+  );
+  if (match) {
+    return `${match[1]}.${(match[2] ?? '').padEnd(9, '0').slice(0, 9)}Z`;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed)
+    ? `${new Date(parsed).toISOString().slice(0, 19)}.${'0'.repeat(9)}Z`
+    : value;
+}
+
+function isCursorTimestamp(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{9}Z$/.test(value);
+}
+
+function compareUtf8(left: string, right: string): number {
+  const leftBytes = new TextEncoder().encode(left);
+  const rightBytes = new TextEncoder().encode(right);
+  const length = Math.min(leftBytes.length, rightBytes.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference =
+      (leftBytes[index] as number) - (rightBytes[index] as number);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return leftBytes.length - rightBytes.length;
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  return Object.keys(value).join('\u0000') === keys.join('\u0000');
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  return Object.getPrototypeOf(value) === Object.prototype;
+}
+
+function decodeBase64Url(value: string): string {
+  if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) {
+    throw new Error('invalid base64url');
+  }
+  const padded =
+    value.replaceAll('-', '+').replaceAll('_', '/') +
+    '='.repeat((4 - (value.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  return decoder.decode(bytes);
+}
+
+function buildPostgresSessionListQuery(
+  tableName: string,
+  options: SessionStoreListOptions,
+  normalized?: NormalizedSessionListOptions,
+): PostgresSessionListQuery {
+  validateSessionListOptions(options);
+  const values: unknown[] = [];
+  const parameter = (value: unknown): string => {
+    values.push(value);
+    return `$${values.length}`;
+  };
+  const predicates: string[] = [];
+  if (options.tenantId !== undefined) {
+    predicates.push(
+      `tenant_id = ${parameter(normalizeTenantId(options.tenantId))}`,
+    );
+  }
+  if (options.model !== undefined) {
+    predicates.push(`model = ${parameter(options.model)}`);
+  }
+  if (options.provider !== undefined) {
+    predicates.push(`provider = ${parameter(options.provider)}`);
+  }
+  if (normalized?.cursor) {
+    const cursorTime = parameter(normalized.cursor.key.updatedAt);
+    const cursorTenant = parameter(normalized.cursor.key.tenantId);
+    const cursorSession = parameter(normalized.cursor.key.sessionId);
+    const comparison =
+      normalized.direction === 'forward'
+        ? `(updated_at < ${cursorTime}::timestamptz OR (updated_at = ${cursorTime}::timestamptz AND tenant_id COLLATE "C" > ${cursorTenant} COLLATE "C") OR (updated_at = ${cursorTime}::timestamptz AND tenant_id COLLATE "C" = ${cursorTenant} COLLATE "C" AND session_id COLLATE "C" > ${cursorSession} COLLATE "C"))`
+        : `(updated_at > ${cursorTime}::timestamptz OR (updated_at = ${cursorTime}::timestamptz AND tenant_id COLLATE "C" < ${cursorTenant} COLLATE "C") OR (updated_at = ${cursorTime}::timestamptz AND tenant_id COLLATE "C" = ${cursorTenant} COLLATE "C" AND session_id COLLATE "C" < ${cursorSession} COLLATE "C"))`;
+    predicates.push(comparison);
+  }
+  const where =
+    predicates.length > 0 ? ` WHERE ${predicates.join(' AND ')}` : '';
+  const order =
+    normalized?.direction === 'backward'
+      ? 'updated_at ASC, tenant_id COLLATE "C" DESC, session_id COLLATE "C" DESC'
+      : 'updated_at DESC, tenant_id COLLATE "C" ASC, session_id COLLATE "C" ASC';
+  const limit = normalized ? ` LIMIT ${parameter(normalized.limit + 1)}` : '';
+  return {
+    text: `SELECT session_id, tenant_id, message_count, model, provider, total_cost_usd, created_at, updated_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS updated_at_cursor FROM ${tableName}${where} ORDER BY ${order}${limit}`,
+    values,
+  };
+}
+
 function buildSessionKey(
   sessionId: string,
   tenantId: string | undefined,
@@ -767,7 +1347,7 @@ function mapPostgresRecord<TSnapshot>(
 }
 
 function mapPostgresMeta<TSnapshot>(
-  row: PostgresSessionStoreRow<TSnapshot>,
+  row: PostgresSessionStoreRow<TSnapshot> | PostgresSessionMetaRow,
 ): SessionMeta {
   return {
     createdAt: toIsoString(row.created_at),
@@ -777,7 +1357,10 @@ function mapPostgresMeta<TSnapshot>(
     sessionId: row.session_id,
     ...(row.tenant_id ? { tenantId: row.tenant_id } : {}),
     totalCostUSD: Number(row.total_cost_usd),
-    updatedAt: toIsoString(row.updated_at),
+    updatedAt:
+      'updated_at_cursor' in row && row.updated_at_cursor !== undefined
+        ? row.updated_at_cursor
+        : toIsoString(row.updated_at),
   };
 }
 

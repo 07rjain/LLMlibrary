@@ -710,33 +710,51 @@ export class SessionApi {
     url: URL,
     requestContext: SessionApiRequestContext,
   ): Promise<Response> {
-    const tenantId = this.resolveTenantId(
-      requestContext,
-      url.searchParams.get('tenantId') ?? undefined,
+    const requestedTenantId = parseSessionListFilter(
+      url.searchParams.get('tenantId'),
+      'tenantId',
     );
-    const allSessions = await this.sessionStore.list({
-      ...(tenantId !== undefined ? { tenantId } : {}),
-    });
-    const filtered = allSessions.filter((session) => {
-      const model = url.searchParams.get('model');
-      if (model && session.model !== model) {
-        return false;
-      }
-
-      const provider = url.searchParams.get('provider');
-      if (provider && session.provider !== provider) {
-        return false;
-      }
-
-      return true;
-    });
+    const tenantId = this.resolveTenantId(requestContext, requestedTenantId);
+    const model = parseSessionListFilter(
+      url.searchParams.get('model'),
+      'model',
+    );
+    const provider = parseSessionListProvider(url.searchParams.get('provider'));
     const direction = parseDirection(url.searchParams.get('direction'));
-    const page = paginateItems(
-      filtered,
-      parseCursor(url.searchParams.get('cursor')),
-      parseLimit(url.searchParams.get('limit'), 20),
+    const limit = parseLimit(url.searchParams.get('limit'), 20);
+    const cursor = url.searchParams.get('cursor') ?? undefined;
+    // SessionApi is tenant-scoped even in single-tenant mode. The empty
+    // tenant is the normalized default tenant; global listing is for direct
+    // trusted store callers only.
+    const storeTenantId = tenantId ?? '';
+    const listOptions = {
       direction,
-    );
+      limit,
+      tenantId: storeTenantId,
+      ...(cursor !== undefined ? { cursor } : {}),
+      ...(model !== undefined ? { model } : {}),
+      ...(provider !== undefined ? { provider } : {}),
+    };
+    let page: SessionPage<SessionMeta>;
+    if (this.sessionStore.listPage) {
+      page = await this.sessionStore.listPage(listOptions);
+    } else {
+      const allSessions = await this.sessionStore.list({
+        tenantId: storeTenantId,
+      });
+      const filtered = allSessions.filter((session) => {
+        if (model !== undefined && session.model !== model) {
+          return false;
+        }
+        return provider === undefined || session.provider === provider;
+      });
+      page = paginateItems(
+        filtered,
+        parseCursor(cursor ?? null),
+        limit,
+        direction,
+      );
+    }
 
     return jsonResponse({
       sessions: page,
@@ -1542,6 +1560,47 @@ function parseLimit(limit: null | string, defaultLimit: number): number {
   }
 
   return parsed;
+}
+
+function parseSessionListFilter(
+  value: null | string,
+  field: 'model' | 'tenantId',
+): string | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  if (!value || value.length > 8_192 || /\p{C}/u.test(value)) {
+    throw new HttpError(
+      400,
+      `${field} must be a non-empty safe string.`,
+      'invalid_session_filter',
+    );
+  }
+  return value;
+}
+
+function parseSessionListProvider(
+  value: null | string,
+): CanonicalProvider | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  const providers: readonly CanonicalProvider[] = [
+    'anthropic',
+    'openai',
+    'google',
+    'mistral',
+    'cohere',
+    'groq',
+    'bedrock',
+    'azure-openai',
+    'ollama',
+    'mock',
+  ];
+  if (!providers.includes(value as CanonicalProvider)) {
+    throw new HttpError(400, 'provider is invalid.', 'invalid_session_filter');
+  }
+  return value as CanonicalProvider;
 }
 
 function paginateItems<TItem>(

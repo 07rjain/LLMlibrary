@@ -68,9 +68,7 @@ Example body:
 
 ```json
 {
-  "messages": [
-    { "role": "user", "content": "Initial history item" }
-  ]
+  "messages": [{ "role": "user", "content": "Initial history item" }]
 }
 ```
 
@@ -185,10 +183,18 @@ Lists tenant-scoped sessions with pagination.
 Supported query parameters:
 
 - `cursor`
+- `direction` — `forward` (default) or `backward`
 - `limit`
 - `model`
 - `provider`
 - `tenantId`
+
+To return from a forward page to the preceding page, pair the response's
+`previousCursor` with `direction=backward`:
+
+```text
+GET /sessions?cursor=<previousCursor>&direction=backward&limit=20
+```
 
 ## Streaming Event Mapping
 

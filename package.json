@@ -86,6 +86,11 @@
       "import": "./dist/session-api.js",
       "require": "./dist/session-api.cjs"
     },
+    "./session-store": {
+      "types": "./dist/session-store.d.ts",
+      "import": "./dist/session-store.js",
+      "require": "./dist/session-store.cjs"
+    },
     "./utils": {
       "types": "./dist/utils.d.ts",
       "import": "./dist/utils.js",

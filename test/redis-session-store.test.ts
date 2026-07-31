@@ -243,7 +243,9 @@ describe('RedisSessionStore', () => {
   it('fails closed instead of overwriting a legacy record occupying a v2 key', async () => {
     const client = new MockRedisClient();
     const occupiedKey = 'llm:sessions:v2::eA';
-    const occupiedValue = JSON.stringify(redisRecord(':eA', 'v2', 'legacy-owner'));
+    const occupiedValue = JSON.stringify(
+      redisRecord(':eA', 'v2', 'legacy-owner'),
+    );
     const targetLegacyKey = 'llm:sessions::x';
     const targetLegacyValue = JSON.stringify(
       redisRecord('x', undefined, 'target-legacy'),
@@ -287,6 +289,42 @@ describe('RedisSessionStore', () => {
     ).toEqual(['other:distinct', 'tenant:same']);
     expect((await store.get('same', 'tenant'))?.snapshot.marker).toBe('v2');
     expect(client.setCalls).toBe(1);
+  });
+
+  it('supports filtered opaque keyset pages without weakening bounded scans', async () => {
+    const client = new MockRedisClient();
+    const store = new RedisSessionStore<TestSnapshot>({
+      client,
+      keyPrefix: 'paged',
+      now: () => new Date('2026-04-15T12:00:00.000Z'),
+    });
+    for (const sessionId of ['a', 'b', 'c']) {
+      await store.set(sessionId, snapshot(sessionId), {
+        model: 'gpt-4o',
+        provider: 'openai',
+        tenantId: 'tenant-a',
+      });
+    }
+
+    const first = await store.listPage({
+      limit: 1,
+      model: 'gpt-4o',
+      provider: 'openai',
+      tenantId: 'tenant-a',
+    });
+    const second = await store.listPage({
+      cursor: first.nextCursor as string,
+      limit: 1,
+      model: 'gpt-4o',
+      provider: 'openai',
+      tenantId: 'tenant-a',
+    });
+
+    expect(first.items.map((item) => item.sessionId)).toEqual(['a']);
+    expect(second.items.map((item) => item.sessionId)).toEqual(['b']);
+    expect(
+      [...client.records.keys()].every((key) => key.startsWith('paged:')),
+    ).toBe(true);
   });
 
   it('migrates on a later write without mutating compatibility reads or refreshing TTL', async () => {
@@ -391,7 +429,9 @@ describe('RedisSessionStore', () => {
     client.scanIterator = () => ({
       [Symbol.asyncIterator]: () => ({
         next: async (): Promise<IteratorResult<string>> => {
-          throw new Error('adapter failed while scanning secret:tenant:session');
+          throw new Error(
+            'adapter failed while scanning secret:tenant:session',
+          );
         },
       }),
     });
@@ -411,8 +451,9 @@ describe('RedisSessionStore', () => {
       retryable: false,
       statusCode: 502,
     });
-    expect(JSON.stringify((error as RedisSessionStoreCapabilityError).toJSON()))
-      .not.toContain('secret:tenant:session');
+    expect(
+      JSON.stringify((error as RedisSessionStoreCapabilityError).toJSON()),
+    ).not.toContain('secret:tenant:session');
     expect(client.keysCalls).toBe(0);
   });
 });

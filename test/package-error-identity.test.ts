@@ -1,6 +1,4 @@
-import {
-  execFileSync,
-} from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -22,6 +20,7 @@ const errors = await import('unified-llm-client/errors');
 const models = await import('unified-llm-client/models');
 const clientModule = await import('unified-llm-client/client');
 const sessionApiModule = await import('unified-llm-client/session-api');
+const sessionStoreModule = await import('unified-llm-client/session-store');
 const anthropic = await import('unified-llm-client/providers/anthropic');
 const gemini = await import('unified-llm-client/providers/gemini');
 const openai = await import('unified-llm-client/providers/openai');
@@ -43,6 +42,18 @@ const redisScanError = new root.RedisSessionStoreCapabilityError(
 assert.equal(redisScanError instanceof errors.RedisSessionStoreCapabilityError, true);
 assert.equal(redisScanError.details.code, 'unsupported_redis_scan_capability');
 assert.equal(
+  errors.InvalidSessionStoreListOptionsError,
+  root.InvalidSessionStoreListOptionsError,
+);
+const sessionCursorError = new root.InvalidSessionStoreListOptionsError(
+  'invalid_session_cursor',
+);
+assert.equal(
+  sessionCursorError instanceof errors.InvalidSessionStoreListOptionsError,
+  true,
+);
+assert.equal(sessionCursorError.details.code, 'invalid_session_cursor');
+assert.equal(
   errors.RedisSessionStoreKeyConflictError,
   root.RedisSessionStoreKeyConflictError,
 );
@@ -50,6 +61,9 @@ assert.equal(models.ModelRegistry, root.ModelRegistry);
 assert.equal(models.defaultModelPrices, root.defaultModelPrices);
 assert.equal(sessionApiModule.SessionApi, root.SessionApi);
 assert.equal(sessionApiModule.createSessionApi, root.createSessionApi);
+assert.equal(sessionStoreModule.InMemorySessionStore, root.InMemorySessionStore);
+assert.equal(sessionStoreModule.PostgresSessionStore, root.PostgresSessionStore);
+assert.equal(sessionStoreModule.RedisSessionStore, root.RedisSessionStore);
 
 let snapshotError;
 try {
@@ -327,6 +341,7 @@ const assert = require('node:assert/strict');
   const models = require('unified-llm-client/models');
   const clientModule = require('unified-llm-client/client');
   const sessionApiModule = require('unified-llm-client/session-api');
+  const sessionStoreModule = require('unified-llm-client/session-store');
   const anthropic = require('unified-llm-client/providers/anthropic');
   const gemini = require('unified-llm-client/providers/gemini');
   const openai = require('unified-llm-client/providers/openai');
@@ -348,6 +363,18 @@ const assert = require('node:assert/strict');
   assert.equal(redisScanError instanceof errors.RedisSessionStoreCapabilityError, true);
   assert.equal(redisScanError.details.code, 'unsupported_redis_scan_capability');
   assert.equal(
+    errors.InvalidSessionStoreListOptionsError,
+    root.InvalidSessionStoreListOptionsError,
+  );
+  const sessionCursorError = new root.InvalidSessionStoreListOptionsError(
+    'invalid_session_cursor',
+  );
+  assert.equal(
+    sessionCursorError instanceof errors.InvalidSessionStoreListOptionsError,
+    true,
+  );
+  assert.equal(sessionCursorError.details.code, 'invalid_session_cursor');
+  assert.equal(
     errors.RedisSessionStoreKeyConflictError,
     root.RedisSessionStoreKeyConflictError,
   );
@@ -355,6 +382,9 @@ const assert = require('node:assert/strict');
   assert.equal(models.defaultModelPrices, root.defaultModelPrices);
   assert.equal(sessionApiModule.SessionApi, root.SessionApi);
   assert.equal(sessionApiModule.createSessionApi, root.createSessionApi);
+  assert.equal(sessionStoreModule.InMemorySessionStore, root.InMemorySessionStore);
+  assert.equal(sessionStoreModule.PostgresSessionStore, root.PostgresSessionStore);
+  assert.equal(sessionStoreModule.RedisSessionStore, root.RedisSessionStore);
 
   let snapshotError;
   try {
@@ -636,50 +666,58 @@ describe('packed package error identity', () => {
     }
   });
 
-  it(
-    'preserves ProviderCapabilityError identity across supported ESM and CJS subpaths',
-    () => {
-      const temporaryDirectory = mkdtempSync(join(tmpdir(), 'unified-llm-client-package-'));
-      temporaryDirectories.push(temporaryDirectory);
+  it('preserves ProviderCapabilityError identity across supported ESM and CJS subpaths', () => {
+    const temporaryDirectory = mkdtempSync(
+      join(tmpdir(), 'unified-llm-client-package-'),
+    );
+    temporaryDirectories.push(temporaryDirectory);
 
-      execFileSync('pnpm', ['pack', '--pack-destination', temporaryDirectory, '--silent'], {
+    execFileSync(
+      'pnpm',
+      ['pack', '--pack-destination', temporaryDirectory, '--silent'],
+      {
         cwd: process.cwd(),
         stdio: 'pipe',
-      });
+      },
+    );
 
-      const archive = readdirSync(temporaryDirectory).find((file) => file.endsWith('.tgz'));
-      expect(archive).toBeDefined();
+    const archive = readdirSync(temporaryDirectory).find((file) =>
+      file.endsWith('.tgz'),
+    );
+    expect(archive).toBeDefined();
 
-      const consumerDirectory = join(temporaryDirectory, 'consumer');
-      const packageDirectory = join(consumerDirectory, 'node_modules', 'unified-llm-client');
-      mkdirSync(packageDirectory, { recursive: true });
-      execFileSync(
-        'tar',
-        [
-          '-xzf',
-          join(temporaryDirectory, archive as string),
-          '-C',
-          packageDirectory,
-          '--strip-components=1',
-        ],
-        { stdio: 'pipe' },
-      );
-      expect(existsSync(join(packageDirectory, 'package.json'))).toBe(true);
+    const consumerDirectory = join(temporaryDirectory, 'consumer');
+    const packageDirectory = join(
+      consumerDirectory,
+      'node_modules',
+      'unified-llm-client',
+    );
+    mkdirSync(packageDirectory, { recursive: true });
+    execFileSync(
+      'tar',
+      [
+        '-xzf',
+        join(temporaryDirectory, archive as string),
+        '-C',
+        packageDirectory,
+        '--strip-components=1',
+      ],
+      { stdio: 'pipe' },
+    );
+    expect(existsSync(join(packageDirectory, 'package.json'))).toBe(true);
 
-      const esmScript = join(consumerDirectory, 'consumer.mjs');
-      writeFileSync(esmScript, esmConsumer);
-      execFileSync(process.execPath, [esmScript], {
-        cwd: consumerDirectory,
-        stdio: 'pipe',
-      });
+    const esmScript = join(consumerDirectory, 'consumer.mjs');
+    writeFileSync(esmScript, esmConsumer);
+    execFileSync(process.execPath, [esmScript], {
+      cwd: consumerDirectory,
+      stdio: 'pipe',
+    });
 
-      const cjsScript = join(consumerDirectory, 'consumer.cjs');
-      writeFileSync(cjsScript, cjsConsumer);
-      execFileSync(process.execPath, [cjsScript], {
-        cwd: consumerDirectory,
-        stdio: 'pipe',
-      });
-    },
-    120_000,
-  );
+    const cjsScript = join(consumerDirectory, 'consumer.cjs');
+    writeFileSync(cjsScript, cjsConsumer);
+    execFileSync(process.execPath, [cjsScript], {
+      cwd: consumerDirectory,
+      stdio: 'pipe',
+    });
+  }, 120_000);
 });

@@ -10,7 +10,7 @@ export * from './providers/openai.js';
 export * from './retrieval.js';
 export * from './router.js';
 export * from 'unified-llm-client/session-api';
-export * from './session-store.js';
+export * from 'unified-llm-client/session-store';
 export * from './tools.js';
 export * from './types.js';
 export * from './usage.js';

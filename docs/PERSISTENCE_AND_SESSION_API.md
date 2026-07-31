@@ -92,6 +92,16 @@ The store never calls Redis `KEYS`. Listing fails closed with a typed capability
 
 New records use v2 keys whose tenant and session components are UTF-8 base64url encoded. Reads and deletes accept a legacy delimiter-based key only after its stored metadata exactly matches the requested tenant/session tuple. Listing verifies legacy identity, skips malformed legacy records, deduplicates legacy/v2 copies, and prefers v2. Compatibility reads never mutate data or refresh TTL. Use an explicit migration process that preserves remaining TTL before removing legacy keys.
 
+All core stores expose an additive `listPage()` method while retaining
+`list(): Promise<SessionMeta[]>` for existing integrations. Page filters are
+tenant, model, and provider; pages use a bounded opaque keyset cursor with
+deterministic `updatedAt DESC`, tenant, `sessionId ASC` ordering. Cursors are
+bound to their filters and direction and are rejected with a sanitized 400
+error when malformed, oversized, or reused with different options. Redis page
+collection remains subject to its bounded SCAN limits. `InMemorySessionStore`
+also exposes an idempotent instance-local `clear()`; Postgres and Redis do not
+provide a durable global clear operation.
+
 Redis is useful when you want fast session storage with TTL-based expiry, but it is not a substitute for analytics storage.
 
 ## Usage Logging And Aggregation

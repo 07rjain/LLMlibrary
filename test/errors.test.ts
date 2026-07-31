@@ -4,6 +4,7 @@ import {
   AuthenticationError,
   BudgetExceededError,
   ContextLimitError,
+  InvalidSessionStoreListOptionsError,
   InvalidConversationSnapshotError,
   LLMError,
   MaxToolRoundsError,
@@ -76,6 +77,9 @@ describe('LLMError hierarchy', () => {
       ),
     ).toBeInstanceOf(LLMError);
     expect(new RedisSessionStoreKeyConflictError()).toBeInstanceOf(LLMError);
+    expect(
+      new InvalidSessionStoreListOptionsError('invalid_session_cursor'),
+    ).toBeInstanceOf(LLMError);
     expect(new ProviderError('provider')).toBeInstanceOf(LLMError);
   });
 
@@ -140,6 +144,22 @@ describe('LLMError hierarchy', () => {
       name: 'RedisSessionStoreKeyConflictError',
       retryable: false,
       statusCode: 409,
+    });
+  });
+
+  it('keeps session list option failures structured and sanitized', () => {
+    expect(
+      new InvalidSessionStoreListOptionsError(
+        'invalid_session_cursor',
+      ).toJSON(),
+    ).toMatchObject({
+      details: {
+        code: 'invalid_session_cursor',
+        operation: 'list',
+      },
+      name: 'InvalidSessionStoreListOptionsError',
+      retryable: false,
+      statusCode: 400,
     });
   });
 });
