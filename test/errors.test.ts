@@ -10,6 +10,8 @@ import {
   ProviderCapabilityError,
   ProviderError,
   RateLimitError,
+  RedisSessionStoreCapabilityError,
+  RedisSessionStoreKeyConflictError,
 } from '../src/errors.js';
 
 describe('LLMError hierarchy', () => {
@@ -67,6 +69,13 @@ describe('LLMError hierarchy', () => {
     expect(
       new InvalidConversationSnapshotError('snapshot.messages', 'dense_array'),
     ).toBeInstanceOf(LLMError);
+    expect(
+      new RedisSessionStoreCapabilityError(
+        'list',
+        'unsupported_redis_scan_capability',
+      ),
+    ).toBeInstanceOf(LLMError);
+    expect(new RedisSessionStoreKeyConflictError()).toBeInstanceOf(LLMError);
     expect(new ProviderError('provider')).toBeInstanceOf(LLMError);
   });
 
@@ -86,6 +95,51 @@ describe('LLMError hierarchy', () => {
       name: 'InvalidConversationSnapshotError',
       retryable: false,
       statusCode: 400,
+    });
+  });
+
+  it('keeps Redis scan capability failures structured and sanitized', () => {
+    const error = new RedisSessionStoreCapabilityError(
+      'list',
+      'unsupported_redis_scan_capability',
+    );
+
+    expect(error.toJSON()).toMatchObject({
+      details: {
+        code: 'unsupported_redis_scan_capability',
+        operation: 'list',
+      },
+      name: 'RedisSessionStoreCapabilityError',
+      retryable: false,
+      statusCode: 501,
+    });
+
+    expect(
+      new RedisSessionStoreCapabilityError(
+        'list',
+        'redis_scan_adapter_error',
+      ).toJSON(),
+    ).toMatchObject({
+      cause: undefined,
+      details: {
+        code: 'redis_scan_adapter_error',
+        operation: 'list',
+      },
+      name: 'RedisSessionStoreCapabilityError',
+      retryable: false,
+      statusCode: 502,
+    });
+  });
+
+  it('keeps Redis key conflicts structured and sanitized', () => {
+    expect(new RedisSessionStoreKeyConflictError().toJSON()).toMatchObject({
+      details: {
+        code: 'redis_session_key_conflict',
+        operation: 'set',
+      },
+      name: 'RedisSessionStoreKeyConflictError',
+      retryable: false,
+      statusCode: 409,
     });
   });
 });

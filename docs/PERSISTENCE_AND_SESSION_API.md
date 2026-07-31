@@ -86,7 +86,11 @@ Your Redis client must implement:
 - `get()`
 - `set()`
 - `del()`
-- `scanIterator()` or `keys()`
+- a bounded, cluster-safe `scanIterator()`
+
+The store never calls Redis `KEYS`. Listing fails closed with a typed capability error when a safe scan iterator is unavailable. In clustered deployments, the adapter is responsible for scanning every relevant primary node and terminating normally; `scanCount`, `maxScanIterations`, `maxScanKeys`, and `maxScanNoProgressIterations` bound work on the library side.
+
+New records use v2 keys whose tenant and session components are UTF-8 base64url encoded. Reads and deletes accept a legacy delimiter-based key only after its stored metadata exactly matches the requested tenant/session tuple. Listing verifies legacy identity, skips malformed legacy records, deduplicates legacy/v2 copies, and prefers v2. Compatibility reads never mutate data or refresh TTL. Use an explicit migration process that preserves remaining TTL before removing legacy keys.
 
 Redis is useful when you want fast session storage with TTL-based expiry, but it is not a substitute for analytics storage.
 

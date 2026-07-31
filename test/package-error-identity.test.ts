@@ -32,6 +32,20 @@ assert.equal(
   root.InvalidConversationSnapshotError,
 );
 assert.equal(errors.MockQueueExhaustedError, root.MockQueueExhaustedError);
+assert.equal(
+  errors.RedisSessionStoreCapabilityError,
+  root.RedisSessionStoreCapabilityError,
+);
+const redisScanError = new root.RedisSessionStoreCapabilityError(
+  'list',
+  'unsupported_redis_scan_capability',
+);
+assert.equal(redisScanError instanceof errors.RedisSessionStoreCapabilityError, true);
+assert.equal(redisScanError.details.code, 'unsupported_redis_scan_capability');
+assert.equal(
+  errors.RedisSessionStoreKeyConflictError,
+  root.RedisSessionStoreKeyConflictError,
+);
 assert.equal(models.ModelRegistry, root.ModelRegistry);
 assert.equal(models.defaultModelPrices, root.defaultModelPrices);
 assert.equal(sessionApiModule.SessionApi, root.SessionApi);
@@ -323,6 +337,20 @@ const assert = require('node:assert/strict');
     root.InvalidConversationSnapshotError,
   );
   assert.equal(errors.MockQueueExhaustedError, root.MockQueueExhaustedError);
+  assert.equal(
+    errors.RedisSessionStoreCapabilityError,
+    root.RedisSessionStoreCapabilityError,
+  );
+  const redisScanError = new root.RedisSessionStoreCapabilityError(
+    'list',
+    'unsupported_redis_scan_capability',
+  );
+  assert.equal(redisScanError instanceof errors.RedisSessionStoreCapabilityError, true);
+  assert.equal(redisScanError.details.code, 'unsupported_redis_scan_capability');
+  assert.equal(
+    errors.RedisSessionStoreKeyConflictError,
+    root.RedisSessionStoreKeyConflictError,
+  );
   assert.equal(models.ModelRegistry, root.ModelRegistry);
   assert.equal(models.defaultModelPrices, root.defaultModelPrices);
   assert.equal(sessionApiModule.SessionApi, root.SessionApi);

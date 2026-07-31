@@ -320,7 +320,7 @@ const client = new LLMClient({
 
 ### Redis
 
-`RedisSessionStore` is bring-your-own-client. Pass any Redis client that implements `get()`, `set()`, `del()`, and either `scanIterator()` or `keys()`.
+`RedisSessionStore` is bring-your-own-client. Pass a Redis client that implements `get()`, `set()`, `del()`, and a bounded, cluster-safe `scanIterator()`. Session listing never falls back to Redis `KEYS`; clients without a safe scan capability fail closed.
 
 ```ts
 import { LLMClient, RedisSessionStore } from 'unified-llm-client';
@@ -335,6 +335,8 @@ const client = new LLMClient({
   sessionStore,
 });
 ```
+
+Session keys use separator-safe, UTF-8 base64url-encoded v2 tenant and session components. New writes use v2 keys. Reads and deletes can still use a legacy key only when its stored metadata exactly matches the requested tenant/session tuple, preventing legacy delimiter collisions from crossing tenants. Listing deduplicates verified legacy and v2 records with v2 precedence. Compatibility reads do not rewrite keys or refresh TTL; migrate legacy keys through an explicit TTL-preserving maintenance process. For clustered Redis, the supplied iterator must cover every relevant primary node and terminate normally; scan work is bounded by the store options.
 
 ## Session API
 

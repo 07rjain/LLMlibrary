@@ -106,6 +106,50 @@ export class MockQueueExhaustedError extends LLMError {
   }
 }
 
+/** Redis session listing cannot proceed safely with the supplied scan adapter. */
+export class RedisSessionStoreCapabilityError extends LLMError {
+  constructor(
+    operation: 'list',
+    code:
+      | 'redis_scan_adapter_error'
+      | 'redis_scan_iteration_limit_exceeded'
+      | 'redis_scan_key_limit_exceeded'
+      | 'redis_scan_no_progress'
+      | 'unsupported_redis_scan_capability',
+  ) {
+    super(
+      'Redis session listing requires a bounded, cluster-safe scan iterator.',
+      {
+        details: {
+          code,
+          operation,
+        },
+        retryable: false,
+        statusCode:
+          code === 'unsupported_redis_scan_capability'
+            ? 501
+            : code === 'redis_scan_adapter_error'
+              ? 502
+              : 400,
+      },
+    );
+  }
+}
+
+/** A v2 Redis key is occupied by a record for another tenant/session tuple. */
+export class RedisSessionStoreKeyConflictError extends LLMError {
+  constructor() {
+    super('Redis session key conflicts with an existing session record.', {
+      details: {
+        code: 'redis_session_key_conflict',
+        operation: 'set',
+      },
+      retryable: false,
+      statusCode: 409,
+    });
+  }
+}
+
 /** Generic provider-side failure that does not fit a narrower subtype. */
 export class ProviderError extends LLMError {}
 

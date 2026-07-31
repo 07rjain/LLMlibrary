@@ -1,5 +1,9 @@
 import { loadPgPoolConstructor } from './node-pg-loader.js';
 import { getEnvironmentVariable } from './runtime.js';
+import {
+  RedisSessionStoreCapabilityError,
+  RedisSessionStoreKeyConflictError,
+} from 'unified-llm-client/errors';
 
 import type { CanonicalProvider } from './types.js';
 
@@ -93,8 +97,11 @@ export interface RedisScanIteratorOptions {
 export interface RedisSessionStoreClient {
   del(key: string): Promise<number>;
   get(key: string): Promise<null | string>;
+  /** @deprecated RedisSessionStore never calls KEYS. Provide scanIterator instead. */
   keys?(pattern: string): Promise<string[]>;
-  scanIterator?(options?: RedisScanIteratorOptions): AsyncIterable<string>;
+  scanIterator?(
+    options?: RedisScanIteratorOptions,
+  ): AsyncIterable<readonly string[] | string>;
   set(
     key: string,
     value: string,
@@ -106,6 +113,9 @@ export interface RedisSessionStoreClient {
 export interface RedisSessionStoreOptions {
   client: RedisSessionStoreClient;
   keyPrefix?: string;
+  maxScanIterations?: number;
+  maxScanKeys?: number;
+  maxScanNoProgressIterations?: number;
   now?: () => Date;
   scanCount?: number;
   ttlSeconds?: number;
@@ -414,6 +424,9 @@ export class RedisSessionStore<
 {
   private readonly client: RedisSessionStoreClient;
   private readonly keyPrefix: string;
+  private readonly maxScanIterations: number;
+  private readonly maxScanKeys: number;
+  private readonly maxScanNoProgressIterations: number;
   private readonly now: () => Date;
   private readonly scanCount: number;
   private readonly ttlSeconds: number | undefined;
@@ -421,13 +434,31 @@ export class RedisSessionStore<
   constructor(options: RedisSessionStoreOptions) {
     this.client = options.client;
     this.keyPrefix = options.keyPrefix ?? 'llm:sessions';
+    this.maxScanIterations = boundedScanOption(
+      options.maxScanIterations,
+      10_000,
+    );
+    this.maxScanKeys = boundedScanOption(options.maxScanKeys, 100_000);
+    this.maxScanNoProgressIterations = boundedScanOption(
+      options.maxScanNoProgressIterations,
+      100,
+    );
     this.now = options.now ?? (() => new Date());
-    this.scanCount = options.scanCount ?? 100;
+    this.scanCount = Math.min(boundedScanOption(options.scanCount, 100), 1_000);
     this.ttlSeconds = options.ttlSeconds;
   }
 
   async delete(sessionId: string, tenantId?: string): Promise<void> {
-    await this.client.del(this.key(sessionId, tenantId));
+    await this.deleteIfIdentityMatches(
+      this.key(sessionId, tenantId),
+      sessionId,
+      tenantId,
+    );
+    await this.deleteIfIdentityMatches(
+      this.legacyKey(sessionId, tenantId),
+      sessionId,
+      tenantId,
+    );
   }
 
   async get(
@@ -435,15 +466,37 @@ export class RedisSessionStore<
     tenantId?: string,
   ): Promise<null | SessionRecord<TSnapshot>> {
     const raw = await this.client.get(this.key(sessionId, tenantId));
-    if (!raw) {
+    if (raw) {
+      try {
+        const record = parseRedisRecord<TSnapshot>(raw);
+        if (redisRecordMatches(record, sessionId, tenantId)) {
+          return record;
+        }
+      } catch {
+        // Malformed or unverifiable v2 data is a soft miss for compatibility
+        // reads, so a valid legacy record can still be recovered.
+      }
+    }
+
+    const legacyRaw = await this.client.get(
+      this.legacyKey(sessionId, tenantId),
+    );
+    if (!legacyRaw) {
       return null;
     }
 
-    return parseRedisRecord<TSnapshot>(raw);
+    try {
+      const legacyRecord = parseRedisRecord<TSnapshot>(legacyRaw);
+      return redisRecordMatches(legacyRecord, sessionId, tenantId)
+        ? legacyRecord
+        : null;
+    } catch {
+      return null;
+    }
   }
 
   async list(options: SessionStoreListOptions = {}): Promise<SessionMeta[]> {
-    const records: SessionMeta[] = [];
+    const records = new Map<string, { meta: SessionMeta; version: 1 | 2 }>();
 
     for await (const key of this.iterateKeys()) {
       const raw = await this.client.get(key);
@@ -451,18 +504,46 @@ export class RedisSessionStore<
         continue;
       }
 
-      const record = parseRedisRecord<TSnapshot>(raw);
+      let record: SessionRecord<TSnapshot>;
+      try {
+        record = parseRedisRecord<TSnapshot>(raw);
+      } catch {
+        continue;
+      }
+      if (!hasRedisRecordIdentity(record)) {
+        continue;
+      }
+
+      const v2Key = this.key(record.meta.sessionId, record.meta.tenantId);
+      const legacyKey = this.legacyKey(
+        record.meta.sessionId,
+        record.meta.tenantId,
+      );
+      const version = key === v2Key ? 2 : key === legacyKey ? 1 : undefined;
+      if (version === undefined) {
+        continue;
+      }
       if (
         options.tenantId !== undefined &&
-        normalizeTenantId(record.meta.tenantId) !== normalizeTenantId(options.tenantId)
+        normalizeTenantId(record.meta.tenantId) !==
+          normalizeTenantId(options.tenantId)
       ) {
         continue;
       }
 
-      records.push(record.meta);
+      const tupleKey = buildSessionKey(
+        record.meta.sessionId,
+        record.meta.tenantId,
+      );
+      const existing = records.get(tupleKey);
+      if (!existing || version > existing.version) {
+        records.set(tupleKey, { meta: cloneMeta(record.meta), version });
+      }
     }
 
-    return records.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    return [...records.values()]
+      .map((record) => record.meta)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
   async set(
@@ -470,7 +551,21 @@ export class RedisSessionStore<
     snapshot: TSnapshot,
     options: SessionStoreSetOptions = {},
   ): Promise<SessionRecord<TSnapshot>> {
-    const existing = await this.get(sessionId, options.tenantId);
+    const key = this.key(sessionId, options.tenantId);
+    const v2Raw = await this.client.get(key);
+    let existing: null | SessionRecord<TSnapshot>;
+    if (v2Raw) {
+      try {
+        existing = parseRedisRecord<TSnapshot>(v2Raw);
+      } catch {
+        throw new RedisSessionStoreKeyConflictError();
+      }
+      if (!redisRecordMatches(existing, sessionId, options.tenantId)) {
+        throw new RedisSessionStoreKeyConflictError();
+      }
+    } else {
+      existing = await this.get(sessionId, options.tenantId);
+    }
     const timestamp = this.now().toISOString();
     const meta: SessionMeta = {
       createdAt: existing?.meta.createdAt ?? options.createdAt ?? timestamp,
@@ -490,7 +585,7 @@ export class RedisSessionStore<
     };
 
     await this.client.set(
-      this.key(sessionId, options.tenantId),
+      key,
       JSON.stringify(record),
       buildRedisSetOptions(this.ttlSeconds),
     );
@@ -499,37 +594,167 @@ export class RedisSessionStore<
   }
 
   private key(sessionId: string, tenantId?: string): string {
+    return `${this.keyPrefix}:${buildSessionKey(sessionId, tenantId)}`;
+  }
+
+  private legacyKey(sessionId: string, tenantId?: string): string {
     return `${this.keyPrefix}:${normalizeTenantId(tenantId)}:${sessionId}`;
   }
 
-  private async *iterateKeys(): AsyncGenerator<string, void, void> {
-    const pattern = `${this.keyPrefix}:*`;
+  private async deleteIfIdentityMatches(
+    key: string,
+    sessionId: string,
+    tenantId: string | undefined,
+  ): Promise<void> {
+    const raw = await this.client.get(key);
+    if (!raw) {
+      return;
+    }
 
-    if (this.client.scanIterator) {
-      for await (const key of this.client.scanIterator({
+    try {
+      const record = parseRedisRecord<TSnapshot>(raw);
+      if (redisRecordMatches(record, sessionId, tenantId)) {
+        await this.client.del(key);
+      }
+    } catch {
+      // Malformed or unverifiable compatibility data is never deleted blindly.
+    }
+  }
+
+  private async *iterateKeys(): AsyncGenerator<string, void, void> {
+    if (!this.client.scanIterator) {
+      throw new RedisSessionStoreCapabilityError(
+        'list',
+        'unsupported_redis_scan_capability',
+      );
+    }
+
+    const seen = new Set<string>();
+    let iterationCount = 0;
+    let keyCount = 0;
+    let noProgressCount = 0;
+    const pattern = `${escapeRedisGlob(this.keyPrefix)}:*`;
+
+    try {
+      for await (const result of this.client.scanIterator({
         COUNT: this.scanCount,
         MATCH: pattern,
       })) {
-        yield key;
-      }
-      return;
-    }
+        iterationCount += 1;
+        if (iterationCount > this.maxScanIterations) {
+          throw new RedisSessionStoreCapabilityError(
+            'list',
+            'redis_scan_iteration_limit_exceeded',
+          );
+        }
 
-    if (this.client.keys) {
-      for (const key of await this.client.keys(pattern)) {
-        yield key;
-      }
-      return;
-    }
+        const keys = typeof result === 'string' ? [result] : result;
+        let progressed = false;
+        for (const key of keys) {
+          keyCount += 1;
+          if (keyCount > this.maxScanKeys) {
+            throw new RedisSessionStoreCapabilityError(
+              'list',
+              'redis_scan_key_limit_exceeded',
+            );
+          }
+          if (typeof key !== 'string' || seen.has(key)) {
+            continue;
+          }
+          seen.add(key);
+          progressed = true;
+          yield key;
+        }
 
-    throw new Error(
-      'RedisSessionStore client must implement scanIterator() or keys() for list().',
-    );
+        noProgressCount = progressed ? 0 : noProgressCount + 1;
+        if (noProgressCount > this.maxScanNoProgressIterations) {
+          throw new RedisSessionStoreCapabilityError(
+            'list',
+            'redis_scan_no_progress',
+          );
+        }
+      }
+    } catch (error) {
+      if (error instanceof RedisSessionStoreCapabilityError) {
+        throw error;
+      }
+      throw new RedisSessionStoreCapabilityError(
+        'list',
+        'redis_scan_adapter_error',
+      );
+    }
   }
 }
 
-function buildSessionKey(sessionId: string, tenantId: string | undefined): string {
-  return `${tenantId ?? 'default'}:${sessionId}`;
+function buildSessionKey(
+  sessionId: string,
+  tenantId: string | undefined,
+): string {
+  return `v2:${encodeBase64Url(normalizeTenantId(tenantId))}:${encodeBase64Url(sessionId)}`;
+}
+
+function boundedScanOption(
+  value: number | undefined,
+  fallback: number,
+): number {
+  return Number.isSafeInteger(value) && (value ?? 0) > 0
+    ? (value as number)
+    : fallback;
+}
+
+function encodeBase64Url(value: string): string {
+  const alphabet =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  const bytes = new TextEncoder().encode(value);
+  let encoded = '';
+
+  for (let index = 0; index < bytes.length; index += 3) {
+    const first = bytes[index] ?? 0;
+    const second = bytes[index + 1];
+    const third = bytes[index + 2];
+    encoded += alphabet[first >> 2];
+    encoded += alphabet[((first & 0x03) << 4) | ((second ?? 0) >> 4)];
+    if (second !== undefined) {
+      encoded += alphabet[((second & 0x0f) << 2) | ((third ?? 0) >> 6)];
+    }
+    if (third !== undefined) {
+      encoded += alphabet[third & 0x3f];
+    }
+  }
+
+  return encoded;
+}
+
+function escapeRedisGlob(value: string): string {
+  return value.replace(/[\\*?[\]]/g, '\\$&');
+}
+
+function hasRedisRecordIdentity<TSnapshot>(
+  record: SessionRecord<TSnapshot>,
+): record is SessionRecord<TSnapshot> & {
+  meta: SessionMeta & { sessionId: string };
+} {
+  return (
+    typeof record === 'object' &&
+    record !== null &&
+    typeof record.meta === 'object' &&
+    record.meta !== null &&
+    typeof record.meta.sessionId === 'string' &&
+    (record.meta.tenantId === undefined ||
+      typeof record.meta.tenantId === 'string')
+  );
+}
+
+function redisRecordMatches<TSnapshot>(
+  record: SessionRecord<TSnapshot>,
+  sessionId: string,
+  tenantId: string | undefined,
+): boolean {
+  return (
+    hasRedisRecordIdentity(record) &&
+    record.meta.sessionId === sessionId &&
+    normalizeTenantId(record.meta.tenantId) === normalizeTenantId(tenantId)
+  );
 }
 
 function mapPostgresRecord<TSnapshot>(
@@ -541,7 +766,9 @@ function mapPostgresRecord<TSnapshot>(
   };
 }
 
-function mapPostgresMeta<TSnapshot>(row: PostgresSessionStoreRow<TSnapshot>): SessionMeta {
+function mapPostgresMeta<TSnapshot>(
+  row: PostgresSessionStoreRow<TSnapshot>,
+): SessionMeta {
   return {
     createdAt: toIsoString(row.created_at),
     messageCount: row.message_count,
@@ -570,7 +797,9 @@ function toIsoString(value: Date | string): string {
   return new Date(value).toISOString();
 }
 
-function cloneRecord<TSnapshot>(record: SessionRecord<TSnapshot>): SessionRecord<TSnapshot> {
+function cloneRecord<TSnapshot>(
+  record: SessionRecord<TSnapshot>,
+): SessionRecord<TSnapshot> {
   return {
     meta: cloneMeta(record.meta),
     snapshot: cloneValue(record.snapshot),
@@ -587,7 +816,10 @@ function cloneValue<TValue>(value: TValue): TValue {
 
 function buildRedisSetOptions(
   ttlSeconds: number | undefined,
-): { EX?: number } | { expiration?: { type: 'EX'; value: number } } | undefined {
+):
+  | { EX?: number }
+  | { expiration?: { type: 'EX'; value: number } }
+  | undefined {
   if (ttlSeconds === undefined) {
     return undefined;
   }
