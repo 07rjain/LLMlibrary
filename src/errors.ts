@@ -69,6 +69,26 @@ export class BudgetExceededError extends LLMError {}
 /** Tool loop exceeded the configured maximum number of rounds. */
 export class MaxToolRoundsError extends LLMError {}
 
+/** A persisted conversation snapshot failed fail-closed validation. */
+export class InvalidConversationSnapshotError extends LLMError {
+  constructor(path: string, constraint: string) {
+    const safePath = sanitizeSnapshotErrorField(path, 'snapshot');
+    const safeConstraint = sanitizeSnapshotErrorField(
+      constraint,
+      'invalid_value',
+    );
+    super('Conversation snapshot is invalid.', {
+      details: {
+        code: 'invalid_conversation_snapshot',
+        constraint: safeConstraint,
+        path: safePath,
+      },
+      retryable: false,
+      statusCode: 400,
+    });
+  }
+}
+
 /** A deterministic mock operation was invoked without a queued result. */
 export class MockQueueExhaustedError extends LLMError {
   constructor(
@@ -88,3 +108,8 @@ export class MockQueueExhaustedError extends LLMError {
 
 /** Generic provider-side failure that does not fit a narrower subtype. */
 export class ProviderError extends LLMError {}
+
+function sanitizeSnapshotErrorField(value: string, fallback: string): string {
+  const sanitized = value.replace(/\p{C}/gu, '?').slice(0, 256);
+  return sanitized || fallback;
+}

@@ -1,9 +1,11 @@
 import {
   BudgetExceededError,
+  LLMError,
   MaxToolRoundsError,
   ProviderError,
 } from 'unified-llm-client/errors';
 import { validateBudgetUsd } from './budget-validation.js';
+import { validateAndCloneConversationSnapshot } from './conversation-snapshot-validation.js';
 import {
   buildAbortError,
   createCancelableStream,
@@ -55,9 +57,26 @@ type LegacyToolCallArgumentsAlias = Omit<
   version: 2;
 };
 
-type ConversationInputStreamChunk =
-  | LegacyToolCallArgumentsAlias
-  | StreamChunk;
+type ConversationInputStreamChunk = LegacyToolCallArgumentsAlias | StreamChunk;
+
+interface ConversationState {
+  messages: CanonicalMessage[];
+  model: string | undefined;
+  provider: CanonicalProvider | undefined;
+  totalCachedTokens: number;
+  totalCostUSD: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalReasoningTokens: number;
+  updatedAt: string;
+}
+
+interface TurnWaiter {
+  onAbort?: () => void;
+  reject: (reason: unknown) => void;
+  resolve: (release: () => void) => void;
+  signal?: AbortSignal;
+}
 
 export type ToolValidationMode = 'permissive' | 'strict';
 
@@ -249,6 +268,9 @@ export class Conversation {
   private totalInputTokens = 0;
   private totalOutputTokens = 0;
   private totalReasoningTokens = 0;
+  private activeToolExecutions = 0;
+  private turnActive = false;
+  private readonly turnWaiters: TurnWaiter[] = [];
   private updatedAt: string;
 
   constructor(client: ConversationClient, options: ConversationOptions = {}) {
@@ -331,26 +353,34 @@ export class Conversation {
         ? undefined
         : validateAndCloneMetadata(options.metadata);
     const userMessage = buildUserMessage(input);
+    this.assertNoToolExecutionReentrancy('send');
     throwIfAborted(options.signal);
-    const initialMessages = [...this.messages, userMessage];
-    const route = this.resolveConversationRoute(initialMessages);
-    const nextMessages = await this.prepareMessages(
-      userMessage,
-      options.requestId,
-      route,
-    );
-    throwIfAborted(options.signal);
-    const result = await this.runCompleteToolLoop(
-      nextMessages,
-      options.signal,
-      options.requestId,
-      metadata,
-      route,
-    );
+    const release = await this.acquireTurn(options.signal);
+    try {
+      this.assertNoToolExecutionReentrancy('send');
+      throwIfAborted(options.signal);
+      const initialMessages = [...this.messages, userMessage];
+      const route = this.resolveConversationRoute(initialMessages);
+      const nextMessages = await this.prepareMessages(
+        userMessage,
+        options.requestId,
+        route,
+      );
+      throwIfAborted(options.signal);
+      const result = await this.runCompleteToolLoop(
+        nextMessages,
+        options.signal,
+        options.requestId,
+        metadata,
+        route,
+      );
 
-    throwIfAborted(options.signal);
-    await this.finalizeExecution(result);
-    return result.response;
+      throwIfAborted(options.signal);
+      await this.finalizeExecution(result);
+      return result.response;
+    } finally {
+      release();
+    }
   }
 
   /** Streams a user turn and commits state when the final `done` chunk arrives. */
@@ -362,43 +392,76 @@ export class Conversation {
       options.metadata === undefined
         ? undefined
         : validateAndCloneMetadata(options.metadata);
+    const userMessage = buildUserMessage(input);
     return createCancelableStream(
       async function* (
         this: Conversation,
         signal: AbortSignal,
       ): AsyncGenerator<StreamChunk, void, void> {
-        const userMessage = buildUserMessage(input);
-        throwIfAborted(signal);
-        const initialMessages = [...this.messages, userMessage];
-        const route = this.resolveConversationRoute(initialMessages);
-        const nextMessages = await this.prepareMessages(
-          userMessage,
-          options.requestId,
-          route,
-        );
-        throwIfAborted(signal);
-        const result = yield* this.runStreamToolLoop(
-          nextMessages,
-          signal,
-          options.requestId,
-          metadata,
-          route,
-        );
-        throwIfAborted(signal);
-        await this.finalizeExecution(result);
+        this.assertNoToolExecutionReentrancy('sendStream');
+        const release = await this.acquireTurn(signal);
+        try {
+          this.assertNoToolExecutionReentrancy('sendStream');
+          throwIfAborted(signal);
+          const initialMessages = [...this.messages, userMessage];
+          const route = this.resolveConversationRoute(initialMessages);
+          const nextMessages = await this.prepareMessages(
+            userMessage,
+            options.requestId,
+            route,
+          );
+          throwIfAborted(signal);
+          const result = yield* this.runStreamToolLoop(
+            nextMessages,
+            signal,
+            options.requestId,
+            metadata,
+            route,
+          );
+          throwIfAborted(signal);
+          await this.finalizeExecution(result);
+        } finally {
+          release();
+        }
       }.bind(this),
       options.signal,
+      true,
     );
   }
 
   /** Clears non-system history while preserving running totals. */
   clear(): void {
+    if (this.turnActive || this.activeToolExecutions > 0) {
+      throw new LLMError('Conversation is busy processing a turn.', {
+        details: {
+          code: 'conversation_busy',
+          operation: 'clear',
+        },
+        retryable: false,
+        statusCode: 409,
+      });
+    }
     this.messages = [];
     this.updatedAt = new Date().toISOString();
   }
 
   /** Serializes the conversation for storage or transport. */
   serialise(): ConversationSnapshot {
+    return this.buildSnapshot();
+  }
+
+  private buildSnapshot(state?: ConversationState): ConversationSnapshot {
+    const current = state ?? {
+      messages: this.messages,
+      model: this.model,
+      provider: this.provider,
+      totalCachedTokens: this.totalCachedTokens,
+      totalCostUSD: this.totalCostUSD,
+      totalInputTokens: this.totalInputTokens,
+      totalOutputTokens: this.totalOutputTokens,
+      totalReasoningTokens: this.totalReasoningTokens,
+      updatedAt: this.updatedAt,
+    };
     return {
       ...(this.budgetUsd !== undefined ? { budgetUsd: this.budgetUsd } : {}),
       createdAt: this.createdAt,
@@ -409,9 +472,9 @@ export class Conversation {
         ? { maxContextTokens: this.maxContextTokens }
         : {}),
       ...(this.maxTokens !== undefined ? { maxTokens: this.maxTokens } : {}),
-      messages: cloneValue(this.messages),
-      ...(this.model !== undefined ? { model: this.model } : {}),
-      ...(this.provider !== undefined ? { provider: this.provider } : {}),
+      messages: cloneValue(current.messages),
+      ...(current.model !== undefined ? { model: current.model } : {}),
+      ...(current.provider !== undefined ? { provider: current.provider } : {}),
       ...(this.providerOptions !== undefined
         ? { providerOptions: cloneValue(this.providerOptions) }
         : {}),
@@ -431,12 +494,12 @@ export class Conversation {
         ? { toolChoice: cloneValue(this.toolChoice) }
         : {}),
       ...(this.tools !== undefined ? { tools: cloneValue(this.tools) } : {}),
-      totalCachedTokens: this.totalCachedTokens,
-      totalCostUSD: this.totalCostUSD,
-      totalInputTokens: this.totalInputTokens,
-      totalOutputTokens: this.totalOutputTokens,
-      totalReasoningTokens: this.totalReasoningTokens,
-      updatedAt: this.updatedAt,
+      totalCachedTokens: current.totalCachedTokens,
+      totalCostUSD: current.totalCostUSD,
+      totalInputTokens: current.totalInputTokens,
+      totalOutputTokens: current.totalOutputTokens,
+      totalReasoningTokens: current.totalReasoningTokens,
+      updatedAt: current.updatedAt,
     };
   }
 
@@ -494,111 +557,104 @@ export class Conversation {
   /** Restores a conversation from a serialized snapshot. */
   static restore(
     client: ConversationClient,
-    snapshot: ConversationSnapshot,
+    snapshot: unknown,
     options: Omit<ConversationOptions, 'messages'> = {},
   ): Conversation {
+    const restoredSnapshot = validateAndCloneConversationSnapshot(snapshot);
     const conversation = new Conversation(client, {
       ...(options.budgetExceededAction !== undefined
         ? { budgetExceededAction: options.budgetExceededAction }
         : {}),
       ...(options.budgetUsd !== undefined
         ? { budgetUsd: options.budgetUsd }
-        : snapshot.budgetUsd !== undefined
-          ? { budgetUsd: snapshot.budgetUsd }
+        : restoredSnapshot.budgetUsd !== undefined
+          ? { budgetUsd: restoredSnapshot.budgetUsd }
           : {}),
       ...(options.contextManager !== undefined
         ? { contextManager: options.contextManager }
         : {}),
       ...(options.maxToolRounds !== undefined
         ? { maxToolRounds: options.maxToolRounds }
-        : snapshot.maxToolRounds !== undefined
-          ? { maxToolRounds: snapshot.maxToolRounds }
+        : restoredSnapshot.maxToolRounds !== undefined
+          ? { maxToolRounds: restoredSnapshot.maxToolRounds }
           : {}),
       ...(options.maxContextTokens !== undefined
         ? { maxContextTokens: options.maxContextTokens }
-        : snapshot.maxContextTokens !== undefined
-          ? { maxContextTokens: snapshot.maxContextTokens }
+        : restoredSnapshot.maxContextTokens !== undefined
+          ? { maxContextTokens: restoredSnapshot.maxContextTokens }
           : {}),
       ...(options.maxTokens !== undefined
         ? { maxTokens: options.maxTokens }
-        : snapshot.maxTokens !== undefined
-          ? { maxTokens: snapshot.maxTokens }
+        : restoredSnapshot.maxTokens !== undefined
+          ? { maxTokens: restoredSnapshot.maxTokens }
           : {}),
-      messages: snapshot.messages,
+      messages: restoredSnapshot.messages,
       ...(options.model !== undefined
         ? { model: options.model }
-        : snapshot.model !== undefined
-          ? { model: snapshot.model }
+        : restoredSnapshot.model !== undefined
+          ? { model: restoredSnapshot.model }
           : {}),
       ...(options.onWarning !== undefined
         ? { onWarning: options.onWarning }
         : {}),
       ...(options.provider !== undefined
         ? { provider: options.provider }
-        : snapshot.provider !== undefined
-          ? { provider: snapshot.provider }
+        : restoredSnapshot.provider !== undefined
+          ? { provider: restoredSnapshot.provider }
           : {}),
       ...(options.providerOptions !== undefined
         ? { providerOptions: options.providerOptions }
-        : snapshot.providerOptions !== undefined
-          ? { providerOptions: snapshot.providerOptions }
+        : restoredSnapshot.providerOptions !== undefined
+          ? { providerOptions: restoredSnapshot.providerOptions }
           : {}),
       ...(options.responseFormat !== undefined
         ? { responseFormat: options.responseFormat }
-        : snapshot.responseFormat !== undefined
-          ? { responseFormat: snapshot.responseFormat }
+        : restoredSnapshot.responseFormat !== undefined
+          ? { responseFormat: restoredSnapshot.responseFormat }
           : {}),
-      sessionId: snapshot.sessionId,
+      sessionId: restoredSnapshot.sessionId,
       ...(options.store !== undefined ? { store: options.store } : {}),
       ...(options.system !== undefined
         ? { system: options.system }
-        : snapshot.system !== undefined
-          ? { system: snapshot.system }
+        : restoredSnapshot.system !== undefined
+          ? { system: restoredSnapshot.system }
           : {}),
       ...(options.tenantId !== undefined
         ? { tenantId: options.tenantId }
-        : snapshot.tenantId !== undefined
-          ? { tenantId: snapshot.tenantId }
+        : restoredSnapshot.tenantId !== undefined
+          ? { tenantId: restoredSnapshot.tenantId }
           : {}),
       ...(options.toolExecutionTimeoutMs !== undefined
         ? { toolExecutionTimeoutMs: options.toolExecutionTimeoutMs }
-        : snapshot.toolExecutionTimeoutMs !== undefined
-          ? { toolExecutionTimeoutMs: snapshot.toolExecutionTimeoutMs }
+        : restoredSnapshot.toolExecutionTimeoutMs !== undefined
+          ? { toolExecutionTimeoutMs: restoredSnapshot.toolExecutionTimeoutMs }
           : {}),
       ...(options.toolValidation !== undefined
         ? { toolValidation: options.toolValidation }
-        : snapshot.toolValidation !== undefined
-          ? { toolValidation: snapshot.toolValidation }
+        : restoredSnapshot.toolValidation !== undefined
+          ? { toolValidation: restoredSnapshot.toolValidation }
           : {}),
       ...(options.toolChoice !== undefined
         ? { toolChoice: options.toolChoice }
-        : snapshot.toolChoice !== undefined
-          ? { toolChoice: snapshot.toolChoice }
+        : restoredSnapshot.toolChoice !== undefined
+          ? { toolChoice: restoredSnapshot.toolChoice }
           : {}),
       ...(options.tools !== undefined
         ? { tools: options.tools }
-        : snapshot.tools !== undefined
-          ? { tools: snapshot.tools }
+        : restoredSnapshot.tools !== undefined
+          ? { tools: restoredSnapshot.tools }
           : {}),
     });
 
-    conversation.createdAt = snapshot.createdAt;
-    conversation.totalCachedTokens = snapshot.totalCachedTokens;
-    conversation.totalCostUSD = snapshot.totalCostUSD;
-    conversation.totalInputTokens = snapshot.totalInputTokens;
-    conversation.totalOutputTokens = snapshot.totalOutputTokens;
-    conversation.totalReasoningTokens = snapshot.totalReasoningTokens ?? 0;
-    conversation.updatedAt = snapshot.updatedAt;
+    conversation.createdAt = restoredSnapshot.createdAt;
+    conversation.totalCachedTokens = restoredSnapshot.totalCachedTokens;
+    conversation.totalCostUSD = restoredSnapshot.totalCostUSD;
+    conversation.totalInputTokens = restoredSnapshot.totalInputTokens;
+    conversation.totalOutputTokens = restoredSnapshot.totalOutputTokens;
+    conversation.totalReasoningTokens =
+      restoredSnapshot.totalReasoningTokens ?? 0;
+    conversation.updatedAt = restoredSnapshot.updatedAt;
     return conversation;
-  }
-
-  private applyUsage(usage: UsageMetrics): void {
-    this.totalCachedTokens += usage.cachedTokens;
-    this.totalCostUSD += usage.costUSD;
-    this.totalInputTokens += usage.inputTokens;
-    this.totalOutputTokens += usage.outputTokens;
-    this.totalReasoningTokens += usage.reasoningTokens ?? 0;
-    this.updatedAt = new Date().toISOString();
   }
 
   private async prepareMessages(
@@ -994,9 +1050,7 @@ export class Conversation {
           'incomplete_tool_call_arguments',
         );
       }
-      if (
-        (finishReason === 'tool_call') !== (pendingToolCalls.size > 0)
-      ) {
+      if ((finishReason === 'tool_call') !== pendingToolCalls.size > 0) {
         throw invalidToolStreamState(
           model,
           provider,
@@ -1055,10 +1109,7 @@ export class Conversation {
           });
         }
       }
-      workingMessages = [
-        ...workingMessages,
-        toolResultMessage,
-      ];
+      workingMessages = [...workingMessages, toolResultMessage];
       if (!this.hasToolExecutor()) {
         yield decorate({
           finishReason,
@@ -1090,7 +1141,7 @@ export class Conversation {
   private hasToolExecutor(): boolean {
     return Boolean(
       this.toolCallDispatcher ||
-        this.tools?.some((tool) => typeof tool.execute === 'function'),
+      this.tools?.some((tool) => typeof tool.execute === 'function'),
     );
   }
 
@@ -1159,27 +1210,27 @@ export class Conversation {
         throw new Error(`No tool schema registered for "${toolCall.name}".`);
       }
       const result = await executeToolWithGuards(
-        (toolSignal) => {
-          if (this.toolCallDispatcher) {
-            if (!model || !provider) {
-              throw new Error(
-                'Tool dispatcher requires resolved model and provider.',
-              );
+        (toolSignal) =>
+          this.runToolExecutionCallback(() => {
+            if (this.toolCallDispatcher) {
+              if (!model || !provider) {
+                throw new Error(
+                  'Tool dispatcher requires resolved model and provider.',
+                );
+              }
+              return this.toolCallDispatcher.execute({
+                call: toolCall,
+                model,
+                provider,
+                sessionId: this.sessionId,
+                signal: toolSignal,
+                ...(this.toolCallDispatcherMetadata !== undefined
+                  ? { metadata: cloneValue(this.toolCallDispatcherMetadata) }
+                  : {}),
+              });
             }
-            return this.toolCallDispatcher.execute({
-              call: toolCall,
-              model,
-              provider,
-              sessionId: this.sessionId,
-              signal: toolSignal,
-              ...(this.toolCallDispatcherMetadata !== undefined
-                ? { metadata: cloneValue(this.toolCallDispatcherMetadata) }
-                : {}),
-            });
-          }
 
-          return Promise.resolve(
-            execute!(toolCall.args, {
+            return execute!(toolCall.args, {
               ...(model !== undefined ? { model } : {}),
               ...(provider !== undefined ? { provider } : {}),
               signal: toolSignal,
@@ -1187,9 +1238,8 @@ export class Conversation {
               ...(this.tenantId !== undefined
                 ? { tenantId: this.tenantId }
                 : {}),
-            }),
-          );
-        },
+            });
+          }),
         this.toolExecutionTimeoutMs,
         signal,
       );
@@ -1213,29 +1263,126 @@ export class Conversation {
     provider?: CanonicalProvider;
     usage: UsageMetrics;
   }): Promise<void> {
-    this.messages = result.messages;
-    if (result.model !== undefined) {
-      this.model = result.model;
-    }
-    if (result.provider !== undefined) {
-      this.provider = result.provider;
-    }
-    this.applyUsage(result.usage);
-    await this.persist();
+    const state: ConversationState = {
+      messages: cloneValue(result.messages),
+      model: result.model ?? this.model,
+      provider: result.provider ?? this.provider,
+      totalCachedTokens: this.totalCachedTokens + result.usage.cachedTokens,
+      totalCostUSD: this.totalCostUSD + result.usage.costUSD,
+      totalInputTokens: this.totalInputTokens + result.usage.inputTokens,
+      totalOutputTokens: this.totalOutputTokens + result.usage.outputTokens,
+      totalReasoningTokens:
+        this.totalReasoningTokens + (result.usage.reasoningTokens ?? 0),
+      updatedAt: new Date().toISOString(),
+    };
+    const snapshot = this.buildSnapshot(state);
+    await this.persistSnapshot(snapshot, state.model, state.provider);
+
+    this.messages = state.messages;
+    this.model = state.model;
+    this.provider = state.provider;
+    this.totalCachedTokens = state.totalCachedTokens;
+    this.totalCostUSD = state.totalCostUSD;
+    this.totalInputTokens = state.totalInputTokens;
+    this.totalOutputTokens = state.totalOutputTokens;
+    this.totalReasoningTokens = state.totalReasoningTokens;
+    this.updatedAt = state.updatedAt;
   }
 
-  private async persist(): Promise<void> {
+  private async persistSnapshot(
+    snapshot: ConversationSnapshot,
+    model: string | undefined,
+    provider: CanonicalProvider | undefined,
+  ): Promise<void> {
     if (!this.store) {
       return;
     }
 
-    const snapshot = this.serialise();
     await this.store.set(this.sessionId, snapshot, {
       createdAt: this.createdAt,
-      ...(this.model !== undefined ? { model: this.model } : {}),
-      ...(this.provider !== undefined ? { provider: this.provider } : {}),
+      ...(model !== undefined ? { model } : {}),
+      ...(provider !== undefined ? { provider } : {}),
       ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
     });
+  }
+
+  private acquireTurn(signal: AbortSignal | undefined): Promise<() => void> {
+    throwIfAborted(signal);
+    if (!this.turnActive) {
+      this.turnActive = true;
+      return Promise.resolve(this.createTurnRelease());
+    }
+
+    return new Promise<() => void>((resolve, reject) => {
+      const waiter: TurnWaiter = {
+        reject,
+        resolve,
+        ...(signal ? { signal } : {}),
+      };
+      if (signal) {
+        waiter.onAbort = () => {
+          const index = this.turnWaiters.indexOf(waiter);
+          if (index !== -1) {
+            this.turnWaiters.splice(index, 1);
+          }
+          reject(buildAbortError(signal.reason));
+        };
+        signal.addEventListener('abort', waiter.onAbort, { once: true });
+      }
+      this.turnWaiters.push(waiter);
+    });
+  }
+
+  private assertNoToolExecutionReentrancy(
+    operation: 'send' | 'sendStream',
+  ): void {
+    if (this.activeToolExecutions === 0) {
+      return;
+    }
+    throw new LLMError('Conversation is busy executing a tool callback.', {
+      details: {
+        code: 'conversation_busy',
+        operation,
+        reason: 'tool_execution_reentrancy',
+      },
+      retryable: false,
+      statusCode: 409,
+    });
+  }
+
+  private runToolExecutionCallback(
+    callback: () => JsonValue | Promise<JsonValue>,
+  ): Promise<JsonValue> {
+    this.activeToolExecutions += 1;
+    return Promise.resolve()
+      .then(callback)
+      .finally(() => {
+        this.activeToolExecutions -= 1;
+      });
+  }
+
+  private createTurnRelease(): () => void {
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+
+      while (this.turnWaiters.length > 0) {
+        const waiter = this.turnWaiters.shift()!;
+        if (waiter.onAbort && waiter.signal) {
+          waiter.signal.removeEventListener('abort', waiter.onAbort);
+        }
+        if (waiter.signal?.aborted) {
+          waiter.reject(buildAbortError(waiter.signal.reason));
+          continue;
+        }
+        waiter.resolve(this.createTurnRelease());
+        return;
+      }
+      this.turnActive = false;
+    };
   }
 
   private resolveConversationRoute(

@@ -21,8 +21,9 @@ export function validateAndCloneTools(
   value: unknown,
   provider?: ValidationContext['provider'],
   model?: string,
+  validationContext?: ValidationContext,
 ): CanonicalTool[] {
-  const context = toolContext(provider, model);
+  const context = validationContext ?? toolContext(provider, model);
   const seen = new Map<string, number>();
   return inspectArray(value, context, 'tools').map((item, index) => {
     const tool = cloneTool(item.value, context, `tools[${index}]`);

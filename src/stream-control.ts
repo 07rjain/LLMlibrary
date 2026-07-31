@@ -13,9 +13,13 @@ export function buildAbortError(reason: unknown): Error {
 export function createCancelableStream<TChunk>(
   iterate: (signal: AbortSignal) => AsyncGenerator<TChunk, void, void>,
   upstreamSignal?: AbortSignal,
+  closeIteratorOnCancel = false,
 ): CancelableStream<TChunk> {
   const controller = new AbortController();
-  const removeUpstreamListener = subscribeAbortSignal(upstreamSignal, controller);
+  const removeUpstreamListener = subscribeAbortSignal(
+    upstreamSignal,
+    controller,
+  );
 
   let iterator: AsyncGenerator<TChunk, void, void> | undefined;
   let closed = false;
@@ -26,8 +30,21 @@ export function createCancelableStream<TChunk>(
     }
 
     closed = true;
+    if (closeIteratorOnCancel) {
+      controller.signal.removeEventListener('abort', closeIteratorOnAbort);
+    }
     removeUpstreamListener?.();
   };
+  function closeIteratorOnAbort(): void {
+    if (iterator) {
+      void iterator.return(undefined).catch(() => undefined);
+    }
+  }
+  if (closeIteratorOnCancel) {
+    controller.signal.addEventListener('abort', closeIteratorOnAbort, {
+      once: true,
+    });
+  }
 
   return {
     cancel(reason?: unknown): void {

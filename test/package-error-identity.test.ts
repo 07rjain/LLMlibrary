@@ -27,11 +27,38 @@ const gemini = await import('unified-llm-client/providers/gemini');
 const openai = await import('unified-llm-client/providers/openai');
 
 assert.equal(errors.ProviderCapabilityError, root.ProviderCapabilityError);
+assert.equal(
+  errors.InvalidConversationSnapshotError,
+  root.InvalidConversationSnapshotError,
+);
 assert.equal(errors.MockQueueExhaustedError, root.MockQueueExhaustedError);
 assert.equal(models.ModelRegistry, root.ModelRegistry);
 assert.equal(models.defaultModelPrices, root.defaultModelPrices);
 assert.equal(sessionApiModule.SessionApi, root.SessionApi);
 assert.equal(sessionApiModule.createSessionApi, root.createSessionApi);
+
+let snapshotError;
+try {
+  root.Conversation.restore(
+    { complete: async () => {}, stream: async function* () {} },
+    null,
+  );
+} catch (error) {
+  snapshotError = error;
+}
+assert.equal(
+  snapshotError instanceof errors.InvalidConversationSnapshotError,
+  true,
+);
+assert.equal(
+  snapshotError instanceof root.InvalidConversationSnapshotError,
+  true,
+);
+assert.deepEqual(snapshotError.details, {
+  code: 'invalid_conversation_snapshot',
+  constraint: 'plain_object',
+  path: 'snapshot',
+});
 
 const mockQueueError = await root.LLMClient.mock()
   .complete({ messages: [{ role: 'user', content: 'x' }] })
@@ -291,11 +318,38 @@ const assert = require('node:assert/strict');
   const openai = require('unified-llm-client/providers/openai');
 
   assert.equal(errors.ProviderCapabilityError, root.ProviderCapabilityError);
+  assert.equal(
+    errors.InvalidConversationSnapshotError,
+    root.InvalidConversationSnapshotError,
+  );
   assert.equal(errors.MockQueueExhaustedError, root.MockQueueExhaustedError);
   assert.equal(models.ModelRegistry, root.ModelRegistry);
   assert.equal(models.defaultModelPrices, root.defaultModelPrices);
   assert.equal(sessionApiModule.SessionApi, root.SessionApi);
   assert.equal(sessionApiModule.createSessionApi, root.createSessionApi);
+
+  let snapshotError;
+  try {
+    root.Conversation.restore(
+      { complete: async () => {}, stream: async function* () {} },
+      null,
+    );
+  } catch (error) {
+    snapshotError = error;
+  }
+  assert.equal(
+    snapshotError instanceof errors.InvalidConversationSnapshotError,
+    true,
+  );
+  assert.equal(
+    snapshotError instanceof root.InvalidConversationSnapshotError,
+    true,
+  );
+  assert.deepEqual(snapshotError.details, {
+    code: 'invalid_conversation_snapshot',
+    constraint: 'plain_object',
+    path: 'snapshot',
+  });
 
   const mockQueueError = await root.LLMClient.mock()
     .complete({ messages: [{ role: 'user', content: 'x' }] })

@@ -4,6 +4,7 @@ import {
   AuthenticationError,
   BudgetExceededError,
   ContextLimitError,
+  InvalidConversationSnapshotError,
   LLMError,
   MaxToolRoundsError,
   ProviderCapabilityError,
@@ -63,6 +64,28 @@ describe('LLMError hierarchy', () => {
     expect(new ProviderCapabilityError('capability')).toBeInstanceOf(LLMError);
     expect(new BudgetExceededError('budget')).toBeInstanceOf(LLMError);
     expect(new MaxToolRoundsError('rounds')).toBeInstanceOf(LLMError);
+    expect(
+      new InvalidConversationSnapshotError('snapshot.messages', 'dense_array'),
+    ).toBeInstanceOf(LLMError);
     expect(new ProviderError('provider')).toBeInstanceOf(LLMError);
+  });
+
+  it('keeps invalid snapshot errors stable and sanitized', () => {
+    const error = new InvalidConversationSnapshotError(
+      'snapshot.totalInputTokens',
+      'finite_non_negative_safe_integer',
+    );
+
+    expect(error.toJSON()).toMatchObject({
+      details: {
+        code: 'invalid_conversation_snapshot',
+        constraint: 'finite_non_negative_safe_integer',
+        path: 'snapshot.totalInputTokens',
+      },
+      message: 'Conversation snapshot is invalid.',
+      name: 'InvalidConversationSnapshotError',
+      retryable: false,
+      statusCode: 400,
+    });
   });
 });

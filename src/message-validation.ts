@@ -31,14 +31,15 @@ const PART_FIELDS: Record<string, readonly string[]> = {
 
 export function validateAndCloneCanonicalMessages(
   value: unknown,
-): CanonicalMessage[] {
-  const context: ValidationContext = {
+  context: ValidationContext = {
     code: 'invalid_context_manager_output',
     message: 'Context manager returned invalid canonical messages.',
     option: 'contextManager.trim',
-  };
-  return inspectArray(value, context, 'messages').map((descriptor, index) =>
-    cloneMessage(descriptor.value, context, `messages[${index}]`),
+  },
+  path = 'messages',
+): CanonicalMessage[] {
+  return inspectArray(value, context, path).map((descriptor, index) =>
+    cloneMessage(descriptor.value, context, `${path}[${index}]`),
   );
 }
 
@@ -69,9 +70,15 @@ function cloneMessage(
           (descriptor, index) =>
             clonePart(descriptor.value, context, `${path}.content[${index}]`),
         );
-  const metadata = hasValue(descriptors, 'metadata')
-    ? cloneJson(readValue(descriptors, 'metadata'), context, `${path}.metadata`)
-    : undefined;
+  const metadata =
+    hasValue(descriptors, 'metadata') &&
+    readValue(descriptors, 'metadata') !== undefined
+      ? cloneJson(
+          readValue(descriptors, 'metadata'),
+          context,
+          `${path}.metadata`,
+        )
+      : undefined;
   if (
     metadata !== undefined &&
     (typeof metadata !== 'object' ||
@@ -104,7 +111,7 @@ function clonePart(
   const descriptors = inspectRecord(value, context, path, PART_FIELDS[type]);
   const string = (key: string, optional = false): string | undefined => {
     const field = readValue(descriptors, key);
-    if (!hasValue(descriptors, key) && optional) {
+    if (optional && (!hasValue(descriptors, key) || field === undefined)) {
       return undefined;
     }
     if (typeof field !== 'string') {
@@ -112,18 +119,29 @@ function clonePart(
     }
     return field;
   };
-  const cacheControl = hasValue(descriptors, 'cacheControl')
-    ? validateCacheControl(
-        readValue(descriptors, 'cacheControl'),
-        {
-          ...context,
-          code: 'invalid_cache_control',
-          message: 'Invalid Anthropic cache control.',
-          option: 'cacheControl',
-        },
-        `${path}.cacheControl`,
-      )
-    : undefined;
+  const identifier = (key: string, optional = false): string | undefined => {
+    const field = string(key, optional);
+    if (field !== undefined && field.length === 0) {
+      return invalid(context, 'non_empty_string', {
+        path: `${path}.${key}`,
+      });
+    }
+    return field;
+  };
+  const cacheControl =
+    hasValue(descriptors, 'cacheControl') &&
+    readValue(descriptors, 'cacheControl') !== undefined
+      ? validateCacheControl(
+          readValue(descriptors, 'cacheControl'),
+          {
+            ...context,
+            code: 'invalid_cache_control',
+            message: 'Invalid Anthropic cache control.',
+            option: 'cacheControl',
+          },
+          `${path}.cacheControl`,
+        )
+      : undefined;
 
   switch (type) {
     case 'text':
@@ -190,8 +208,8 @@ function clonePart(
       return {
         args: args as JsonObject,
         ...(cacheControl ? { cacheControl } : {}),
-        id: string('id')!,
-        name: string('name')!,
+        id: identifier('id')!,
+        name: identifier('name')!,
         type,
       };
     }
@@ -207,15 +225,15 @@ function clonePart(
       return {
         ...(cacheControl ? { cacheControl } : {}),
         ...(typeof isError === 'boolean' ? { isError } : {}),
-        ...(string('name', true) !== undefined
-          ? { name: string('name', true)! }
+        ...(identifier('name', true) !== undefined
+          ? { name: identifier('name', true)! }
           : {}),
         result: cloneJson(
           readValue(descriptors, 'result'),
           context,
           `${path}.result`,
         ),
-        toolCallId: string('toolCallId')!,
+        toolCallId: identifier('toolCallId')!,
         type,
       };
     }

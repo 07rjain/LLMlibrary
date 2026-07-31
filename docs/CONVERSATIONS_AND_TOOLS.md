@@ -53,8 +53,12 @@ When a stored snapshot is restored, the saved message history and usage totals
 are reused, but current caller options should be treated as the trusted runtime
 policy. Pass the current `system`, tenant, model/provider, budget, tool
 validation, tool limits, response format, and registered tools when those values
-must be enforced for a request. Do not import or trust client-controlled
-snapshots as authoritative policy.
+must be enforced for a request. Snapshot hydration is fail-closed: malformed
+messages, timestamps, totals, unsafe descriptors, cycles, and non-finite numeric
+state throw `InvalidConversationSnapshotError` before a conversation is
+constructed. Trusted runtime overrides do not bypass validation of corrupt
+stored fields. Do not import or trust client-controlled snapshots as
+authoritative policy.
 
 ## Inspect And Export State
 
@@ -94,6 +98,24 @@ for await (const chunk of stream) {
 ```
 
 `conversation.sendStream()` also supports `.cancel()` because it returns the same cancelable stream abstraction as `client.stream()`.
+
+Calls to `send()` and consumed `sendStream()` instances on the same
+`Conversation` run in FIFO order. Each turn sees the history and totals committed
+by the preceding turn. Creating a stream without iterating it does not occupy
+the queue. If a consumer stops before the stream finishes, call `.cancel()` or
+the iterator's `.return()` method (a `for await` early exit does this
+automatically) so the next queued turn can start.
+
+While a tool callback is running, starting another `send()` or beginning
+iteration of another `sendStream()` on that same `Conversation` fails with a
+non-retryable `conversation_busy` error. This prevents a tool from deadlocking
+or mutating its own conversation after a timeout. The same narrow guard also
+rejects an external caller that arrives during the callback because portable
+edge runtimes cannot reliably distinguish callback ownership. A timed-out tool
+that ignores cancellation keeps the guard until its callback actually settles;
+turns already queued before that callback began are checked again when they
+acquire the FIFO slot and reject rather than running alongside it. Ordinary
+overlapping turns outside tool callbacks continue to use FIFO order.
 
 ## Add Tools
 

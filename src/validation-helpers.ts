@@ -6,6 +6,10 @@ const BLOCKED = new Set(['__proto__', 'constructor', 'prototype']);
 
 export interface ValidationContext {
   code: string;
+  createError?: (
+    constraint: string,
+    details: Readonly<Record<string, unknown>>,
+  ) => never;
   message: string;
   model?: string;
   option: string;
@@ -20,6 +24,9 @@ export function invalid(
   if (typeof details.path === 'string') {
     const path = details.path.replace(/\p{C}/gu, '?');
     details.path = path.length > 256 ? `${path.slice(0, 253)}...` : path;
+  }
+  if (context.createError) {
+    return context.createError(constraint, details);
   }
   throw new ProviderCapabilityError(context.message, {
     details: {
@@ -114,6 +121,25 @@ export function cloneJson(
   ancestors = new Set<object>(),
   depth = 0,
 ): JsonValue {
+  return cloneJsonValue(value, context, path, ancestors, depth, false);
+}
+
+export function cloneJsonOmittingUndefinedProperties(
+  value: unknown,
+  context: ValidationContext,
+  path: string,
+): JsonValue {
+  return cloneJsonValue(value, context, path, new Set<object>(), 0, true);
+}
+
+function cloneJsonValue(
+  value: unknown,
+  context: ValidationContext,
+  path: string,
+  ancestors: Set<object>,
+  depth: number,
+  omitUndefinedProperties: boolean,
+): JsonValue {
   if (
     value === null ||
     typeof value === 'boolean' ||
@@ -139,28 +165,33 @@ export function cloneJson(
   try {
     if (Array.isArray(value)) {
       return inspectArray(value, context, path).map((item, index) =>
-        cloneJson(
+        cloneJsonValue(
           item.value,
           context,
           `${path}[${index}]`,
           ancestors,
           depth + 1,
+          omitUndefinedProperties,
         ),
       );
     }
     return Object.fromEntries(
-      Object.entries(inspectRecord(value, context, path)).map(
-        ([key, descriptor]) => [
+      Object.entries(inspectRecord(value, context, path))
+        .filter(
+          ([, descriptor]) =>
+            !omitUndefinedProperties || descriptor.value !== undefined,
+        )
+        .map(([key, descriptor]) => [
           key,
-          cloneJson(
+          cloneJsonValue(
             descriptor.value,
             context,
             `${path}.${key}`,
             ancestors,
             depth + 1,
+            omitUndefinedProperties,
           ),
-        ],
-      ),
+        ]),
     );
   } finally {
     ancestors.delete(value);

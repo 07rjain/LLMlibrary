@@ -8,6 +8,7 @@ import {
 import { Conversation } from '../src/conversation.js';
 import {
   BudgetExceededError,
+  InvalidConversationSnapshotError,
   MaxToolRoundsError,
   ProviderCapabilityError,
   ProviderError,
@@ -2065,15 +2066,429 @@ describe('Conversation', () => {
         ...snapshot,
         maxToolRounds: Number.POSITIVE_INFINITY,
       }),
-    ).toThrow('maxToolRounds must be an integer between 0 and 100.');
+    ).toThrow(InvalidConversationSnapshotError);
     expect(() =>
       Conversation.restore(client, {
         ...snapshot,
         toolExecutionTimeoutMs: Number.POSITIVE_INFINITY,
       }),
-    ).toThrow(
-      'toolExecutionTimeoutMs must be a finite number between 1 and 300000.',
+    ).toThrow(InvalidConversationSnapshotError);
+  });
+
+  it('rejects unsafe snapshot roots without invoking accessors or effects', () => {
+    const complete = vi.fn();
+    const stream = vi.fn();
+    const store = { set: vi.fn() };
+    const getter = vi.fn(() => []);
+    const withGetter = Object.defineProperty(
+      { ...validSnapshot() },
+      'messages',
+      { enumerable: true, get: getter },
     );
+    const withSymbol = {
+      ...validSnapshot(),
+      [Symbol('secret')]: 'hidden',
+    };
+    const classInstance = Object.assign(
+      new (class StoredConversation {})(),
+      validSnapshot(),
+    );
+    const inherited = Object.assign(
+      Object.create({ inherited: true }) as Record<string, unknown>,
+      validSnapshot(),
+    );
+    const throwingProxy = new Proxy(validSnapshot(), {
+      getPrototypeOf() {
+        throw new Error('private proxy failure');
+      },
+    });
+
+    for (const candidate of [
+      null,
+      [],
+      classInstance,
+      inherited,
+      withGetter,
+      withSymbol,
+      throwingProxy,
+    ]) {
+      let error: unknown;
+      try {
+        Conversation.restore({ complete, stream }, candidate, {
+          onCompaction: vi.fn(),
+          onWarning: vi.fn(),
+          store: store as never,
+        });
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(InvalidConversationSnapshotError);
+      expect(error).toMatchObject({
+        details: {
+          code: 'invalid_conversation_snapshot',
+          constraint: expect.any(String),
+          path: expect.any(String),
+        },
+        message: 'Conversation snapshot is invalid.',
+        retryable: false,
+        statusCode: 400,
+      });
+      expect(
+        Object.keys(
+          (error as InvalidConversationSnapshotError).details ?? {},
+        ).sort(),
+      ).toEqual(['code', 'constraint', 'path']);
+      expect(
+        JSON.stringify((error as Error & { toJSON(): unknown }).toJSON()),
+      ).not.toContain('private proxy failure');
+    }
+
+    expect(getter).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+    expect(stream).not.toHaveBeenCalled();
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it('validates snapshot identifiers, timestamps, totals, and numeric options', () => {
+    const client: ConversationClient = {
+      complete: vi.fn(),
+      stream: vi.fn(),
+    };
+    const invalidSnapshots: Array<[string, unknown, string]> = [
+      ['sessionId', '', 'non_empty_string_without_control_characters'],
+      ['sessionId', 'bad\nid', 'non_empty_string_without_control_characters'],
+      ['createdAt', 'not-a-date', 'parseable_date'],
+      ['updatedAt', 'not-a-date', 'parseable_date'],
+      ['updatedAt', '2026-04-15T09:59:59.999Z', 'not_before_created_at'],
+    ];
+    for (const [field, value, constraint] of invalidSnapshots) {
+      expect(() =>
+        Conversation.restore(client, {
+          ...validSnapshot(),
+          [field]: value,
+        }),
+      ).toThrowError(
+        expect.objectContaining({
+          details: {
+            code: 'invalid_conversation_snapshot',
+            constraint,
+            path: `snapshot.${field}`,
+          },
+        }),
+      );
+    }
+
+    const invalidNumbers = [
+      -1,
+      1.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      Number.MAX_SAFE_INTEGER + 1,
+    ];
+    for (const field of [
+      'totalCachedTokens',
+      'totalInputTokens',
+      'totalOutputTokens',
+      'totalReasoningTokens',
+    ] as const) {
+      for (const value of invalidNumbers) {
+        expect(() =>
+          Conversation.restore(client, {
+            ...validSnapshot(),
+            [field]: value,
+          }),
+        ).toThrow(InvalidConversationSnapshotError);
+      }
+    }
+    for (const value of [
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ]) {
+      expect(() =>
+        Conversation.restore(client, {
+          ...validSnapshot(),
+          totalCostUSD: value,
+        }),
+      ).toThrow(InvalidConversationSnapshotError);
+    }
+
+    const invalidOptions: Array<[string, unknown]> = [
+      ['budgetUsd', Number.NaN],
+      ['budgetUsd', -1],
+      ['maxContextTokens', 1.5],
+      ['maxContextTokens', Number.MAX_SAFE_INTEGER + 1],
+      ['maxTokens', Number.POSITIVE_INFINITY],
+      ['maxTokens', -1],
+      ['maxToolRounds', 1.5],
+      ['maxToolRounds', 101],
+      ['toolExecutionTimeoutMs', 0],
+      ['toolExecutionTimeoutMs', Number.NEGATIVE_INFINITY],
+    ];
+    for (const [field, value] of invalidOptions) {
+      expect(() =>
+        Conversation.restore(client, {
+          ...validSnapshot(),
+          [field]: value,
+        }),
+      ).toThrow(InvalidConversationSnapshotError);
+    }
+
+    for (const providerOptions of [
+      { unsupported: {} },
+      { openai: [] },
+      { openai: { reasoning: { effort: 'ultra' } } },
+      { google: { thinking: { budgetTokens: Number.NaN } } },
+      { anthropic: { thinking: { budgetTokens: -1, type: 'enabled' } } },
+      { anthropic: { thinking: { budgetTokens: 10 } } },
+    ]) {
+      expect(() =>
+        Conversation.restore(client, {
+          ...validSnapshot(),
+          providerOptions,
+        }),
+      ).toThrow(InvalidConversationSnapshotError);
+    }
+
+    for (const requiredField of [
+      'createdAt',
+      'messages',
+      'sessionId',
+      'totalCachedTokens',
+      'totalCostUSD',
+      'totalInputTokens',
+      'totalOutputTokens',
+      'updatedAt',
+    ]) {
+      expect(() =>
+        Conversation.restore(client, {
+          ...validSnapshot(),
+          [requiredField]: undefined,
+        }),
+      ).toThrow(InvalidConversationSnapshotError);
+    }
+  });
+
+  it('validates dense canonical snapshot messages and tool payloads', () => {
+    const client: ConversationClient = {
+      complete: vi.fn(),
+      stream: vi.fn(),
+    };
+    const cyclicArgs: Record<string, unknown> = {};
+    cyclicArgs.self = cyclicArgs;
+    const pollutedArgs = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(pollutedArgs, '__proto__', {
+      enumerable: true,
+      value: 'blocked',
+    });
+    const sparseMessages = new Array<CanonicalMessage>(1);
+    const invalidMessages: unknown[] = [
+      null,
+      sparseMessages,
+      [{ content: 'bad role', role: 'tool' }],
+      [{ content: new Array(1), role: 'user' }],
+      [
+        {
+          content: [{ args: {}, id: '', name: 'lookup', type: 'tool_call' }],
+          role: 'assistant',
+        },
+      ],
+      [
+        {
+          content: [{ args: {}, id: 'call-1', name: '', type: 'tool_call' }],
+          role: 'assistant',
+        },
+      ],
+      [
+        {
+          content: [
+            {
+              args: cyclicArgs,
+              id: 'call-1',
+              name: 'lookup',
+              type: 'tool_call',
+            },
+          ],
+          role: 'assistant',
+        },
+      ],
+      [
+        {
+          content: [
+            {
+              args: pollutedArgs,
+              id: 'call-1',
+              name: 'lookup',
+              type: 'tool_call',
+            },
+          ],
+          role: 'assistant',
+        },
+      ],
+      [
+        {
+          content: [
+            {
+              result: Number.NaN,
+              toolCallId: 'call-1',
+              type: 'tool_result',
+            },
+          ],
+          role: 'user',
+        },
+      ],
+      [
+        {
+          content: [{ result: null, toolCallId: '', type: 'tool_result' }],
+          role: 'user',
+        },
+      ],
+    ];
+
+    for (const messages of invalidMessages) {
+      expect(() =>
+        Conversation.restore(client, {
+          ...validSnapshot(),
+          messages,
+        }),
+      ).toThrow(InvalidConversationSnapshotError);
+    }
+  });
+
+  it('does not let trusted overrides bypass stored corruption', () => {
+    const client: ConversationClient = {
+      complete: vi.fn(),
+      stream: vi.fn(),
+    };
+
+    expect(() =>
+      Conversation.restore(
+        client,
+        { ...validSnapshot(), maxTokens: Number.NaN },
+        { maxTokens: 64, model: 'trusted-model', provider: 'mock' },
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        details: {
+          code: 'invalid_conversation_snapshot',
+          constraint: 'finite_non_negative_safe_integer',
+          path: 'snapshot.maxTokens',
+        },
+      }),
+    );
+  });
+
+  it('restores legacy snapshots, ignores unknown safe fields, and deep clones', () => {
+    const snapshot = {
+      ...validSnapshot(),
+      budgetUsd: undefined,
+      futureField: { version: 2 },
+      maxContextTokens: undefined,
+      maxTokens: undefined,
+      messages: [
+        {
+          content: [
+            {
+              args: { city: 'Paris' },
+              cacheControl: undefined,
+              id: 'call-1',
+              name: 'lookup',
+              type: 'tool_call' as const,
+            },
+          ],
+          metadata: undefined,
+          pinned: undefined,
+          role: 'assistant' as const,
+        },
+      ],
+      model: undefined,
+      provider: undefined,
+      providerOptions: {
+        anthropic: undefined,
+        google: {
+          thinking: {
+            budgetTokens: undefined,
+            includeThoughts: undefined,
+            level: undefined,
+          },
+        },
+        openai: undefined,
+      },
+      responseFormat: undefined,
+      system: undefined,
+      tenantId: undefined,
+      toolChoice: undefined,
+      tools: undefined,
+      toolValidation: undefined,
+      totalReasoningTokens: undefined,
+    };
+    const restored = Conversation.restore(
+      { complete: vi.fn(), stream: vi.fn() },
+      snapshot,
+    );
+
+    (snapshot.messages[0]!.content[0] as { args: { city: string } }).args.city =
+      'mutated';
+    expect(restored.history).toEqual([
+      {
+        content: [
+          {
+            args: { city: 'Paris' },
+            id: 'call-1',
+            name: 'lookup',
+            type: 'tool_call',
+          },
+        ],
+        role: 'assistant',
+      },
+    ]);
+    expect(restored.totals.reasoningTokens).toBe(0);
+    expect(restored.serialise()).not.toHaveProperty('futureField');
+  });
+
+  it('enforces snapshot thinking-budget integer boundaries', () => {
+    const client: ConversationClient = {
+      complete: vi.fn(),
+      stream: vi.fn(),
+    };
+    const restoreWithThinking = (providerOptions: unknown) =>
+      Conversation.restore(client, {
+        ...validSnapshot(),
+        providerOptions,
+      });
+
+    expect(() =>
+      restoreWithThinking({
+        anthropic: { thinking: { budgetTokens: 0, type: 'enabled' } },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      restoreWithThinking({
+        google: { thinking: { budgetTokens: -1 } },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      restoreWithThinking({
+        google: { thinking: { budgetTokens: 0 } },
+      }),
+    ).not.toThrow();
+
+    for (const providerOptions of [
+      { anthropic: { thinking: { budgetTokens: -1, type: 'enabled' } } },
+      { google: { thinking: { budgetTokens: -2 } } },
+      { google: { thinking: { budgetTokens: 1.5 } } },
+      {
+        google: {
+          thinking: { budgetTokens: Number.MAX_SAFE_INTEGER + 1 },
+        },
+      },
+    ]) {
+      expect(() => restoreWithThinking(providerOptions)).toThrow(
+        InvalidConversationSnapshotError,
+      );
+    }
   });
 
   it('exports markdown transcripts with session metadata and structured parts', async () => {
@@ -3089,6 +3504,799 @@ describe('Conversation', () => {
       }),
     );
   });
+
+  it('rejects nested turns after await and starts nested streams lazily', async () => {
+    const nestedErrors: unknown[] = [];
+    const execute = vi.fn(async () => {
+      await Promise.resolve();
+      conversation.sendStream('never-consumed');
+      try {
+        await collectStream(conversation.sendStream('nested-stream'));
+      } catch (error) {
+        nestedErrors.push(error);
+      }
+      try {
+        await conversation.send('nested-send');
+      } catch (error) {
+        nestedErrors.push(error);
+      }
+      return { ok: true };
+    });
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockResolvedValueOnce(toolCallResponse('nested_tool'))
+      .mockResolvedValueOnce(response('outer-done'))
+      .mockResolvedValueOnce(response('after-done'));
+    const conversation = new Conversation(
+      { complete, stream: vi.fn() },
+      { tools: [buildTool('nested_tool', execute)] },
+    );
+
+    await conversation.send('outer');
+
+    expect(nestedErrors).toHaveLength(2);
+    expect(nestedErrors[0]).toMatchObject({
+      details: {
+        code: 'conversation_busy',
+        operation: 'sendStream',
+        reason: 'tool_execution_reentrancy',
+      },
+      retryable: false,
+      statusCode: 409,
+    });
+    expect(nestedErrors[1]).toMatchObject({
+      details: {
+        code: 'conversation_busy',
+        operation: 'send',
+        reason: 'tool_execution_reentrancy',
+      },
+      retryable: false,
+      statusCode: 409,
+    });
+    expect(complete).toHaveBeenCalledTimes(2);
+
+    await conversation.send('after');
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect(conversation.history.at(-1)).toEqual({
+      content: 'after-done',
+      role: 'assistant',
+    });
+  });
+
+  it('keeps timed-out callbacks guarded through late settlement', async () => {
+    const releaseTool = deferred<void>();
+    const toolSettled = deferred<void>();
+    let nestedError: unknown;
+    const execute = vi.fn(async () => {
+      try {
+        await releaseTool.promise;
+        await conversation.send('late-nested');
+      } catch (error) {
+        nestedError = error;
+      } finally {
+        toolSettled.resolve();
+      }
+      return { late: true };
+    });
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockResolvedValueOnce(toolCallResponse('slow_nested_tool'))
+      .mockResolvedValueOnce(response('outer-after-timeout'))
+      .mockResolvedValueOnce(response('ordinary-after-late-settlement'));
+    const conversation = new Conversation(
+      { complete, stream: vi.fn() },
+      {
+        toolExecutionTimeoutMs: 1,
+        tools: [buildTool('slow_nested_tool', execute)],
+      },
+    );
+
+    await conversation.send('outer');
+    const stableHistory = conversation.history;
+    const stableTotals = conversation.totals;
+
+    await expect(
+      conversation.send('external-during-late-tool'),
+    ).rejects.toMatchObject({
+      details: {
+        code: 'conversation_busy',
+        operation: 'send',
+        reason: 'tool_execution_reentrancy',
+      },
+      retryable: false,
+      statusCode: 409,
+    });
+    expect(complete).toHaveBeenCalledTimes(2);
+
+    releaseTool.resolve();
+    await toolSettled.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(nestedError).toMatchObject({
+      details: {
+        code: 'conversation_busy',
+        operation: 'send',
+        reason: 'tool_execution_reentrancy',
+      },
+      retryable: false,
+      statusCode: 409,
+    });
+    expect(conversation.history).toEqual(stableHistory);
+    expect(conversation.totals).toEqual(stableTotals);
+    expect(complete).toHaveBeenCalledTimes(2);
+
+    await conversation.send('ordinary');
+    expect(conversation.history.at(-1)).toEqual({
+      content: 'ordinary-after-late-settlement',
+      role: 'assistant',
+    });
+  });
+
+  it('rejects a send queued before a late tool callback starts', async () => {
+    const providerStarted = deferred<void>();
+    const releaseProvider = deferred<void>();
+    const toolStarted = deferred<void>();
+    const releaseTool = deferred<void>();
+    const toolSettled = deferred<void>();
+    const set = vi.fn(async () => undefined);
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockImplementationOnce(async () => {
+        providerStarted.resolve();
+        await releaseProvider.promise;
+        return toolCallResponse('late_tool');
+      })
+      .mockResolvedValueOnce(response('outer-done'))
+      .mockResolvedValueOnce(response('fresh-done'));
+    const conversation = new Conversation(
+      { complete, stream: vi.fn() },
+      {
+        sessionId: 'queued-before-tool',
+        store: { set } as never,
+        toolExecutionTimeoutMs: 1,
+        tools: [
+          buildTool('late_tool', async () => {
+            toolStarted.resolve();
+            try {
+              await releaseTool.promise;
+            } finally {
+              toolSettled.resolve();
+            }
+            return { late: true };
+          }),
+        ],
+      },
+    );
+
+    const outer = conversation.send('outer');
+    await providerStarted.promise;
+    const queued = conversation.send('queued-before-tool');
+    releaseProvider.resolve();
+    await toolStarted.promise;
+
+    const [outerResult, queuedResult] = await Promise.allSettled([
+      outer,
+      queued,
+    ]);
+    expect(outerResult.status).toBe('fulfilled');
+    expect(queuedResult).toMatchObject({
+      reason: {
+        details: {
+          code: 'conversation_busy',
+          operation: 'send',
+          reason: 'tool_execution_reentrancy',
+        },
+        retryable: false,
+        statusCode: 409,
+      },
+      status: 'rejected',
+    });
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(set).toHaveBeenCalledTimes(1);
+
+    const stableHistory = conversation.history;
+    const stableTotals = conversation.totals;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(conversation.history).toEqual(stableHistory);
+    expect(conversation.totals).toEqual(stableTotals);
+    expect(() => conversation.clear()).toThrowError(
+      expect.objectContaining({
+        details: { code: 'conversation_busy', operation: 'clear' },
+        retryable: false,
+        statusCode: 409,
+      }),
+    );
+
+    releaseTool.resolve();
+    await toolSettled.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await conversation.send('fresh');
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect(set).toHaveBeenCalledTimes(2);
+    expect(conversation.history.at(-1)).toEqual({
+      content: 'fresh-done',
+      role: 'assistant',
+    });
+  });
+
+  it('rejects a consumed stream queued before a late tool callback starts', async () => {
+    const providerStarted = deferred<void>();
+    const releaseProvider = deferred<void>();
+    const toolStarted = deferred<void>();
+    const releaseTool = deferred<void>();
+    const toolSettled = deferred<void>();
+    const stream = vi.fn<ConversationClient['stream']>();
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockImplementationOnce(async () => {
+        providerStarted.resolve();
+        await releaseProvider.promise;
+        return toolCallResponse('late_stream_tool');
+      })
+      .mockResolvedValueOnce(response('outer-done'))
+      .mockResolvedValueOnce(response('fresh-done'));
+    const conversation = new Conversation(
+      { complete, stream },
+      {
+        toolExecutionTimeoutMs: 1,
+        tools: [
+          buildTool('late_stream_tool', async () => {
+            toolStarted.resolve();
+            try {
+              await releaseTool.promise;
+            } finally {
+              toolSettled.resolve();
+            }
+            return { late: true };
+          }),
+        ],
+      },
+    );
+
+    const outer = conversation.send('outer');
+    await providerStarted.promise;
+    const queuedStream = collectStream(
+      conversation.sendStream('queued-before-tool'),
+    );
+    releaseProvider.resolve();
+    await toolStarted.promise;
+
+    const [outerResult, streamResult] = await Promise.allSettled([
+      outer,
+      queuedStream,
+    ]);
+    expect(outerResult.status).toBe('fulfilled');
+    expect(streamResult).toMatchObject({
+      reason: {
+        details: {
+          code: 'conversation_busy',
+          operation: 'sendStream',
+          reason: 'tool_execution_reentrancy',
+        },
+        retryable: false,
+        statusCode: 409,
+      },
+      status: 'rejected',
+    });
+    expect(stream).not.toHaveBeenCalled();
+    const stableHistory = conversation.history;
+    const stableTotals = conversation.totals;
+
+    releaseTool.resolve();
+    await toolSettled.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(conversation.history).toEqual(stableHistory);
+    expect(conversation.totals).toEqual(stableTotals);
+    await conversation.send('fresh');
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect(conversation.history.at(-1)).toEqual({
+      content: 'fresh-done',
+      role: 'assistant',
+    });
+  });
+
+  it('rejects external sends while a tool callback is active', async () => {
+    const started = deferred<void>();
+    const release = deferred<void>();
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockResolvedValueOnce(toolCallResponse('gated_tool'))
+      .mockResolvedValueOnce(response('outer-done'))
+      .mockResolvedValueOnce(response('after-done'));
+    const conversation = new Conversation(
+      { complete, stream: vi.fn() },
+      {
+        tools: [
+          buildTool('gated_tool', async () => {
+            started.resolve();
+            await release.promise;
+            return { ok: true };
+          }),
+        ],
+      },
+    );
+    const outer = conversation.send('outer');
+    await started.promise;
+
+    await expect(conversation.send('external')).rejects.toMatchObject({
+      details: {
+        code: 'conversation_busy',
+        operation: 'send',
+        reason: 'tool_execution_reentrancy',
+      },
+      retryable: false,
+      statusCode: 409,
+    });
+    expect(complete).toHaveBeenCalledTimes(1);
+
+    release.resolve();
+    await outer;
+    await conversation.send('after');
+    expect(conversation.history.map((message) => message.content)).toEqual([
+      'outer',
+      expect.any(Array),
+      expect.any(Array),
+      'outer-done',
+      'after',
+      'after-done',
+    ]);
+  });
+
+  it('releases the tool guard after callback errors and aborts', async () => {
+    const throwingComplete = vi
+      .fn<ConversationClient['complete']>()
+      .mockResolvedValueOnce(toolCallResponse('throwing_tool'))
+      .mockResolvedValueOnce(response('handled-error'))
+      .mockResolvedValueOnce(response('after-error'));
+    const throwingConversation = new Conversation(
+      { complete: throwingComplete, stream: vi.fn() },
+      {
+        tools: [
+          buildTool('throwing_tool', () => {
+            throw new Error('tool failed');
+          }),
+        ],
+      },
+    );
+
+    await throwingConversation.send('outer');
+    await throwingConversation.send('after');
+    expect(throwingComplete).toHaveBeenCalledTimes(3);
+
+    const started = deferred<void>();
+    const callbackSettled = deferred<void>();
+    const abortComplete = vi
+      .fn<ConversationClient['complete']>()
+      .mockResolvedValueOnce(toolCallResponse('abortable_tool'))
+      .mockResolvedValueOnce(response('after-abort'));
+    const abortConversation = new Conversation(
+      { complete: abortComplete, stream: vi.fn() },
+      {
+        tools: [
+          buildTool('abortable_tool', async (_args, context) => {
+            started.resolve();
+            try {
+              await new Promise<void>((_, reject) => {
+                context?.signal?.addEventListener(
+                  'abort',
+                  () => reject(context.signal?.reason),
+                  { once: true },
+                );
+              });
+            } finally {
+              callbackSettled.resolve();
+            }
+            return null;
+          }),
+        ],
+      },
+    );
+    const controller = new AbortController();
+    const reason = new Error('abort outer tool turn');
+    const aborted = abortConversation.send('abort-me', {
+      signal: controller.signal,
+    });
+    await started.promise;
+    controller.abort(reason);
+    await expect(aborted).rejects.toBe(reason);
+    await callbackSettled.promise;
+    await Promise.resolve();
+
+    await abortConversation.send('after-abort');
+    expect(abortComplete).toHaveBeenCalledTimes(2);
+    expect(abortConversation.history).toEqual([
+      { content: 'after-abort', role: 'user' },
+      { content: 'after-abort', role: 'assistant' },
+    ]);
+  });
+
+  it.each([2, 10, 100])(
+    'serializes %i overlapping sends in FIFO order',
+    async (turnCount) => {
+      let active = 0;
+      let maximumActive = 0;
+      const observedMessages: CanonicalMessage[][] = [];
+      const complete = vi.fn<ConversationClient['complete']>(
+        async ({ messages }) => {
+          active += 1;
+          maximumActive = Math.max(maximumActive, active);
+          observedMessages.push(structuredClone(messages));
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          const input = messages.at(-1)?.content;
+          active -= 1;
+          return response(`${String(input)}-reply`);
+        },
+      );
+      const conversation = new Conversation(
+        { complete, stream: vi.fn() },
+        { sessionId: `fifo-${turnCount}` },
+      );
+      const inputs = Array.from(
+        { length: turnCount },
+        (_, index) => `turn-${index}`,
+      );
+
+      await Promise.all(inputs.map((input) => conversation.send(input)));
+
+      expect(maximumActive).toBe(1);
+      expect(observedMessages).toHaveLength(turnCount);
+      expect(observedMessages.map((messages) => messages.length)).toEqual(
+        inputs.map((_, index) => index * 2 + 1),
+      );
+      expect(conversation.history).toEqual(
+        inputs.flatMap((input) => [
+          { content: input, role: 'user' as const },
+          { content: `${input}-reply`, role: 'assistant' as const },
+        ]),
+      );
+      expect(conversation.totals).toMatchObject({
+        inputTokens: turnCount,
+        outputTokens: turnCount,
+      });
+    },
+  );
+
+  it('serializes send and stream turns in acquisition order', async () => {
+    const firstGate = deferred<void>();
+    const complete = vi.fn<ConversationClient['complete']>(
+      async ({ messages }) => {
+        await firstGate.promise;
+        return response(`${String(messages.at(-1)?.content)}-reply`);
+      },
+    );
+    const stream = vi.fn<ConversationClient['stream']>(async function* ({
+      messages,
+    }) {
+      const input = String(messages.at(-1)?.content);
+      yield { delta: `${input}-reply`, type: 'text-delta' };
+      yield {
+        finishReason: 'stop',
+        type: 'done',
+        usage: usage(1, 1, 0.01),
+      };
+    });
+    const conversation = new Conversation({ complete, stream });
+
+    const sent = conversation.send('complete-first');
+    const streamed = collectStream(conversation.sendStream('stream-second'));
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
+    expect(stream).not.toHaveBeenCalled();
+    firstGate.resolve();
+    await Promise.all([sent, streamed]);
+
+    expect(conversation.history).toEqual([
+      { content: 'complete-first', role: 'user' },
+      { content: 'complete-first-reply', role: 'assistant' },
+      { content: 'stream-second', role: 'user' },
+      { content: 'stream-second-reply', role: 'assistant' },
+    ]);
+  });
+
+  it('serializes two streamed turns and releases on iterator return', async () => {
+    const stream = vi.fn<ConversationClient['stream']>(async function* ({
+      messages,
+    }) {
+      const input = String(messages.at(-1)?.content);
+      yield { delta: `${input}-reply`, type: 'text-delta' };
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      yield {
+        finishReason: 'stop',
+        type: 'done',
+        usage: usage(1, 1, 0.01),
+      };
+    });
+    const conversation = new Conversation({
+      complete: vi.fn(),
+      stream,
+    });
+    const firstIterator = conversation
+      .sendStream('stream-first')
+      [Symbol.asyncIterator]();
+    const firstChunk = await firstIterator.next();
+    expect(firstChunk.value).toMatchObject({
+      delta: 'stream-first-reply',
+      type: 'text-delta',
+    });
+
+    const second = collectStream(conversation.sendStream('stream-second'));
+    await Promise.resolve();
+    expect(stream).toHaveBeenCalledTimes(1);
+    await firstIterator.return!();
+    await second;
+
+    expect(stream).toHaveBeenCalledTimes(2);
+    expect(conversation.history).toEqual([
+      { content: 'stream-second', role: 'user' },
+      { content: 'stream-second-reply', role: 'assistant' },
+    ]);
+  });
+
+  it('releases a stream suspended at a yielded chunk when cancel is called', async () => {
+    const stream = vi.fn<ConversationClient['stream']>(
+      async function* (): AsyncGenerator<StreamChunk, void, void> {
+        yield { delta: 'partial', type: 'text-delta' };
+        await new Promise(() => undefined);
+      },
+    );
+    const complete = vi.fn<ConversationClient['complete']>(async () =>
+      response('after-cancel-reply'),
+    );
+    const conversation = new Conversation({ complete, stream });
+    const active = conversation.sendStream('stream');
+    const firstChunk = await active[Symbol.asyncIterator]().next();
+    expect(firstChunk.value).toMatchObject({
+      delta: 'partial',
+      type: 'text-delta',
+    });
+    const queued = conversation.send('after-cancel');
+
+    active.cancel(new Error('stop suspended stream'));
+    await queued;
+
+    expect(conversation.history).toEqual([
+      { content: 'after-cancel', role: 'user' },
+      { content: 'after-cancel-reply', role: 'assistant' },
+    ]);
+  });
+
+  it('removes an aborted queued turn without effects and preserves its reason', async () => {
+    const firstGate = deferred<void>();
+    const complete = vi.fn<ConversationClient['complete']>(
+      async ({ messages }) => {
+        if (messages.at(-1)?.content === 'first') {
+          await firstGate.promise;
+        }
+        return response(`${String(messages.at(-1)?.content)}-reply`);
+      },
+    );
+    const conversation = new Conversation({ complete, stream: vi.fn() });
+    const first = conversation.send('first');
+    const controller = new AbortController();
+    const reason = new Error('queued turn aborted');
+    const aborted = conversation.send('aborted', {
+      signal: controller.signal,
+    });
+    const third = conversation.send('third');
+
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
+    controller.abort(reason);
+    await expect(aborted).rejects.toBe(reason);
+    firstGate.resolve();
+    await Promise.all([first, third]);
+
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(conversation.history).toEqual([
+      { content: 'first', role: 'user' },
+      { content: 'first-reply', role: 'assistant' },
+      { content: 'third', role: 'user' },
+      { content: 'third-reply', role: 'assistant' },
+    ]);
+  });
+
+  it('releases after provider failure and active stream cancellation', async () => {
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockRejectedValueOnce(new Error('first provider failed'))
+      .mockResolvedValueOnce(response('second-reply'))
+      .mockResolvedValueOnce(response('after-cancel-reply'));
+    const stream = vi.fn<ConversationClient['stream']>(({ signal }) =>
+      (async function* () {
+        await new Promise<void>((_, reject) => {
+          signal?.addEventListener('abort', () => reject(signal.reason), {
+            once: true,
+          });
+        });
+        yield* [];
+      })(),
+    );
+    const conversation = new Conversation({ complete, stream });
+
+    const failed = conversation.send('first');
+    const second = conversation.send('second');
+    await expect(failed).rejects.toThrow('first provider failed');
+    await second;
+
+    const activeStream = conversation.sendStream('cancelled');
+    const next = activeStream[Symbol.asyncIterator]().next();
+    await vi.waitFor(() => expect(stream).toHaveBeenCalledTimes(1));
+    const afterCancel = conversation.send('after-cancel');
+    await Promise.resolve();
+    expect(complete).toHaveBeenCalledTimes(2);
+    activeStream.cancel(new Error('cancel active stream'));
+    await expect(next).rejects.toThrow('cancel active stream');
+    await afterCancel;
+
+    expect(conversation.history).toEqual([
+      { content: 'second', role: 'user' },
+      { content: 'second-reply', role: 'assistant' },
+      { content: 'after-cancel', role: 'user' },
+      { content: 'after-cancel-reply', role: 'assistant' },
+    ]);
+  });
+
+  it('does not acquire a turn for an unconsumed stream', async () => {
+    const stream = vi.fn<ConversationClient['stream']>();
+    const complete = vi.fn<ConversationClient['complete']>(async () =>
+      response('complete-reply'),
+    );
+    const conversation = new Conversation({ complete, stream });
+
+    conversation.sendStream('never-consumed');
+    await conversation.send('complete');
+
+    expect(stream).not.toHaveBeenCalled();
+    expect(conversation.history).toEqual([
+      { content: 'complete', role: 'user' },
+      { content: 'complete-reply', role: 'assistant' },
+    ]);
+  });
+
+  it('keeps local state unchanged on persistence failure and runs the next turn', async () => {
+    const set = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('store failed'))
+      .mockResolvedValueOnce(undefined);
+    const complete = vi.fn<ConversationClient['complete']>(
+      async ({ messages }) =>
+        response(`${String(messages.at(-1)?.content)}-reply`),
+    );
+    const conversation = new Conversation(
+      { complete, stream: vi.fn() },
+      { sessionId: 'atomic-persist', store: { set } as never },
+    );
+
+    const failed = conversation.send('first');
+    const second = conversation.send('second');
+    await expect(failed).rejects.toThrow('store failed');
+    await second;
+
+    expect(set).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        messages: [{ content: 'second', role: 'user' }],
+      }),
+    );
+    expect(conversation.history).toEqual([
+      { content: 'second', role: 'user' },
+      { content: 'second-reply', role: 'assistant' },
+    ]);
+    expect(conversation.totals).toMatchObject({
+      costUSD: 0.01,
+      inputTokens: 1,
+      outputTokens: 1,
+    });
+  });
+
+  it('keeps context, provider, and persistence phases non-overlapping', async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const enter = async (): Promise<void> => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+    };
+    const complete = vi.fn<ConversationClient['complete']>(
+      async ({ messages }) => {
+        await enter();
+        return response(`${String(messages.at(-1)?.content)}-reply`);
+      },
+    );
+    const set = vi.fn(async () => enter());
+    const conversation = new Conversation(
+      { complete, stream: vi.fn() },
+      {
+        contextManager: {
+          shouldTrim: vi.fn(async () => {
+            await enter();
+            return false;
+          }),
+          trim: vi.fn(),
+        },
+        sessionId: 'non-overlap',
+        store: { set } as never,
+      },
+    );
+
+    await Promise.all(
+      Array.from({ length: 10 }, (_, index) =>
+        conversation.send(`turn-${index}`),
+      ),
+    );
+
+    expect(maximumActive).toBe(1);
+    expect(set).toHaveBeenCalledTimes(10);
+  });
+
+  it('holds the FIFO slot across every round of an automatic tool loop', async () => {
+    const execute = vi.fn(async () => ({ city: 'Paris', temperature: 21 }));
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockResolvedValueOnce({
+        content: [
+          {
+            args: { city: 'Paris' },
+            id: 'call-1',
+            name: 'lookup',
+            type: 'tool_call',
+          },
+        ],
+        finishReason: 'tool_call',
+        model: 'mock-model',
+        provider: 'mock',
+        raw: {},
+        text: '',
+        toolCalls: [{ args: { city: 'Paris' }, id: 'call-1', name: 'lookup' }],
+        usage: usage(1, 1, 0.01),
+      })
+      .mockResolvedValueOnce(response('first-done'))
+      .mockResolvedValueOnce(response('second-done'));
+    const conversation = new Conversation(
+      { complete, stream: vi.fn() },
+      { tools: [buildTool('lookup', execute)] },
+    );
+
+    await Promise.all([
+      conversation.send('first-with-tool'),
+      conversation.send('second-after-tool'),
+    ]);
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect(complete.mock.calls[2]![0].messages).toEqual(
+      expect.arrayContaining([
+        { content: 'first-with-tool', role: 'user' },
+        { content: 'first-done', role: 'assistant' },
+        { content: 'second-after-tool', role: 'user' },
+      ]),
+    );
+    expect(conversation.history.at(-1)).toEqual({
+      content: 'second-done',
+      role: 'assistant',
+    });
+  });
+
+  it('rejects clear while a turn is active without corrupting history', async () => {
+    const gate = deferred<void>();
+    const conversation = new Conversation({
+      complete: vi.fn(async () => {
+        await gate.promise;
+        return response('reply');
+      }),
+      stream: vi.fn(),
+    });
+    const pending = conversation.send('turn');
+
+    expect(() => conversation.clear()).toThrowError(
+      expect.objectContaining({
+        details: { code: 'conversation_busy', operation: 'clear' },
+        statusCode: 409,
+      }),
+    );
+    gate.resolve();
+    await pending;
+    expect(conversation.history).toHaveLength(2);
+  });
 });
 
 describe('Conversation stream event contract', () => {
@@ -3996,21 +5204,20 @@ describe('InMemorySessionStore', () => {
       chunks.push(chunk);
     }
 
-    expect(execute).toHaveBeenCalledWith(
-      { city: 'Paris' },
-      expect.any(Object),
+    expect(execute).toHaveBeenCalledWith({ city: 'Paris' }, expect.any(Object));
+    expect(chunks.filter((chunk) => chunk.type === 'tool-call-result')).toEqual(
+      [
+        expect.objectContaining({
+          id: 'legacy-call',
+          isError: false,
+          result: { temperature: 21 },
+          version: 3,
+        }),
+      ],
     );
-    expect(chunks.filter((chunk) => chunk.type === 'tool-call-result')).toEqual([
-      expect.objectContaining({
-        id: 'legacy-call',
-        isError: false,
-        result: { temperature: 21 },
-        version: 3,
-      }),
-    ]);
-    expect(
-      chunks.some((chunk) => chunk.type === 'tool-call-arguments'),
-    ).toBe(false);
+    expect(chunks.some((chunk) => chunk.type === 'tool-call-arguments')).toBe(
+      false,
+    );
   });
 
   it.each([
@@ -4062,41 +5269,44 @@ describe('InMemorySessionStore', () => {
         },
       ] satisfies StreamChunk[],
     ],
-  ])('rejects sanitized invalid tool stream state: %s', async (_name, chunks) => {
-    const execute = vi.fn(async () => ({ temperature: 21 }));
-    const conversation = new Conversation(
-      {
-        complete: vi.fn(),
-        stream: vi.fn(async function* () {
-          yield* chunks;
-        }),
-      },
-      { tools: [buildTool('weather', execute)] },
-    );
+  ])(
+    'rejects sanitized invalid tool stream state: %s',
+    async (_name, chunks) => {
+      const execute = vi.fn(async () => ({ temperature: 21 }));
+      const conversation = new Conversation(
+        {
+          complete: vi.fn(),
+          stream: vi.fn(async function* () {
+            yield* chunks;
+          }),
+        },
+        { tools: [buildTool('weather', execute)] },
+      );
 
-    const error = await (async () => {
-      try {
-        for await (const chunk of conversation.sendStream('weather')) {
-          void chunk;
+      const error = await (async () => {
+        try {
+          for await (const chunk of conversation.sendStream('weather')) {
+            void chunk;
+          }
+          return undefined;
+        } catch (caught) {
+          return caught;
         }
-        return undefined;
-      } catch (caught) {
-        return caught;
-      }
-    })();
+      })();
 
-    expect(error).toBeInstanceOf(ProviderError);
-    expect(error).toMatchObject({
-      details: {
-        code: 'invalid_provider_response',
-        operation: 'stream',
-        path: 'tool_calls',
-      },
-      retryable: false,
-      statusCode: 502,
-    });
-    expect(execute).not.toHaveBeenCalled();
-  });
+      expect(error).toBeInstanceOf(ProviderError);
+      expect(error).toMatchObject({
+        details: {
+          code: 'invalid_provider_response',
+          operation: 'stream',
+          path: 'tool_calls',
+        },
+        retryable: false,
+        statusCode: 502,
+      });
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
 });
 
 function buildTool(
@@ -4127,4 +5337,75 @@ function usage(inputTokens: number, outputTokens: number, costUSD: number) {
     inputTokens,
     outputTokens,
   };
+}
+
+function validSnapshot(): ConversationSnapshot {
+  return {
+    createdAt: '2026-04-15T10:00:00.000Z',
+    messages: [],
+    sessionId: 'valid-session',
+    totalCachedTokens: 0,
+    totalCostUSD: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalReasoningTokens: 0,
+    updatedAt: '2026-04-15T10:00:00.000Z',
+  };
+}
+
+function response(text: string): CanonicalResponse {
+  return {
+    content: [{ text, type: 'text' }],
+    finishReason: 'stop',
+    model: 'mock-model',
+    provider: 'mock',
+    raw: {},
+    text,
+    toolCalls: [],
+    usage: usage(1, 1, 0.01),
+  };
+}
+
+function toolCallResponse(name: string): CanonicalResponse {
+  return {
+    content: [
+      {
+        args: {},
+        id: 'tool_1',
+        name,
+        type: 'tool_call',
+      },
+    ],
+    finishReason: 'tool_call',
+    model: 'mock-model',
+    provider: 'mock',
+    raw: {},
+    text: '',
+    toolCalls: [{ args: {}, id: 'tool_1', name }],
+    usage: usage(1, 1, 0.01),
+  };
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  reject: (reason?: unknown) => void;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
+async function collectStream(
+  stream: AsyncIterable<StreamChunk>,
+): Promise<StreamChunk[]> {
+  const chunks: StreamChunk[] = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+  return chunks;
 }
