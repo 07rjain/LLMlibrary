@@ -15,6 +15,17 @@ Updated: 2026-04-25
   fractional and very small USD limits. Negative values, numeric strings,
   `NaN`, and infinities fail before routing, warnings, mock queue consumption,
   provider dispatch, or logging.
+- Completion budget actions are enforced before real transport or mock queue
+  consumption for both `complete()` and `stream()`. `throw` raises
+  `BudgetExceededError`; `skip` returns a synthetic error response with zero
+  usage and emits one zero-cost usage event; `warn` continues dispatch and
+  invokes the warning callback at most once per public operation, even when a
+  route falls back. Warning callback errors are suppressed, and warning text is
+  derived only from sanitized budget estimates and model/provider identifiers.
+- Conversation-level budgets cover persisted spend across turns. Per-send
+  budgets cover the current turn. When both are supplied, every automatic tool
+  round receives the smaller remaining amount after subtracting applicable
+  prior usage.
 - `formatCost()` accepts finite non-negative numbers only. Use numeric
   `costUSD` values for arithmetic and call `formatCost()` only at display
   boundaries.

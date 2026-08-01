@@ -13,6 +13,7 @@ import {
   ProviderCapabilityError,
   ProviderError,
 } from '../src/errors.js';
+import { ModelRegistry } from '../src/models/registry.js';
 import { ModelRouter } from '../src/router.js';
 import { InMemorySessionStore } from '../src/session-store.js';
 
@@ -1741,6 +1742,37 @@ describe('Conversation', () => {
     );
   });
 
+  it('suppresses warning callback errors and warns once across tool rounds', async () => {
+    const execute = vi.fn(async () => ({ ok: true }));
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockResolvedValueOnce(toolCallResponse('lookup_weather'))
+      .mockResolvedValueOnce(response('done'));
+    const warnings: string[] = [];
+    const conversation = new Conversation(
+      { complete, stream: vi.fn() },
+      {
+        budgetExceededAction: 'warn',
+        budgetUsd: 0,
+        model: 'mock-model',
+        onWarning: (message) => {
+          warnings.push(message);
+          throw new Error('SECRET_WARNING_OBSERVER_FAILURE');
+        },
+        tools: [buildTool('lookup_weather', execute)],
+      },
+    );
+
+    await expect(
+      conversation.send('SECRET_CONVERSATION_PROMPT'),
+    ).resolves.toMatchObject({ text: 'done' });
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(warnings).toHaveLength(1);
+    expect(warnings.join(' ')).not.toMatch(
+      /SECRET_CONVERSATION_PROMPT|SECRET_WARNING_OBSERVER_FAILURE/,
+    );
+  });
+
   it('can skip provider execution when the conversation budget is exhausted', async () => {
     const client: ConversationClient = {
       complete: vi.fn(),
@@ -1759,9 +1791,386 @@ describe('Conversation', () => {
     expect(response.text).toContain('Conversation budget');
     expect(client.complete).not.toHaveBeenCalled();
     expect(conversation.history.at(-1)).toEqual({
-      content: 'Conversation budget of $0.00 has been exhausted.',
-      role: 'assistant',
+      content: 'Hi',
+      role: 'user',
     });
+  });
+
+  it('validates per-send budget options before context resolution or dispatch', async () => {
+    const client: ConversationClient = {
+      complete: vi.fn(),
+      resolveContext: vi.fn(),
+      stream: vi.fn(),
+    };
+    const conversation = new Conversation(client);
+
+    for (const budgetUsd of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await expect(
+        conversation.send('invalid', { budgetUsd }),
+      ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    }
+    for (const maxTokens of [0, -1, 1.5, Number.POSITIVE_INFINITY]) {
+      await expect(
+        conversation.send('invalid', { maxTokens }),
+      ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    }
+    await expect(
+      conversation.send('invalid', {
+        budgetExceededAction: 'invalid' as never,
+      }),
+    ).rejects.toBeInstanceOf(ProviderCapabilityError);
+    expect(client.resolveContext).not.toHaveBeenCalled();
+    expect(client.complete).not.toHaveBeenCalled();
+    expect(() => conversation.sendStream('invalid', { maxTokens: 0 })).toThrow(
+      ProviderCapabilityError,
+    );
+  });
+
+  it('uses the stricter per-send/session budget and per-send action/maxTokens', async () => {
+    const complete = vi.fn<ConversationClient['complete']>(async () =>
+      response('ok'),
+    );
+    const conversation = new Conversation(
+      { complete, stream: vi.fn() },
+      {
+        budgetExceededAction: 'skip',
+        budgetUsd: 0.02,
+        maxTokens: 100,
+        model: 'mock-model',
+      },
+    );
+
+    await conversation.send('first', {
+      budgetExceededAction: 'warn',
+      budgetUsd: 0.01,
+      maxTokens: 12,
+    });
+    expect(complete).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        budgetExceededAction: 'warn',
+        budgetUsd: 0.01,
+        maxTokens: 12,
+      }),
+    );
+
+    await conversation.send('second', {
+      budgetExceededAction: 'throw',
+      budgetUsd: 1,
+      maxTokens: 16,
+    });
+    expect(complete).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        budgetExceededAction: 'throw',
+        budgetUsd: 0.01,
+        maxTokens: 16,
+      }),
+    );
+  });
+
+  it('fails complete and stream tool loops before dispatching a round with no remaining budget', async () => {
+    const execute = vi.fn(async () => ({ ok: true }));
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockResolvedValue(toolCallResponse('lookup_weather'));
+    const completeConversation = new Conversation(
+      { complete, stream: vi.fn() },
+      {
+        budgetUsd: 0.01,
+        model: 'mock-model',
+        tools: [buildTool('lookup_weather', execute)],
+      },
+    );
+    await expect(
+      completeConversation.send('complete loop'),
+    ).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(complete).toHaveBeenCalledOnce();
+
+    const stream = vi.fn<ConversationClient['stream']>(async function* () {
+      yield {
+        model: 'mock-model',
+        provider: 'mock' as const,
+        type: 'response-start' as const,
+      };
+      yield {
+        id: 'tool_1',
+        name: 'lookup_weather',
+        type: 'tool-call-start' as const,
+      };
+      yield {
+        args: {},
+        id: 'tool_1',
+        name: 'lookup_weather',
+        type: 'tool-call-arguments' as const,
+      };
+      yield {
+        finishReason: 'tool_call' as const,
+        type: 'done' as const,
+        usage: usage(1, 1, 0.01),
+      };
+    });
+    const streamConversation = new Conversation(
+      { complete: vi.fn(), stream },
+      {
+        budgetUsd: 0.01,
+        model: 'mock-model',
+        tools: [buildTool('lookup_weather', execute)],
+      },
+    );
+    await expect(
+      collectStream(streamConversation.sendStream('stream loop')),
+    ).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(stream).toHaveBeenCalledOnce();
+  });
+
+  it('attributes exhausted dual budgets to the binding conversation remainder', async () => {
+    const execute = vi.fn(async () => ({ ok: true }));
+    const snapshot: ConversationSnapshot = {
+      ...validSnapshot(),
+      budgetUsd: 1,
+      model: 'mock-model',
+      provider: 'mock',
+      totalCostUSD: 0.99,
+    };
+    const expectedError = {
+      details: expect.objectContaining({
+        bindingBudgetScope: 'conversation',
+        budgetUsd: 0,
+        conversationBudgetUsd: 1,
+        conversationRemainingBudgetUsd: 0,
+        remainingBudgetUsd: 0,
+        requestBudgetUsd: 0.5,
+        requestRemainingBudgetUsd: 0.49,
+        totalCostUSD: 1,
+        turnCostUSD: 0.01,
+      }),
+      message:
+        'Conversation budget has been exhausted; effective remaining budget is $0.00.',
+    };
+
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockResolvedValue(toolCallResponse('lookup_weather'));
+    const completeConversation = Conversation.restore(
+      { complete, stream: vi.fn() },
+      snapshot,
+      { tools: [buildTool('lookup_weather', execute)] },
+    );
+    await expect(
+      completeConversation.send('complete binding scope', {
+        budgetUsd: 0.5,
+      }),
+    ).rejects.toMatchObject(expectedError);
+    expect(complete).toHaveBeenCalledOnce();
+
+    const stream = vi.fn<ConversationClient['stream']>(async function* () {
+      yield {
+        id: 'tool_1',
+        name: 'lookup_weather',
+        type: 'tool-call-start' as const,
+      };
+      yield {
+        args: {},
+        id: 'tool_1',
+        name: 'lookup_weather',
+        type: 'tool-call-arguments' as const,
+      };
+      yield {
+        finishReason: 'tool_call' as const,
+        type: 'done' as const,
+        usage: usage(1, 1, 0.01),
+      };
+    });
+    const streamConversation = Conversation.restore(
+      { complete: vi.fn(), stream },
+      snapshot,
+      { tools: [buildTool('lookup_weather', execute)] },
+    );
+    await expect(
+      collectStream(
+        streamConversation.sendStream('stream binding scope', {
+          budgetUsd: 0.5,
+        }),
+      ),
+    ).rejects.toMatchObject(expectedError);
+    expect(stream).toHaveBeenCalledOnce();
+  });
+
+  it('does not persist client-returned budget skips as assistant messages', async () => {
+    const completeFactory = vi.fn(() => response('should not run'));
+    const usageLogger = { log: vi.fn(async () => undefined) };
+    const completeClient = LLMClient.mock({
+      defaultModel: 'paid-mock',
+      modelRegistry: paidConversationMockRegistry(),
+      responses: [completeFactory],
+      usageLogger,
+    });
+    const completeConversation = await completeClient.conversation();
+    const skipped = await completeConversation.send('complete skip', {
+      budgetExceededAction: 'skip',
+      budgetUsd: 0.000001,
+      maxTokens: 8,
+    });
+    expect(skipped.raw).toMatchObject({
+      reason: 'budget_exceeded',
+      skipped: true,
+    });
+    expect(completeFactory).not.toHaveBeenCalled();
+    expect(completeConversation.history).toEqual([
+      { content: 'complete skip', role: 'user' },
+    ]);
+    expect(completeConversation.totals.costUSD).toBe(0);
+    expect(usageLogger.log).toHaveBeenCalledOnce();
+
+    const streamFactory = vi.fn(() => [
+      { delta: 'should not run', type: 'text-delta' as const },
+      {
+        finishReason: 'stop' as const,
+        type: 'done' as const,
+        usage: usage(1, 1, 0),
+      },
+    ]);
+    const streamClient = LLMClient.mock({
+      defaultModel: 'paid-mock',
+      modelRegistry: paidConversationMockRegistry(),
+      streams: [streamFactory],
+    });
+    const streamConversation = await streamClient.conversation();
+    const chunks = await collectStream(
+      streamConversation.sendStream('stream skip', {
+        budgetExceededAction: 'skip',
+        budgetUsd: 0.000001,
+        maxTokens: 8,
+      }),
+    );
+    expect(chunks.map((chunk) => chunk.type)).toEqual([
+      'error',
+      'text-delta',
+      'done',
+    ]);
+    expect(streamFactory).not.toHaveBeenCalled();
+    expect(streamConversation.history).toEqual([
+      { content: 'stream skip', role: 'user' },
+    ]);
+    expect(streamConversation.totals.costUSD).toBe(0);
+  });
+
+  it('preserves real tool-loop state without persisting later budget-skip text', async () => {
+    const execute = vi.fn(async () => ({ weather: 'sunny' }));
+    const budgetError = new BudgetExceededError('budget stop', {
+      details: { budgetUsd: 0.001, estimatedCostUSD: 0.002 },
+      model: 'mock-model',
+      provider: 'mock',
+    });
+    const skippedResponse: CanonicalResponse = {
+      content: [{ text: budgetError.message, type: 'text' }],
+      finishReason: 'error',
+      model: 'mock-model',
+      provider: 'mock',
+      raw: { reason: 'budget_exceeded', skipped: true },
+      text: budgetError.message,
+      toolCalls: [],
+      usage: usage(0, 0, 0),
+    };
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockResolvedValueOnce(toolCallResponse('lookup_weather'))
+      .mockResolvedValueOnce(skippedResponse);
+    const completeConversation = new Conversation(
+      { complete, stream: vi.fn() },
+      {
+        model: 'mock-model',
+        tools: [buildTool('lookup_weather', execute)],
+      },
+    );
+    await completeConversation.send('complete tool then skip');
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(
+      completeConversation.history.some(
+        (message) =>
+          message.role === 'assistant' &&
+          JSON.stringify(message.content).includes('tool_1'),
+      ),
+    ).toBe(true);
+    expect(
+      completeConversation.history.some((message) =>
+        JSON.stringify(message.content).includes('budget stop'),
+      ),
+    ).toBe(false);
+
+    const stream = vi
+      .fn<ConversationClient['stream']>()
+      .mockImplementationOnce(async function* () {
+        yield {
+          id: 'tool_1',
+          name: 'lookup_weather',
+          type: 'tool-call-start' as const,
+        };
+        yield {
+          args: {},
+          id: 'tool_1',
+          name: 'lookup_weather',
+          type: 'tool-call-arguments' as const,
+        };
+        yield {
+          finishReason: 'tool_call' as const,
+          type: 'done' as const,
+          usage: usage(1, 1, 0.01),
+        };
+      })
+      .mockImplementationOnce(async function* () {
+        yield { error: budgetError, type: 'error' as const };
+        yield { delta: budgetError.message, type: 'text-delta' as const };
+        yield {
+          finishReason: 'error' as const,
+          type: 'done' as const,
+          usage: usage(0, 0, 0),
+        };
+      });
+    const streamConversation = new Conversation(
+      { complete: vi.fn(), stream },
+      {
+        model: 'mock-model',
+        tools: [buildTool('lookup_weather', execute)],
+      },
+    );
+    await collectStream(streamConversation.sendStream('stream tool then skip'));
+    expect(stream).toHaveBeenCalledTimes(2);
+    expect(
+      streamConversation.history.some(
+        (message) =>
+          message.role === 'assistant' &&
+          JSON.stringify(message.content).includes('tool_1'),
+      ),
+    ).toBe(true);
+    expect(
+      streamConversation.history.some((message) =>
+        JSON.stringify(message.content).includes('budget stop'),
+      ),
+    ).toBe(false);
+  });
+
+  it('keeps conversation-level stream skips out of assistant history', async () => {
+    const stream = vi.fn<ConversationClient['stream']>();
+    const conversation = new Conversation(
+      { complete: vi.fn(), stream },
+      {
+        budgetExceededAction: 'skip',
+        budgetUsd: 0,
+        model: 'mock-model',
+      },
+    );
+    const chunks = await collectStream(conversation.sendStream('skip me'));
+    expect(chunks.map((chunk) => chunk.type)).toEqual([
+      'error',
+      'text-delta',
+      'done',
+    ]);
+    expect(stream).not.toHaveBeenCalled();
+    expect(conversation.history).toEqual([
+      { content: 'skip me', role: 'user' },
+    ]);
   });
 
   it('throws MaxToolRoundsError when the model keeps requesting tools', async () => {
@@ -5337,6 +5746,22 @@ function usage(inputTokens: number, outputTokens: number, costUSD: number) {
     inputTokens,
     outputTokens,
   };
+}
+
+function paidConversationMockRegistry(): ModelRegistry {
+  return new ModelRegistry({
+    'paid-mock': {
+      contextWindow: 8_192,
+      inputPrice: 10,
+      kind: 'completion',
+      lastUpdated: '2026-07-13',
+      outputPrice: 20,
+      provider: 'mock',
+      supportsStreaming: true,
+      supportsTools: true,
+      supportsVision: false,
+    },
+  });
 }
 
 function validSnapshot(): ConversationSnapshot {

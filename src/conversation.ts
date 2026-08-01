@@ -16,6 +16,7 @@ import { validateAndCloneCanonicalMessages } from './message-validation.js';
 import { validateAndCloneTools } from './tool-validation.js';
 import { formatCost } from './utils/cost.js';
 import { STREAM_EVENT_VERSION } from './types.js';
+import { invalid } from './validation-helpers.js';
 
 import type { ContextManager } from './context-manager.js';
 import type { SessionStore } from './session-store.js';
@@ -157,9 +158,18 @@ export interface ConversationClient {
 
 /** Correlation and cancellation options for one conversation turn. */
 export interface ConversationRequestOptions {
+  budgetExceededAction?: BudgetExceededAction;
+  budgetUsd?: number;
+  maxTokens?: number;
   metadata?: Record<string, JsonValue>;
   requestId?: string;
   signal?: AbortSignal;
+}
+
+interface ConversationTurnPolicy {
+  budgetExceededAction: BudgetExceededAction;
+  budgetUsd?: number;
+  maxTokens?: number;
 }
 
 /** Serializable conversation state persisted by session stores. */
@@ -351,6 +361,7 @@ export class Conversation {
     input: CanonicalMessage['content'],
     options: ConversationRequestOptions = {},
   ): Promise<CanonicalResponse> {
+    const turnPolicy = this.resolveTurnPolicy(options);
     const metadata =
       options.metadata === undefined
         ? undefined
@@ -363,11 +374,18 @@ export class Conversation {
       this.assertNoToolExecutionReentrancy('send');
       throwIfAborted(options.signal);
       const initialMessages = [...this.messages, userMessage];
-      const route = this.resolveConversationRoute(initialMessages);
+      const route = this.resolveConversationRoute(
+        initialMessages,
+        undefined,
+        undefined,
+        turnPolicy.budgetUsd,
+        turnPolicy.maxTokens,
+      );
       const nextMessages = await this.prepareMessages(
         userMessage,
         options.requestId,
         route,
+        turnPolicy.maxTokens,
       );
       throwIfAborted(options.signal);
       const result = await this.runCompleteToolLoop(
@@ -376,6 +394,7 @@ export class Conversation {
         options.requestId,
         metadata,
         route,
+        turnPolicy,
       );
 
       throwIfAborted(options.signal);
@@ -391,6 +410,7 @@ export class Conversation {
     input: CanonicalMessage['content'],
     options: ConversationRequestOptions = {},
   ): CancelableStream<StreamChunk> {
+    const turnPolicy = this.resolveTurnPolicy(options);
     const metadata =
       options.metadata === undefined
         ? undefined
@@ -407,11 +427,18 @@ export class Conversation {
           this.assertNoToolExecutionReentrancy('sendStream');
           throwIfAborted(signal);
           const initialMessages = [...this.messages, userMessage];
-          const route = this.resolveConversationRoute(initialMessages);
+          const route = this.resolveConversationRoute(
+            initialMessages,
+            undefined,
+            undefined,
+            turnPolicy.budgetUsd,
+            turnPolicy.maxTokens,
+          );
           const nextMessages = await this.prepareMessages(
             userMessage,
             options.requestId,
             route,
+            turnPolicy.maxTokens,
           );
           throwIfAborted(signal);
           const result = yield* this.runStreamToolLoop(
@@ -420,6 +447,7 @@ export class Conversation {
             options.requestId,
             metadata,
             route,
+            turnPolicy,
           );
           throwIfAborted(signal);
           await this.finalizeExecution(result);
@@ -669,6 +697,7 @@ export class Conversation {
     userMessage: CanonicalMessage,
     requestId: string | undefined,
     route: ConversationRoute | undefined,
+    maxTokens: number | undefined = this.maxTokens,
   ): Promise<CanonicalMessage[]> {
     const nextMessages = [...this.messages, userMessage];
     return this.prepareModelStepMessages(
@@ -678,6 +707,7 @@ export class Conversation {
       route?.model,
       route?.provider,
       route?.contextWindow,
+      maxTokens,
     );
   }
 
@@ -688,6 +718,7 @@ export class Conversation {
     model: string | undefined = this.model,
     provider: CanonicalProvider | undefined = this.provider,
     contextWindow: number | undefined = undefined,
+    maxTokens: number | undefined = this.maxTokens,
   ): Promise<CanonicalMessage[]> {
     if (!this.contextManager) {
       return messages;
@@ -704,9 +735,7 @@ export class Conversation {
       ...(this.maxContextTokens !== undefined
         ? { maxContextTokens: this.maxContextTokens }
         : {}),
-      ...(this.maxTokens !== undefined
-        ? { reservedOutputTokens: this.maxTokens }
-        : {}),
+      ...(maxTokens !== undefined ? { reservedOutputTokens: maxTokens } : {}),
     };
     const shouldTrimMessages = validateAndCloneCanonicalMessages(messages);
     if (
@@ -738,6 +767,7 @@ export class Conversation {
     requestId: string | undefined,
     metadata: Record<string, JsonValue> | undefined,
     initialRoute: ConversationRoute | undefined,
+    turnPolicy: ConversationTurnPolicy,
   ): Promise<{
     messages: CanonicalMessage[];
     model?: string;
@@ -752,6 +782,7 @@ export class Conversation {
     let contextWindow = initialRoute?.contextWindow;
     let route = initialRoute;
     let toolRounds = 0;
+    let budgetWarningIssued = false;
 
     while (true) {
       throwIfAborted(signal);
@@ -763,11 +794,15 @@ export class Conversation {
           model,
           provider,
           contextWindow,
+          turnPolicy.maxTokens,
         );
       }
       const remainingBudget = this.resolveRemainingBudgetDecision(
         aggregateUsage.costUSD,
+        turnPolicy,
+        budgetWarningIssued,
       );
+      budgetWarningIssued ||= remainingBudget.warningIssued;
       if (remainingBudget.action === 'skip') {
         const response = buildBudgetSkipResponse(
           remainingBudget.error,
@@ -775,7 +810,6 @@ export class Conversation {
           provider,
         );
         aggregateUsage = accumulateUsage(aggregateUsage, response.usage);
-        workingMessages = [...workingMessages, buildAssistantMessage(response)];
         return {
           messages: workingMessages,
           model: response.model,
@@ -799,20 +833,29 @@ export class Conversation {
           model,
           provider,
           route,
+          turnPolicy.budgetExceededAction,
+          turnPolicy.maxTokens,
         ),
       );
       model = response.model;
       provider = response.provider;
       contextWindow =
-        this.resolveConversationRoute(workingMessages, model, provider)
-          ?.contextWindow ?? contextWindow;
+        this.resolveConversationRoute(
+          workingMessages,
+          model,
+          provider,
+          remainingBudget.budgetUsd,
+          turnPolicy.maxTokens,
+        )?.contextWindow ?? contextWindow;
       route = {
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         model,
         provider,
       };
       aggregateUsage = accumulateUsage(aggregateUsage, response.usage);
-      workingMessages = [...workingMessages, buildAssistantMessage(response)];
+      if (!isBudgetSkipResponse(response)) {
+        workingMessages = [...workingMessages, buildAssistantMessage(response)];
+      }
 
       if (
         !this.shouldContinueToolLoop(response.finishReason, response.toolCalls)
@@ -848,6 +891,7 @@ export class Conversation {
     requestId: string | undefined,
     metadata: Record<string, JsonValue> | undefined,
     initialRoute: ConversationRoute | undefined,
+    turnPolicy: ConversationTurnPolicy,
   ): AsyncGenerator<
     StreamChunk,
     {
@@ -866,6 +910,7 @@ export class Conversation {
     let route = initialRoute;
     let toolRounds = 0;
     let sequence = 0;
+    let budgetWarningIssued = false;
 
     const decorate = (chunk: StreamChunk): StreamChunk => ({
       ...chunk,
@@ -879,7 +924,10 @@ export class Conversation {
       throwIfAborted(signal);
       const remainingBudget = this.resolveRemainingBudgetDecision(
         aggregateUsage.costUSD,
+        turnPolicy,
+        budgetWarningIssued,
       );
+      budgetWarningIssued ||= remainingBudget.warningIssued;
       if (remainingBudget.action === 'skip') {
         const response = buildBudgetSkipResponse(
           remainingBudget.error,
@@ -887,7 +935,7 @@ export class Conversation {
           provider,
         );
         aggregateUsage = accumulateUsage(aggregateUsage, response.usage);
-        workingMessages = [...workingMessages, buildAssistantMessage(response)];
+        yield decorate({ error: remainingBudget.error, type: 'error' });
         yield decorate({ delta: response.text, type: 'text-delta' });
         yield decorate({
           finishReason: response.finishReason,
@@ -912,6 +960,8 @@ export class Conversation {
         model,
         provider,
         route,
+        turnPolicy.budgetExceededAction,
+        turnPolicy.maxTokens,
       );
       if (toolRounds > 0) {
         workingMessages = await this.prepareModelStepMessages(
@@ -921,6 +971,7 @@ export class Conversation {
           model,
           provider,
           contextWindow,
+          turnPolicy.maxTokens,
         );
       }
       requestOptions.messages = workingMessages;
@@ -933,6 +984,7 @@ export class Conversation {
       let text = '';
       let finishReason: CanonicalResponse['finishReason'] | undefined;
       let usage: UsageMetrics | undefined;
+      let budgetSkipped = false;
 
       for await (const streamChunk of this.client.stream(requestOptions)) {
         const chunk = streamChunk as ConversationInputStreamChunk;
@@ -940,8 +992,13 @@ export class Conversation {
           model = chunk.model;
           provider = chunk.provider;
           contextWindow =
-            this.resolveConversationRoute(workingMessages, model, provider)
-              ?.contextWindow ?? contextWindow;
+            this.resolveConversationRoute(
+              workingMessages,
+              model,
+              provider,
+              remainingBudget.budgetUsd,
+              turnPolicy.maxTokens,
+            )?.contextWindow ?? contextWindow;
           route = {
             ...(contextWindow !== undefined ? { contextWindow } : {}),
             model,
@@ -1031,6 +1088,7 @@ export class Conversation {
         }
 
         if (chunk.type === 'error') {
+          budgetSkipped ||= chunk.error instanceof BudgetExceededError;
           yield decorate(chunk);
           continue;
         }
@@ -1067,10 +1125,12 @@ export class Conversation {
       }
 
       aggregateUsage = accumulateUsage(aggregateUsage, usage);
-      workingMessages = [
-        ...workingMessages,
-        buildAssistantStreamMessage(text, pendingToolCalls),
-      ];
+      if (!budgetSkipped) {
+        workingMessages = [
+          ...workingMessages,
+          buildAssistantStreamMessage(text, pendingToolCalls),
+        ];
+      }
 
       const toolCalls = buildToolCallsFromPendingToolCalls(pendingToolCalls);
       if (!this.shouldContinueToolLoop(finishReason, toolCalls, true)) {
@@ -1403,15 +1463,64 @@ export class Conversation {
     };
   }
 
+  private resolveTurnPolicy(
+    options: ConversationRequestOptions,
+  ): ConversationTurnPolicy {
+    validateBudgetUsd(
+      (options as { budgetUsd?: unknown }).budgetUsd,
+      'conversationRequest.budgetUsd',
+    );
+    if (
+      options.budgetExceededAction !== undefined &&
+      !['skip', 'throw', 'warn'].includes(options.budgetExceededAction)
+    ) {
+      invalid(
+        {
+          code: 'invalid_budget_action',
+          message: 'Invalid conversation request budget action.',
+          option: 'conversationRequest.budgetExceededAction',
+        },
+        'skip_throw_or_warn',
+      );
+    }
+    if (
+      options.maxTokens !== undefined &&
+      (!Number.isSafeInteger(options.maxTokens) || options.maxTokens <= 0)
+    ) {
+      invalid(
+        {
+          code: 'invalid_max_tokens',
+          message: 'Invalid conversation request maxTokens.',
+          option: 'conversationRequest.maxTokens',
+        },
+        'positive_safe_integer',
+      );
+    }
+    return {
+      budgetExceededAction:
+        options.budgetExceededAction ?? this.budgetExceededAction,
+      ...(options.budgetUsd !== undefined
+        ? { budgetUsd: options.budgetUsd }
+        : {}),
+      ...(options.maxTokens !== undefined
+        ? { maxTokens: options.maxTokens }
+        : this.maxTokens !== undefined
+          ? { maxTokens: this.maxTokens }
+          : {}),
+    };
+  }
+
   private resolveConversationRoute(
     messages: CanonicalMessage[],
     model: string | undefined = this.model,
     provider: CanonicalProvider | undefined = this.provider,
+    budgetUsd: number | undefined = this.budgetUsd,
+    maxTokens: number | undefined = this.maxTokens,
   ): ConversationRoute | undefined {
     const resolved = this.client.resolveContext?.({
-      ...(this.budgetUsd !== undefined ? { budgetUsd: this.budgetUsd } : {}),
+      ...(budgetUsd !== undefined ? { budgetUsd } : {}),
       messages,
-      ...(this.maxTokens !== undefined ? { maxTokens: this.maxTokens } : {}),
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
       ...(model !== undefined ? { model } : {}),
       ...(provider !== undefined ? { provider } : {}),
       ...(this.responseFormat !== undefined
@@ -1462,6 +1571,8 @@ export class Conversation {
     model: string | undefined = this.model,
     provider: CanonicalProvider | undefined = this.provider,
     route: ConversationRoute | undefined = undefined,
+    budgetExceededAction: BudgetExceededAction = this.budgetExceededAction,
+    maxTokens: number | undefined = this.maxTokens,
   ): {
     budgetExceededAction?: BudgetExceededAction;
     budgetUsd?: number;
@@ -1488,11 +1599,11 @@ export class Conversation {
     const toolChoice = resolveToolChoiceForRound(this.toolChoice, toolRound);
 
     return {
-      budgetExceededAction: this.budgetExceededAction,
+      budgetExceededAction,
       ...(budgetUsd !== undefined ? { budgetUsd } : {}),
       ...(metadata !== undefined ? { metadata } : {}),
       messages,
-      ...(this.maxTokens !== undefined ? { maxTokens: this.maxTokens } : {}),
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
       ...(model !== undefined ? { model } : {}),
       ...(provider !== undefined ? { provider } : {}),
       ...(route !== undefined
@@ -1524,53 +1635,115 @@ export class Conversation {
 
   private resolveRemainingBudgetDecision(
     executionCostUSD: number,
+    turnPolicy: ConversationTurnPolicy,
+    warningIssued: boolean,
   ):
-    | { action: 'continue'; budgetUsd: number | undefined }
-    | { action: 'skip'; error: BudgetExceededError } {
-    if (this.budgetUsd === undefined) {
+    | {
+        action: 'continue';
+        budgetUsd: number | undefined;
+        warningIssued: boolean;
+      }
+    | {
+        action: 'skip';
+        error: BudgetExceededError;
+        warningIssued: boolean;
+      } {
+    const conversationRemainingBudgetUsd =
+      this.budgetUsd === undefined
+        ? undefined
+        : this.budgetUsd - (this.totalCostUSD + executionCostUSD);
+    const requestRemainingBudgetUsd =
+      turnPolicy.budgetUsd === undefined
+        ? undefined
+        : turnPolicy.budgetUsd - executionCostUSD;
+    const remainingBudgets = [
+      conversationRemainingBudgetUsd,
+      requestRemainingBudgetUsd,
+    ].filter((value): value is number => value !== undefined);
+
+    if (remainingBudgets.length === 0) {
       return {
         action: 'continue',
         budgetUsd: undefined,
+        warningIssued,
       };
     }
 
-    const remainingBudgetUsd =
-      this.budgetUsd - (this.totalCostUSD + executionCostUSD);
+    const remainingBudgetUsd = Math.min(...remainingBudgets);
     if (remainingBudgetUsd > 0) {
       return {
         action: 'continue',
         budgetUsd: remainingBudgetUsd,
+        warningIssued,
       };
     }
 
+    const isConversationBudget =
+      conversationRemainingBudgetUsd !== undefined &&
+      (requestRemainingBudgetUsd === undefined ||
+        conversationRemainingBudgetUsd <= requestRemainingBudgetUsd);
+    const bindingRemainingBudgetUsd = isConversationBudget
+      ? conversationRemainingBudgetUsd
+      : requestRemainingBudgetUsd;
+    const effectiveRemainingBudgetUsd = Math.max(
+      0,
+      bindingRemainingBudgetUsd ?? remainingBudgetUsd,
+    );
     const error = new BudgetExceededError(
-      `Conversation budget of ${formatCost(this.budgetUsd)} has been exhausted.`,
+      `${isConversationBudget ? 'Conversation' : 'Conversation request'} budget has been exhausted; effective remaining budget is ${formatCost(effectiveRemainingBudgetUsd)}.`,
       {
         details: {
-          budgetUsd: this.budgetUsd,
+          bindingBudgetScope: isConversationBudget ? 'conversation' : 'request',
+          budgetUsd: effectiveRemainingBudgetUsd,
+          ...(this.budgetUsd !== undefined
+            ? { conversationBudgetUsd: this.budgetUsd }
+            : {}),
+          ...(conversationRemainingBudgetUsd !== undefined
+            ? { conversationRemainingBudgetUsd }
+            : {}),
+          ...(turnPolicy.budgetUsd !== undefined
+            ? { requestBudgetUsd: turnPolicy.budgetUsd }
+            : {}),
+          ...(requestRemainingBudgetUsd !== undefined
+            ? { requestRemainingBudgetUsd }
+            : {}),
+          remainingBudgetUsd,
           totalCostUSD: this.totalCostUSD + executionCostUSD,
+          turnCostUSD: executionCostUSD,
         },
         ...(this.model !== undefined ? { model: this.model } : {}),
         ...(this.provider !== undefined ? { provider: this.provider } : {}),
       },
     );
 
-    if (this.budgetExceededAction === 'warn') {
-      this.onWarning(error.message);
+    if (turnPolicy.budgetExceededAction === 'warn') {
+      if (!warningIssued) {
+        this.warnSafely(error.message);
+      }
       return {
         action: 'continue',
         budgetUsd: undefined,
+        warningIssued: true,
       };
     }
 
-    if (this.budgetExceededAction === 'skip') {
+    if (turnPolicy.budgetExceededAction === 'skip') {
       return {
         action: 'skip',
         error,
+        warningIssued,
       };
     }
 
     throw error;
+  }
+
+  private warnSafely(message: string): void {
+    try {
+      this.onWarning(message);
+    } catch {
+      // Warning observers are best-effort and must not affect a turn.
+    }
   }
 }
 
@@ -1726,6 +1899,16 @@ function buildBudgetSkipResponse(
     toolCalls: [],
     usage: createEmptyUsage(),
   };
+}
+
+function isBudgetSkipResponse(response: CanonicalResponse): boolean {
+  return (
+    typeof response.raw === 'object' &&
+    response.raw !== null &&
+    !Array.isArray(response.raw) &&
+    (response.raw as Record<string, unknown>).reason === 'budget_exceeded' &&
+    (response.raw as Record<string, unknown>).skipped === true
+  );
 }
 
 function accumulateUsage(

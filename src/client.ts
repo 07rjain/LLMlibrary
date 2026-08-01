@@ -377,13 +377,18 @@ export class LLMClient {
     const plan = this.resolveRequestPlan(requestOptions);
     const startedAt = Date.now();
     const attemptedRoutes: string[] = [];
+    let budgetWarningIssued = false;
 
     for (const [index, attempt] of plan.attempts.entries()) {
       throwIfAborted(requestOptions.signal);
       attemptedRoutes.push(attempt.decision);
 
       try {
-        const budgetDecision = this.handleBudgetExceededAction(attempt.request);
+        const budgetDecision = this.handleBudgetExceededAction(
+          attempt.request,
+          budgetWarningIssued,
+        );
+        budgetWarningIssued ||= budgetDecision.warningIssued;
         if (budgetDecision.action === 'skip') {
           const response = buildBudgetSkipResponse(
             budgetDecision.error,
@@ -1245,29 +1250,46 @@ export class LLMClient {
     );
   }
 
-  private handleBudgetExceededAction(
+  protected handleBudgetExceededAction(
     options: LLMRequestOptions & {
       maxTokens: number;
       model: string;
       provider: CanonicalProvider;
     },
-  ): { action: 'continue' } | { action: 'skip'; error: BudgetExceededError } {
+    warningIssued = false,
+  ):
+    | { action: 'continue'; warningIssued: boolean }
+    | {
+        action: 'skip';
+        error: BudgetExceededError;
+        warningIssued: boolean;
+      } {
     const error = this.resolveBudgetExceededError(options);
     if (!error) {
-      return { action: 'continue' };
+      return { action: 'continue', warningIssued };
     }
 
     const action = options.budgetExceededAction ?? this.budgetExceededAction;
     if (action === 'warn') {
-      this.onWarning(error.message);
-      return { action: 'continue' };
+      if (!warningIssued) {
+        this.warnSafely(error.message);
+      }
+      return { action: 'continue', warningIssued: true };
     }
 
     if (action === 'skip') {
-      return { action: 'skip', error };
+      return { action: 'skip', error, warningIssued };
     }
 
     throw error;
+  }
+
+  private warnSafely(message: string): void {
+    try {
+      this.onWarning(message);
+    } catch {
+      // Warning observers are best-effort and must not affect dispatch.
+    }
   }
 
   protected handleSpeechBudgetExceededAction(
@@ -1420,7 +1442,7 @@ export class LLMClient {
     throw error;
   }
 
-  private async logUsageEvent(event: UsageEvent): Promise<void> {
+  protected async logUsageEvent(event: UsageEvent): Promise<void> {
     if (!this.usageLogger) {
       return;
     }
@@ -1488,6 +1510,7 @@ export class LLMClient {
   ): AsyncGenerator<StreamChunk, void, void> {
     const attemptedRoutes: string[] = [];
     let sequence = 0;
+    let budgetWarningIssued = false;
 
     const decorate = (chunk: StreamChunk): StreamChunk => ({
       ...chunk,
@@ -1505,12 +1528,17 @@ export class LLMClient {
       let emittedUserVisibleChunk = false;
 
       try {
-        const budgetDecision = this.handleBudgetExceededAction(attempt.request);
+        const budgetDecision = this.handleBudgetExceededAction(
+          attempt.request,
+          budgetWarningIssued,
+        );
+        budgetWarningIssued ||= budgetDecision.warningIssued;
         if (budgetDecision.action === 'skip') {
           const skipped = buildBudgetSkipResponse(
             budgetDecision.error,
             attempt.request,
           );
+          yield decorate({ error: budgetDecision.error, type: 'error' });
           yield decorate({ delta: skipped.text, type: 'text-delta' });
           await this.logUsageEvent(
             buildUsageEvent({
@@ -1631,6 +1659,7 @@ class MockLLMClient extends LLMClient {
     this.speechQueue = [...(options.speeches ?? [])];
     this.streamQueue = [...(options.streams ?? [])];
     this.transcriptionQueue = [...(options.transcriptions ?? [])];
+    ensureMockCompletionModel(this, defaultModel, defaultProvider);
     ensureMockSpeechModels(this);
   }
 
@@ -1698,6 +1727,22 @@ class MockLLMClient extends LLMClient {
     const validated = withValidatedRequest(options);
     throwIfAborted(validated.signal);
     const resolved = this.resolveMockRequest(validated);
+    const startedAt = Date.now();
+    const budgetDecision = this.handleBudgetExceededAction(resolved);
+    if (budgetDecision.action === 'skip') {
+      const response = buildBudgetSkipResponse(budgetDecision.error, resolved);
+      await this.logUsageEvent(
+        buildUsageEvent({
+          durationMs: Date.now() - startedAt,
+          finishReason: response.finishReason,
+          model: response.model,
+          options: validated,
+          provider: response.provider,
+          usage: response.usage,
+        }),
+      );
+      return response;
+    }
     const next = this.responseQueue.shift();
 
     if (!next) {
@@ -1796,6 +1841,7 @@ class MockLLMClient extends LLMClient {
 
   override stream(options: LLMRequestOptions): CancelableStream<StreamChunk> {
     const requestOptions = withValidatedRequest(options);
+    const startedAt = Date.now();
     return createCancelableStream(
       async function* (
         this: MockLLMClient,
@@ -1806,7 +1852,6 @@ class MockLLMClient extends LLMClient {
           ...requestOptions,
           signal,
         });
-        const next = this.streamQueue.shift();
         let sequence = 0;
         const decorate = (chunk: StreamChunk): StreamChunk => ({
           ...chunk,
@@ -1817,6 +1862,34 @@ class MockLLMClient extends LLMClient {
           timestamp: new Date().toISOString(),
           version: chunk.version ?? STREAM_EVENT_VERSION,
         });
+
+        const budgetDecision = this.handleBudgetExceededAction(resolved);
+        if (budgetDecision.action === 'skip') {
+          const skipped = buildBudgetSkipResponse(
+            budgetDecision.error,
+            resolved,
+          );
+          yield decorate({ error: budgetDecision.error, type: 'error' });
+          yield decorate({ delta: skipped.text, type: 'text-delta' });
+          await this.logUsageEvent(
+            buildUsageEvent({
+              durationMs: Date.now() - startedAt,
+              finishReason: skipped.finishReason,
+              model: skipped.model,
+              options: requestOptions,
+              provider: skipped.provider,
+              usage: skipped.usage,
+            }),
+          );
+          yield decorate({
+            finishReason: skipped.finishReason,
+            type: 'done',
+            usage: skipped.usage,
+          });
+          return;
+        }
+
+        const next = this.streamQueue.shift();
 
         yield decorate({
           model: resolved.model,
@@ -2087,6 +2160,29 @@ const DEFAULT_MOCK_SPEECH_MODELS: ModelInfo[] = [
     supportsVision: false,
   },
 ];
+
+function ensureMockCompletionModel(
+  client: LLMClient,
+  model: string,
+  provider: CanonicalProvider,
+): void {
+  try {
+    client.models.get(model);
+  } catch {
+    client.models.register({
+      contextWindow: 8_192,
+      id: model,
+      inputPrice: 0,
+      kind: 'completion',
+      lastUpdated: '2026-07-13',
+      outputPrice: 0,
+      provider,
+      supportsStreaming: true,
+      supportsTools: true,
+      supportsVision: false,
+    });
+  }
+}
 
 function ensureMockSpeechModels(client: LLMClient): void {
   const registered = new Map(

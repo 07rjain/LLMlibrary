@@ -281,14 +281,37 @@ const conversation = await client.conversation({
 });
 ```
 
+You can also set a stricter cap, output limit, or action for one turn. A
+per-send `budgetUsd` is a turn cap: the library subtracts usage from earlier
+automatic tool rounds in that turn. When both a conversation cap and per-send
+cap exist, each round receives the smaller remaining amount. A per-send action
+overrides the conversation action for that turn.
+
+```ts
+await conversation.send('Run the analysis.', {
+  budgetUsd: 0.05,
+  maxTokens: 800,
+  budgetExceededAction: 'skip',
+});
+```
+
+The remaining conversation cap subtracts both spend persisted by earlier turns
+and usage accumulated by earlier model/tool rounds in the current turn. The
+guard runs before every model round, including the round after a tool result.
+
 Supported actions:
 
 - `throw`
   Fail immediately when the estimated next request would exceed budget
 - `warn`
-  Continue, but trigger the configured warning callback
+  Continue, but trigger the configured warning callback at most once for the
+  operation. Warning text contains only sanitized budget/model/provider data,
+  and exceptions thrown by the callback are ignored.
 - `skip`
-  Skip the model call and return a synthetic budget-exceeded response
+  Skip the model call and return a synthetic budget-exceeded response with
+  zero usage. Direct client skips emit one zero-cost usage event. Conversation
+  history retains the user turn and any real tool-loop messages, but never
+  stores the synthetic budget error as an assistant reply.
 
 ## Practical Rule
 

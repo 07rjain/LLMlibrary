@@ -3011,6 +3011,160 @@ describe('LLMClient', () => {
     expect(fetchImplementation).toHaveBeenCalledTimes(1);
   });
 
+  it('warns once across routed fallback attempts for complete and stream', async () => {
+    const makeRouter = () =>
+      new ModelRouter({
+        rules: [
+          {
+            fallback: ['gpt-4o-mini'],
+            name: 'budget-warning-fallback',
+            target: 'gpt-4o',
+          },
+        ],
+      });
+    const warnings: string[] = [];
+    const onWarning = (message: string) => {
+      warnings.push(message);
+      throw new Error('SECRET_WARNING_CALLBACK_FAILURE');
+    };
+    const completeFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: 'retry' } }), {
+          headers: { 'content-type': 'application/json' },
+          status: 429,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 'resp_budget_fallback',
+            model: 'gpt-4o-mini',
+            object: 'response',
+            output: [
+              {
+                content: [
+                  {
+                    annotations: [],
+                    text: 'complete fallback',
+                    type: 'output_text',
+                  },
+                ],
+                id: 'msg_budget_fallback',
+                role: 'assistant',
+                status: 'completed',
+                type: 'message',
+              },
+            ],
+            status: 'completed',
+            usage: { input_tokens: 1, output_tokens: 1 },
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        ),
+      );
+    const completeClient = new LLMClient({
+      fetchImplementation: completeFetch,
+      modelRouter: makeRouter(),
+      onWarning,
+      openaiApiKey: 'openai-key',
+      retryOptions: { baseMs: 0, jitterMs: 0, maxAttempts: 1 },
+    });
+    await expect(
+      completeClient.complete({
+        budgetExceededAction: 'warn',
+        budgetUsd: 0,
+        maxTokens: 8,
+        messages: [{ content: 'SECRET_COMPLETE_PROMPT', role: 'user' }],
+      }),
+    ).resolves.toMatchObject({ text: 'complete fallback' });
+    expect(warnings).toHaveLength(1);
+
+    warnings.length = 0;
+    const streamFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: 'retry' } }), {
+          headers: { 'content-type': 'application/json' },
+          status: 429,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `data: ${JSON.stringify({
+                    content_index: 0,
+                    delta: 'stream fallback',
+                    item_id: 'msg_stream_budget',
+                    output_index: 0,
+                    sequence_number: 1,
+                    type: 'response.output_text.delta',
+                  })}\n\n`,
+                ),
+              );
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `data: ${JSON.stringify({
+                    response: {
+                      id: 'resp_stream_budget',
+                      model: 'gpt-4o-mini',
+                      object: 'response',
+                      output: [
+                        {
+                          content: [
+                            {
+                              annotations: [],
+                              text: 'stream fallback',
+                              type: 'output_text',
+                            },
+                          ],
+                          id: 'msg_stream_budget',
+                          role: 'assistant',
+                          status: 'completed',
+                          type: 'message',
+                        },
+                      ],
+                      status: 'completed',
+                      usage: { input_tokens: 1, output_tokens: 1 },
+                    },
+                    sequence_number: 2,
+                    type: 'response.completed',
+                  })}\n\n`,
+                ),
+              );
+              controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+              controller.close();
+            },
+          }),
+          {
+            headers: { 'content-type': 'text/event-stream' },
+            status: 200,
+          },
+        ),
+      );
+    const streamClient = new LLMClient({
+      fetchImplementation: streamFetch,
+      modelRouter: makeRouter(),
+      onWarning,
+      openaiApiKey: 'openai-key',
+      retryOptions: { baseMs: 0, jitterMs: 0, maxAttempts: 1 },
+    });
+    await collectClientStream(
+      streamClient.stream({
+        budgetExceededAction: 'warn',
+        budgetUsd: 0,
+        maxTokens: 8,
+        messages: [{ content: 'SECRET_STREAM_PROMPT', role: 'user' }],
+      }),
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings.join(' ')).not.toMatch(
+      /SECRET_COMPLETE_PROMPT|SECRET_STREAM_PROMPT|SECRET_WARNING_CALLBACK_FAILURE|openai-key/,
+    );
+  });
+
   it('logs usage events for successful requests', async () => {
     const usageLogger = {
       log: vi.fn(async () => undefined),
@@ -3271,6 +3425,197 @@ describe('LLMClient', () => {
         finishReason: 'error',
         sessionId: 'skipped-session',
       }),
+    );
+  });
+
+  it('enforces throw, warn, and skip before mock complete queue consumption', async () => {
+    const request = {
+      budgetUsd: 0,
+      maxTokens: 8,
+      messages: [{ content: 'SECRET_PROMPT_VALUE', role: 'user' as const }],
+      metadata: { secret: 'SECRET_METADATA_VALUE' },
+      model: 'paid-mock',
+    };
+    const throwFactory = vi.fn(() => mockCompletionResponse('throw-reused'));
+    const throwClient = LLMClient.mock({
+      modelRegistry: paidMockRegistry(),
+      responses: [throwFactory],
+    });
+    await expect(
+      throwClient.complete({
+        ...request,
+        budgetExceededAction: 'throw',
+      }),
+    ).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(throwFactory).not.toHaveBeenCalled();
+    await expect(
+      throwClient.complete({ ...request, budgetUsd: 1 }),
+    ).resolves.toMatchObject({ text: 'throw-reused' });
+
+    const usageLogger = { log: vi.fn(async () => undefined) };
+    const skipFactory = vi.fn(() => mockCompletionResponse('skip-reused'));
+    const skipClient = LLMClient.mock({
+      modelRegistry: paidMockRegistry(),
+      responses: [skipFactory],
+      usageLogger,
+    });
+    await expect(
+      skipClient.complete({
+        ...request,
+        budgetExceededAction: 'skip',
+      }),
+    ).resolves.toMatchObject({
+      finishReason: 'error',
+      raw: { reason: 'budget_exceeded', skipped: true },
+      usage: { costUSD: 0, inputTokens: 0, outputTokens: 0 },
+    });
+    expect(skipFactory).not.toHaveBeenCalled();
+    expect(usageLogger.log).toHaveBeenCalledTimes(1);
+    expect(usageLogger.log).toHaveBeenCalledWith(
+      expect.objectContaining({ costUSD: 0, finishReason: 'error' }),
+    );
+    await skipClient.complete({ ...request, budgetUsd: 1 });
+    expect(skipFactory).toHaveBeenCalledOnce();
+
+    const warnings: string[] = [];
+    const warnFactory = vi.fn(() => mockCompletionResponse('warned'));
+    const warnClient = LLMClient.mock({
+      modelRegistry: paidMockRegistry(),
+      onWarning: (message) => {
+        warnings.push(message);
+        throw new Error('SECRET_CALLBACK_ERROR');
+      },
+      responses: [warnFactory],
+    });
+    await expect(
+      warnClient.complete({
+        ...request,
+        budgetExceededAction: 'warn',
+      }),
+    ).resolves.toMatchObject({ text: 'warned' });
+    expect(warnFactory).toHaveBeenCalledOnce();
+    expect(warnings).toHaveLength(1);
+    expect(warnings.join(' ')).not.toMatch(
+      /SECRET_PROMPT_VALUE|SECRET_METADATA_VALUE|SECRET_CALLBACK_ERROR/,
+    );
+  });
+
+  it('enforces throw, warn, and skip before mock stream queue consumption', async () => {
+    const request = {
+      budgetUsd: 0,
+      maxTokens: 8,
+      messages: [{ content: 'stream secret', role: 'user' as const }],
+      model: 'paid-mock',
+    };
+    const reusableStream: StreamChunk[] = [
+      { delta: 'ok', type: 'text-delta' },
+      {
+        finishReason: 'stop',
+        type: 'done',
+        usage: {
+          cachedTokens: 0,
+          cost: '$0.00',
+          costUSD: 0,
+          inputTokens: 1,
+          outputTokens: 1,
+        },
+      },
+    ];
+    const throwFactory = vi.fn(() => reusableStream);
+    const throwClient = LLMClient.mock({
+      modelRegistry: paidMockRegistry(),
+      streams: [throwFactory],
+    });
+    await expect(
+      collectClientStream(throwClient.stream(request)),
+    ).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(throwFactory).not.toHaveBeenCalled();
+    await collectClientStream(throwClient.stream({ ...request, budgetUsd: 1 }));
+    expect(throwFactory).toHaveBeenCalledOnce();
+
+    const usageLogger = { log: vi.fn(async () => undefined) };
+    const skipFactory = vi.fn(() => reusableStream);
+    const skipClient = LLMClient.mock({
+      modelRegistry: paidMockRegistry(),
+      streams: [skipFactory],
+      usageLogger,
+    });
+    const skipped = await collectClientStream(
+      skipClient.stream({ ...request, budgetExceededAction: 'skip' }),
+    );
+    expect(skipped.map((chunk) => chunk.type)).toEqual([
+      'error',
+      'text-delta',
+      'done',
+    ]);
+    expect(skipFactory).not.toHaveBeenCalled();
+    expect(usageLogger.log).toHaveBeenCalledTimes(1);
+    await collectClientStream(skipClient.stream({ ...request, budgetUsd: 1 }));
+    expect(skipFactory).toHaveBeenCalledOnce();
+
+    const onWarning = vi.fn(() => {
+      throw new Error('warning observer failed');
+    });
+    const warnFactory = vi.fn(() => reusableStream);
+    const warnClient = LLMClient.mock({
+      modelRegistry: paidMockRegistry(),
+      onWarning,
+      streams: [warnFactory],
+    });
+    await expect(
+      collectClientStream(
+        warnClient.stream({ ...request, budgetExceededAction: 'warn' }),
+      ),
+    ).resolves.toEqual(expect.any(Array));
+    expect(onWarning).toHaveBeenCalledOnce();
+    expect(warnFactory).toHaveBeenCalledOnce();
+  });
+
+  it('enforces real stream throw and skip before fetch with one skip event', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>();
+    const throwClient = new LLMClient({
+      defaultModel: 'gpt-4o',
+      fetchImplementation,
+      openaiApiKey: 'openai-key',
+    });
+    const request = {
+      budgetUsd: 0,
+      maxTokens: 8,
+      messages: [{ content: 'stream budget', role: 'user' as const }],
+    };
+    await expect(
+      collectClientStream(
+        throwClient.stream({
+          ...request,
+          budgetExceededAction: 'throw',
+        }),
+      ),
+    ).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(fetchImplementation).not.toHaveBeenCalled();
+
+    const usageLogger = { log: vi.fn(async () => undefined) };
+    const skipClient = new LLMClient({
+      defaultModel: 'gpt-4o',
+      fetchImplementation,
+      openaiApiKey: 'openai-key',
+      usageLogger,
+    });
+    const chunks = await collectClientStream(
+      skipClient.stream({ ...request, budgetExceededAction: 'skip' }),
+    );
+    expect(chunks.map((chunk) => chunk.type)).toEqual([
+      'error',
+      'text-delta',
+      'done',
+    ]);
+    expect(chunks.at(-1)).toMatchObject({
+      finishReason: 'error',
+      usage: { costUSD: 0, inputTokens: 0, outputTokens: 0 },
+    });
+    expect(fetchImplementation).not.toHaveBeenCalled();
+    expect(usageLogger.log).toHaveBeenCalledOnce();
+    expect(usageLogger.log).toHaveBeenCalledWith(
+      expect.objectContaining({ costUSD: 0, finishReason: 'error' }),
     );
   });
 
@@ -4149,6 +4494,51 @@ class MockPool {
       rows,
     };
   }
+}
+
+function paidMockRegistry(): ModelRegistry {
+  return new ModelRegistry({
+    'paid-mock': {
+      contextWindow: 8_192,
+      inputPrice: 10,
+      kind: 'completion',
+      lastUpdated: '2026-07-13',
+      outputPrice: 20,
+      provider: 'mock',
+      supportsStreaming: true,
+      supportsTools: true,
+      supportsVision: false,
+    },
+  });
+}
+
+function mockCompletionResponse(text: string) {
+  return {
+    content: [{ text, type: 'text' as const }],
+    finishReason: 'stop' as const,
+    model: 'paid-mock',
+    provider: 'mock' as const,
+    raw: {},
+    text,
+    toolCalls: [],
+    usage: {
+      cachedTokens: 0,
+      cost: '$0.00',
+      costUSD: 0,
+      inputTokens: 1,
+      outputTokens: 1,
+    },
+  };
+}
+
+async function collectClientStream(
+  stream: AsyncIterable<StreamChunk>,
+): Promise<StreamChunk[]> {
+  const chunks: StreamChunk[] = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+  return chunks;
 }
 
 function mockSpeechResponse(marker: string) {
