@@ -29,7 +29,7 @@ describe('Session Store', () => {
       });
       const retrieved = await store.get('session-1');
 
-      expect(retrieved?.snapshot).toEqual(session);
+      expect(retrieved?.snapshot).toEqual({ ...session, version: 1 });
     });
 
     it('should return null for non-existent sessions', async () => {

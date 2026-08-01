@@ -126,19 +126,36 @@ export class InvalidSessionStoreListOptionsError extends LLMError {
   }
 }
 
+/** An atomic session mutation was rejected because its base version is stale. */
+export class SessionStoreConflictError extends LLMError {
+  constructor(operation: 'delete' | 'set') {
+    super('Session state changed before the mutation could be committed.', {
+      details: {
+        code: 'session_store_conflict',
+        operation,
+      },
+      retryable: true,
+      statusCode: 409,
+    });
+  }
+}
+
 /** Redis session listing cannot proceed safely with the supplied scan adapter. */
 export class RedisSessionStoreCapabilityError extends LLMError {
   constructor(
-    operation: 'list',
+    operation: 'delete' | 'list' | 'set',
     code:
       | 'redis_scan_adapter_error'
       | 'redis_scan_iteration_limit_exceeded'
       | 'redis_scan_key_limit_exceeded'
       | 'redis_scan_no_progress'
-      | 'unsupported_redis_scan_capability',
+      | 'unsupported_redis_scan_capability'
+      | 'unsupported_redis_atomic_write_capability',
   ) {
     super(
-      'Redis session listing requires a bounded, cluster-safe scan iterator.',
+      operation === 'list'
+        ? 'Redis session listing requires a bounded, cluster-safe scan iterator.'
+        : 'Redis guarded session mutations require atomic Lua evaluation.',
       {
         details: {
           code,
@@ -146,7 +163,8 @@ export class RedisSessionStoreCapabilityError extends LLMError {
         },
         retryable: false,
         statusCode:
-          code === 'unsupported_redis_scan_capability'
+          code === 'unsupported_redis_scan_capability' ||
+          code === 'unsupported_redis_atomic_write_capability'
             ? 501
             : code === 'redis_scan_adapter_error'
               ? 502

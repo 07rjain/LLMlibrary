@@ -394,6 +394,7 @@ export class SessionApi {
     const snapshot = conversation.serialise();
     await this.sessionStore.set(snapshot.sessionId, snapshot, {
       createdAt: snapshot.createdAt,
+      expectedVersion: 0,
       ...(snapshot.model !== undefined ? { model: snapshot.model } : {}),
       ...(snapshot.provider !== undefined
         ? { provider: snapshot.provider }
@@ -519,8 +520,10 @@ export class SessionApi {
       requestContext,
       url.searchParams.get('tenantId') ?? undefined,
     );
-    await this.requireSession(sessionId, tenantId);
-    await this.sessionStore.delete(sessionId, tenantId);
+    const record = await this.requireSession(sessionId, tenantId);
+    await this.sessionStore.delete(sessionId, tenantId, {
+      expectedVersion: record.meta.version ?? record.snapshot.version ?? 0,
+    });
 
     return jsonResponse({
       deleted: true,
@@ -591,6 +594,7 @@ export class SessionApi {
       updatedSnapshot,
       {
         createdAt: updatedSnapshot.createdAt,
+        expectedVersion: record.meta.version ?? record.snapshot.version ?? 0,
         ...(updatedSnapshot.model !== undefined
           ? { model: updatedSnapshot.model }
           : {}),
@@ -682,6 +686,7 @@ export class SessionApi {
       forkedSnapshot,
       {
         createdAt: timestamp,
+        expectedVersion: 0,
         ...(forkedSnapshot.model !== undefined
           ? { model: forkedSnapshot.model }
           : {}),

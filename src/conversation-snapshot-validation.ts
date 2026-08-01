@@ -95,6 +95,9 @@ function validateSnapshot(value: unknown): ConversationSnapshot {
   const totalReasoningTokens = hasDefinedValue(fields, 'totalReasoningTokens')
     ? requiredTokenTotal(fields, 'totalReasoningTokens')
     : 0;
+  const version = hasDefinedValue(fields, 'version')
+    ? requiredTokenTotal(fields, 'version')
+    : 0;
 
   const budgetUsd = optionalFiniteNonNegative(fields, 'budgetUsd', false);
   const maxContextTokens = optionalFiniteNonNegative(
@@ -166,6 +169,7 @@ function validateSnapshot(value: unknown): ConversationSnapshot {
     totalOutputTokens,
     totalReasoningTokens,
     updatedAt,
+    version,
   };
 }
 

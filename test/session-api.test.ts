@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { SlidingWindowStrategy } from '../src/context-manager.js';
-import { LLMError, ProviderCapabilityError } from '../src/errors.js';
+import {
+  LLMError,
+  ProviderCapabilityError,
+  SessionStoreConflictError,
+} from '../src/errors.js';
 import { createSessionApi as createSessionApiSource } from '../src/session-api.js';
 import {
   InMemorySessionStore,
@@ -26,6 +30,117 @@ function createSessionApi(options: SessionApiOptions) {
 }
 
 describe('SessionApi', () => {
+  it('rejects a duplicate POST session id without overwriting the first record', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const api = createSessionApi({
+      client: LLMClient.mock(),
+      sessionStore: store,
+    });
+    const body = { sessionId: 'duplicate-post' };
+
+    const first = await api.handle(
+      new Request('https://example.test/sessions', {
+        body: JSON.stringify(body),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+    );
+    const second = await api.handle(
+      new Request('https://example.test/sessions', {
+        body: JSON.stringify(body),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+    );
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(409);
+    expect(await second.json()).toMatchObject({
+      error: {
+        code: 'session_already_exists',
+        name: 'HttpError',
+      },
+    });
+    expect((await store.get('duplicate-post'))?.snapshot.sessionId).toBe(
+      'duplicate-post',
+    );
+  });
+
+  it('compacts a versionless InMemory record using its normalized legacy version', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const conversation = await LLMClient.mock().conversation({
+      messages: [
+        { content: 'first', role: 'user' },
+        { content: 'second', role: 'assistant' },
+      ],
+      sessionId: 'legacy-compact',
+    });
+    await store.set('legacy-compact', conversation.serialise(), {
+      expectedVersion: 0,
+    });
+    const records = (
+      store as unknown as {
+        records: Map<
+          string,
+          { meta: { version?: number }; snapshot: { version?: number } }
+        >;
+      }
+    ).records;
+    const legacy = records.values().next().value;
+    delete legacy?.meta.version;
+    delete legacy?.snapshot.version;
+    const api = createSessionApi({
+      client: LLMClient.mock(),
+      sessionStore: store,
+    });
+
+    const response = await api.handle(
+      jsonRequest(
+        'https://example.test/sessions/legacy-compact/compact',
+        'POST',
+        { maxMessages: 1 },
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const persisted = await store.get('legacy-compact');
+    expect(persisted?.meta.version).toBe(2);
+    expect(persisted?.snapshot.version).toBe(2);
+  });
+
+  it('maps stale guarded mutations to a sanitized HTTP 409', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const conversation = await LLMClient.mock().conversation({
+      sessionId: 'conflict-session',
+    });
+    await store.set('conflict-session', conversation.serialise(), {
+      expectedVersion: 0,
+    });
+    store.delete = vi.fn(async () => {
+      throw new SessionStoreConflictError('delete');
+    });
+    const api = createSessionApi({
+      client: LLMClient.mock(),
+      sessionStore: store,
+    });
+
+    const response = await api.handle(
+      new Request('https://example.test/sessions/conflict-session', {
+        method: 'DELETE',
+      }),
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'session_store_conflict',
+        message:
+          'Session state changed before the mutation could be committed.',
+        name: 'SessionStoreConflictError',
+        statusCode: 409,
+      },
+    });
+  });
+
   it('forwards canonical filters and opaque pagination to listPage without double work', async () => {
     const listPage = vi.fn(async () => ({
       items: [

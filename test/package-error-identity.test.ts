@@ -64,6 +64,14 @@ assert.equal(sessionApiModule.createSessionApi, root.createSessionApi);
 assert.equal(sessionStoreModule.InMemorySessionStore, root.InMemorySessionStore);
 assert.equal(sessionStoreModule.PostgresSessionStore, root.PostgresSessionStore);
 assert.equal(sessionStoreModule.RedisSessionStore, root.RedisSessionStore);
+assert.equal(errors.SessionStoreConflictError, root.SessionStoreConflictError);
+assert.equal(
+  sessionStoreModule.SessionStoreConflictError,
+  root.SessionStoreConflictError,
+);
+const sessionConflict = new sessionStoreModule.SessionStoreConflictError('set');
+assert.equal(sessionConflict instanceof errors.SessionStoreConflictError, true);
+assert.equal(sessionConflict instanceof root.SessionStoreConflictError, true);
 
 let snapshotError;
 try {
@@ -385,6 +393,14 @@ const assert = require('node:assert/strict');
   assert.equal(sessionStoreModule.InMemorySessionStore, root.InMemorySessionStore);
   assert.equal(sessionStoreModule.PostgresSessionStore, root.PostgresSessionStore);
   assert.equal(sessionStoreModule.RedisSessionStore, root.RedisSessionStore);
+  assert.equal(errors.SessionStoreConflictError, root.SessionStoreConflictError);
+  assert.equal(
+    sessionStoreModule.SessionStoreConflictError,
+    root.SessionStoreConflictError,
+  );
+  const sessionConflict = new sessionStoreModule.SessionStoreConflictError('set');
+  assert.equal(sessionConflict instanceof errors.SessionStoreConflictError, true);
+  assert.equal(sessionConflict instanceof root.SessionStoreConflictError, true);
 
   let snapshotError;
   try {

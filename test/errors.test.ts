@@ -13,6 +13,7 @@ import {
   RateLimitError,
   RedisSessionStoreCapabilityError,
   RedisSessionStoreKeyConflictError,
+  SessionStoreConflictError,
 } from '../src/errors.js';
 
 describe('LLMError hierarchy', () => {
@@ -77,10 +78,23 @@ describe('LLMError hierarchy', () => {
       ),
     ).toBeInstanceOf(LLMError);
     expect(new RedisSessionStoreKeyConflictError()).toBeInstanceOf(LLMError);
+    expect(new SessionStoreConflictError('set')).toBeInstanceOf(LLMError);
     expect(
       new InvalidSessionStoreListOptionsError('invalid_session_cursor'),
     ).toBeInstanceOf(LLMError);
     expect(new ProviderError('provider')).toBeInstanceOf(LLMError);
+  });
+
+  it('keeps session conflicts retryable, sanitized, and stable', () => {
+    const error = new SessionStoreConflictError('set');
+    expect(error.toJSON()).toMatchObject({
+      details: { code: 'session_store_conflict', operation: 'set' },
+      message: 'Session state changed before the mutation could be committed.',
+      name: 'SessionStoreConflictError',
+      retryable: true,
+      statusCode: 409,
+    });
+    expect(JSON.stringify(error.toJSON())).not.toContain('session-id');
   });
 
   it('keeps invalid snapshot errors stable and sanitized', () => {

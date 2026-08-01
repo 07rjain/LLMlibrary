@@ -69,6 +69,8 @@ Example body:
 The response contains the server-generated ID in `session.id`. With
 `allowClientSessionIds: true`, a sequential duplicate supplied ID returns
 `409 session_already_exists` without replacing the first session.
+Concurrent creators are also protected by the guarded `expectedVersion: 0`
+write, so only one request can create a missing session.
 
 `system` and other policy fields should normally be supplied through
 `conversationDefaults` on the server. If a trusted internal caller must set one
@@ -137,6 +139,8 @@ Supported query parameters:
 ### `DELETE /sessions/{id}`
 
 Deletes the stored session snapshot.
+
+All mutating endpoints use the session record's monotonic version for atomic compare-and-set. If another request commits or deletes the same session first, the stale request receives HTTP `409` with error code `session_store_conflict`. Clients should reload the session and retry explicitly; the server does not repeat provider or tool execution automatically.
 
 ### `POST /sessions/{id}/compact`
 

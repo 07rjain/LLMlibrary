@@ -86,9 +86,16 @@ Your Redis client must implement:
 - `get()`
 - `set()`
 - `del()`
+- `eval()` for atomic guarded writes used by `Conversation` and `SessionApi`
 - a bounded, cluster-safe `scanIterator()`
 
-The store never calls Redis `KEYS`. Listing fails closed with a typed capability error when a safe scan iterator is unavailable. In clustered deployments, the adapter is responsible for scanning every relevant primary node and terminating normally; `scanCount`, `maxScanIterations`, `maxScanKeys`, and `maxScanNoProgressIterations` bound work on the library side.
+The store never calls Redis `KEYS`. Listing fails closed with a typed capability error when a safe scan iterator is unavailable. In clustered deployments, the adapter is responsible for scanning every relevant primary node and terminating normally; `scanCount`, `maxScanIterations`, `maxScanKeys`, and `maxScanNoProgressIterations` bound work on the library side. The default guarded-write adapter contract uses node-redis's object-form `eval()`; pass `evalMode: 'ioredis'` when the client uses ioredis's numeric key-count form.
+
+## Optimistic Concurrency
+
+Every core session record carries a monotonic `meta.version`. `Conversation` restore/save and every Session API mutation use atomic compare-and-set writes, preventing two workers from silently overwriting the same base state. A stale writer receives `SessionStoreConflictError` (`statusCode: 409`, `retryable: true`); its local messages and totals remain unchanged. Reload, then resend the turn. Provider and tool execution are deliberately not retried automatically.
+
+Direct store callers can pass `expectedVersion` to `set()`, or as the third argument to `delete()`. Version `0` means create only if absent; positive values require an exact match. Omitting it retains legacy unconditional last-write-wins behavior. Postgres enforces the predicate in SQL, Redis uses Lua, and in-memory mutation is synchronous. Redis guarded writes fail closed with `RedisSessionStoreCapabilityError` when `eval()` is unavailable.
 
 New records use v2 keys whose tenant and session components are UTF-8 base64url encoded. Reads and deletes accept a legacy delimiter-based key only after its stored metadata exactly matches the requested tenant/session tuple. Listing verifies legacy identity, skips malformed legacy records, deduplicates legacy/v2 copies, and prefers v2. Compatibility reads never mutate data or refresh TTL. Use an explicit migration process that preserves remaining TTL before removing legacy keys.
 

@@ -187,6 +187,8 @@ export interface ConversationSnapshot {
   totalOutputTokens: number;
   totalReasoningTokens?: number;
   updatedAt: string;
+  /** Monotonic persistence version; legacy snapshots default to zero. */
+  version?: number;
 }
 
 /** Configuration for a new or restored `Conversation`. */
@@ -272,6 +274,7 @@ export class Conversation {
   private turnActive = false;
   private readonly turnWaiters: TurnWaiter[] = [];
   private updatedAt: string;
+  private version = 0;
 
   constructor(client: ConversationClient, options: ConversationOptions = {}) {
     validateBudgetUsd((options as { budgetUsd?: unknown }).budgetUsd);
@@ -450,7 +453,10 @@ export class Conversation {
     return this.buildSnapshot();
   }
 
-  private buildSnapshot(state?: ConversationState): ConversationSnapshot {
+  private buildSnapshot(
+    state?: ConversationState,
+    version = this.version,
+  ): ConversationSnapshot {
     const current = state ?? {
       messages: this.messages,
       model: this.model,
@@ -500,6 +506,7 @@ export class Conversation {
       totalOutputTokens: current.totalOutputTokens,
       totalReasoningTokens: current.totalReasoningTokens,
       updatedAt: current.updatedAt,
+      version,
     };
   }
 
@@ -654,6 +661,7 @@ export class Conversation {
     conversation.totalReasoningTokens =
       restoredSnapshot.totalReasoningTokens ?? 0;
     conversation.updatedAt = restoredSnapshot.updatedAt;
+    conversation.version = restoredSnapshot.version ?? 0;
     return conversation;
   }
 
@@ -1275,8 +1283,15 @@ export class Conversation {
         this.totalReasoningTokens + (result.usage.reasoningTokens ?? 0),
       updatedAt: new Date().toISOString(),
     };
-    const snapshot = this.buildSnapshot(state);
-    await this.persistSnapshot(snapshot, state.model, state.provider);
+    const snapshot = this.buildSnapshot(
+      state,
+      this.store ? this.version + 1 : this.version,
+    );
+    const committedVersion = await this.persistSnapshot(
+      snapshot,
+      state.model,
+      state.provider,
+    );
 
     this.messages = state.messages;
     this.model = state.model;
@@ -1287,23 +1302,26 @@ export class Conversation {
     this.totalOutputTokens = state.totalOutputTokens;
     this.totalReasoningTokens = state.totalReasoningTokens;
     this.updatedAt = state.updatedAt;
+    this.version = committedVersion;
   }
 
   private async persistSnapshot(
     snapshot: ConversationSnapshot,
     model: string | undefined,
     provider: CanonicalProvider | undefined,
-  ): Promise<void> {
+  ): Promise<number> {
     if (!this.store) {
-      return;
+      return this.version;
     }
 
-    await this.store.set(this.sessionId, snapshot, {
+    const record = await this.store.set(this.sessionId, snapshot, {
       createdAt: this.createdAt,
+      expectedVersion: this.version,
       ...(model !== undefined ? { model } : {}),
       ...(provider !== undefined ? { provider } : {}),
       ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
     });
+    return record?.meta.version ?? snapshot.version ?? this.version + 1;
   }
 
   private acquireTurn(signal: AbortSignal | undefined): Promise<() => void> {

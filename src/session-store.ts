@@ -4,9 +4,12 @@ import {
   InvalidSessionStoreListOptionsError,
   RedisSessionStoreCapabilityError,
   RedisSessionStoreKeyConflictError,
+  SessionStoreConflictError,
 } from 'unified-llm-client/errors';
 
 import type { CanonicalProvider } from './types.js';
+
+export { SessionStoreConflictError };
 
 /** Metadata stored alongside a session snapshot. */
 export interface SessionMeta {
@@ -18,6 +21,8 @@ export interface SessionMeta {
   tenantId?: string;
   totalCostUSD: number;
   updatedAt: string;
+  /** Monotonic store revision used for optimistic concurrency control. */
+  version?: number;
 }
 
 /** Serialized session record returned by a `SessionStore`. */
@@ -52,11 +57,22 @@ export interface SessionStoreSetOptions {
   model?: string;
   provider?: CanonicalProvider;
   tenantId?: string;
+  /** Expected committed version. Zero requires that the session is absent. */
+  expectedVersion?: number;
+}
+
+/** Atomic-delete options for a session store. */
+export interface SessionStoreDeleteOptions {
+  expectedVersion?: number;
 }
 
 /** Contract for durable conversation persistence backends. */
 export interface SessionStore<TSnapshot = unknown> {
-  delete(sessionId: string, tenantId?: string): Promise<void>;
+  delete(
+    sessionId: string,
+    tenantId?: string,
+    options?: SessionStoreDeleteOptions,
+  ): Promise<void>;
   get(
     sessionId: string,
     tenantId?: string,
@@ -81,6 +97,7 @@ export interface PostgresSessionStoreRow<TSnapshot> {
   tenant_id: string;
   total_cost_usd: number | string;
   updated_at: Date | string;
+  version?: number | string;
 }
 
 /** Metadata-only row returned by paginated Postgres session listing. */
@@ -127,6 +144,11 @@ export interface RedisScanIteratorOptions {
 export interface RedisSessionStoreClient {
   del(key: string): Promise<number>;
   get(key: string): Promise<null | string>;
+  eval?(
+    script: string,
+    optionsOrKeyCount: number | { arguments: string[]; keys: string[] },
+    ...args: string[]
+  ): Promise<unknown>;
   /** @deprecated RedisSessionStore never calls KEYS. Provide scanIterator instead. */
   keys?(pattern: string): Promise<string[]>;
   scanIterator?(
@@ -142,6 +164,8 @@ export interface RedisSessionStoreClient {
 /** Configuration for `RedisSessionStore`. */
 export interface RedisSessionStoreOptions {
   client: RedisSessionStoreClient;
+  /** Redis eval calling convention. Defaults to node-redis object arguments. */
+  evalMode?: 'ioredis' | 'node-redis';
   keyPrefix?: string;
   maxScanIterations?: number;
   maxScanKeys?: number;
@@ -150,6 +174,105 @@ export interface RedisSessionStoreOptions {
   scanCount?: number;
   ttlSeconds?: number;
 }
+
+const REDIS_KEY_CONFLICT = '__SESSION_KEY_CONFLICT__';
+const REDIS_VERSION_CONFLICT = '__SESSION_VERSION_CONFLICT__';
+const REDIS_OK = '__SESSION_OK__';
+
+const REDIS_CAS_SET_SCRIPT = `
+local raw = redis.call('GET', KEYS[1])
+local expected = tonumber(ARGV[1])
+local candidate = cjson.decode(ARGV[2])
+local nextVersion = 1
+local sourceKey = KEYS[1]
+if raw then
+  local ok, current = pcall(cjson.decode, raw)
+  if not ok or type(current) ~= 'table' or type(current.meta) ~= 'table' then
+    return '${REDIS_KEY_CONFLICT}'
+  end
+  local currentTenant = current.meta.tenantId or ''
+  if current.meta.sessionId ~= ARGV[4] or currentTenant ~= ARGV[5] then
+    return '${REDIS_KEY_CONFLICT}'
+  end
+  local currentVersion = tonumber(current.meta.version) or 1
+  if expected == 0 or currentVersion ~= expected then
+    return '${REDIS_VERSION_CONFLICT}'
+  end
+  nextVersion = currentVersion + 1
+  candidate.meta.createdAt = current.meta.createdAt or candidate.meta.createdAt
+  if current.meta.model then candidate.meta.model = current.meta.model end
+  if current.meta.provider then candidate.meta.provider = current.meta.provider end
+else
+  local legacyRaw = redis.call('GET', KEYS[2])
+  if legacyRaw then
+    local legacyOk, legacy = pcall(cjson.decode, legacyRaw)
+    if legacyOk and type(legacy) == 'table' and type(legacy.meta) == 'table' then
+      local legacyTenant = legacy.meta.tenantId or ''
+      if legacy.meta.sessionId == ARGV[4] and legacyTenant == ARGV[5] then
+        raw = legacyRaw
+        sourceKey = KEYS[2]
+        local currentVersion = tonumber(legacy.meta.version) or 1
+        if expected == 0 or currentVersion ~= expected then
+          return '${REDIS_VERSION_CONFLICT}'
+        end
+        nextVersion = currentVersion + 1
+        candidate.meta.createdAt = legacy.meta.createdAt or candidate.meta.createdAt
+        if legacy.meta.model then candidate.meta.model = legacy.meta.model end
+        if legacy.meta.provider then candidate.meta.provider = legacy.meta.provider end
+      end
+    end
+  end
+  if not raw and expected ~= 0 then return '${REDIS_VERSION_CONFLICT}' end
+end
+candidate.meta.version = nextVersion
+candidate.snapshot.version = nextVersion
+local encoded = cjson.encode(candidate)
+local ttl = tonumber(ARGV[3]) or 0
+if ttl > 0 then
+  redis.call('SET', KEYS[1], encoded, 'EX', ttl)
+else
+  redis.call('SET', KEYS[1], encoded)
+end
+if sourceKey == KEYS[2] then redis.call('DEL', KEYS[2]) end
+return encoded
+`;
+
+const REDIS_CAS_DELETE_SCRIPT = `
+local raw = redis.call('GET', KEYS[1])
+local expected = tonumber(ARGV[1])
+local sourceKey = KEYS[1]
+if not raw then
+  local legacyRaw = redis.call('GET', KEYS[2])
+  if legacyRaw then
+    local legacyOk, legacy = pcall(cjson.decode, legacyRaw)
+    if legacyOk and type(legacy) == 'table' and type(legacy.meta) == 'table' then
+      local legacyTenant = legacy.meta.tenantId or ''
+      if legacy.meta.sessionId == ARGV[2] and legacyTenant == ARGV[3] then
+        raw = legacyRaw
+        sourceKey = KEYS[2]
+      end
+    end
+  end
+  if not raw then
+    if expected == 0 then return '${REDIS_OK}' end
+    return '${REDIS_VERSION_CONFLICT}'
+  end
+end
+local ok, current = pcall(cjson.decode, raw)
+if not ok or type(current) ~= 'table' or type(current.meta) ~= 'table' then
+  return '${REDIS_KEY_CONFLICT}'
+end
+local currentTenant = current.meta.tenantId or ''
+if current.meta.sessionId ~= ARGV[2] or currentTenant ~= ARGV[3] then
+  return '${REDIS_KEY_CONFLICT}'
+end
+local currentVersion = tonumber(current.meta.version) or 1
+if expected == 0 or currentVersion ~= expected then
+  return '${REDIS_VERSION_CONFLICT}'
+end
+redis.call('DEL', sourceKey)
+return '${REDIS_OK}'
+`;
 
 /** Simple in-process store intended for tests and single-process development. */
 export class InMemorySessionStore<
@@ -167,8 +290,25 @@ export class InMemorySessionStore<
     this.records.clear();
   }
 
-  async delete(sessionId: string, tenantId?: string): Promise<void> {
-    this.records.delete(buildSessionKey(sessionId, tenantId));
+  async delete(
+    sessionId: string,
+    tenantId?: string,
+    options: SessionStoreDeleteOptions = {},
+  ): Promise<void> {
+    validateExpectedVersion(options.expectedVersion);
+    const key = buildSessionKey(sessionId, tenantId);
+    const existing = this.records.get(key);
+    if (
+      options.expectedVersion !== undefined &&
+      !versionMatches(
+        existing?.meta.version,
+        options.expectedVersion,
+        !!existing,
+      )
+    ) {
+      throw new SessionStoreConflictError('delete');
+    }
+    this.records.delete(key);
   }
 
   async get(
@@ -180,7 +320,7 @@ export class InMemorySessionStore<
       return null;
     }
 
-    return cloneRecord(record);
+    return normalizeRecordVersion(record);
   }
 
   async list(options: SessionStoreListOptions = {}): Promise<SessionMeta[]> {
@@ -190,7 +330,9 @@ export class InMemorySessionStore<
 
     validateSessionListOptions(options);
     return filterAndSortSessionMetas(
-      [...this.records.values()].map((record) => record.meta),
+      [...this.records.values()].map(
+        (record) => normalizeRecordVersion(record).meta,
+      ),
       options,
     );
   }
@@ -200,7 +342,9 @@ export class InMemorySessionStore<
   ): Promise<SessionStorePage> {
     return paginateSessionMetas(
       filterAndSortSessionMetas(
-        [...this.records.values()].map((record) => record.meta),
+        [...this.records.values()].map(
+          (record) => normalizeRecordVersion(record).meta,
+        ),
         options,
       ),
       options,
@@ -212,15 +356,28 @@ export class InMemorySessionStore<
     snapshot: TSnapshot,
     options: SessionStoreSetOptions = {},
   ): Promise<SessionRecord<TSnapshot>> {
+    validateExpectedVersion(options.expectedVersion);
     const key = buildSessionKey(sessionId, options.tenantId);
     const existing = this.records.get(key);
+    if (
+      options.expectedVersion !== undefined &&
+      !versionMatches(
+        existing?.meta.version,
+        options.expectedVersion,
+        !!existing,
+      )
+    ) {
+      throw new SessionStoreConflictError('set');
+    }
     const timestamp = this.now().toISOString();
+    const nextVersion = (existing ? (existing.meta.version ?? 1) : 0) + 1;
     const meta: SessionMeta = {
       createdAt: existing?.meta.createdAt ?? options.createdAt ?? timestamp,
       messageCount: snapshot.messages.length,
       sessionId,
       totalCostUSD: snapshot.totalCostUSD,
       updatedAt: timestamp,
+      version: nextVersion,
       ...((existing?.meta.model ?? options.model)
         ? { model: existing?.meta.model ?? options.model }
         : {}),
@@ -232,7 +389,7 @@ export class InMemorySessionStore<
 
     const record: SessionRecord<TSnapshot> = {
       meta,
-      snapshot: cloneValue(snapshot),
+      snapshot: withSnapshotVersion(snapshot, nextVersion),
     };
     this.records.set(key, record);
     return cloneRecord(record);
@@ -289,13 +446,43 @@ export class PostgresSessionStore<
     this.ensureSchemaPromise = null;
   }
 
-  async delete(sessionId: string, tenantId?: string): Promise<void> {
+  async delete(
+    sessionId: string,
+    tenantId?: string,
+    options: SessionStoreDeleteOptions = {},
+  ): Promise<void> {
+    validateExpectedVersion(options.expectedVersion);
     await this.ensureSchema();
     const pool = await this.getPool();
-    await pool.query(
-      `DELETE FROM ${this.qualifiedTableName()} WHERE tenant_id = $1 AND session_id = $2`,
-      [normalizeTenantId(tenantId), sessionId],
+    if (options.expectedVersion === undefined) {
+      await pool.query(
+        `DELETE FROM ${this.qualifiedTableName()} WHERE tenant_id = $1 AND session_id = $2`,
+        [normalizeTenantId(tenantId), sessionId],
+      );
+      return;
+    }
+    const result = await pool.query<{ deleted: boolean; existed: boolean }>(
+      `WITH existing AS (
+         SELECT version FROM ${this.qualifiedTableName()}
+         WHERE tenant_id = $1 AND session_id = $2
+         FOR UPDATE
+       ), deleted AS (
+         DELETE FROM ${this.qualifiedTableName()}
+         WHERE tenant_id = $1 AND session_id = $2 AND version = $3
+         RETURNING version
+       )
+       SELECT EXISTS (SELECT 1 FROM existing) AS existed,
+              EXISTS (SELECT 1 FROM deleted) AS deleted`,
+      [normalizeTenantId(tenantId), sessionId, options.expectedVersion],
     );
+    const outcome = result.rows[0];
+    const matches =
+      options.expectedVersion === 0
+        ? outcome?.existed === false
+        : outcome?.deleted === true;
+    if (!matches) {
+      throw new SessionStoreConflictError('delete');
+    }
   }
 
   async get(
@@ -306,7 +493,7 @@ export class PostgresSessionStore<
 
     const pool = await this.getPool();
     const result = await pool.query<PostgresSessionStoreRow<TSnapshot>>(
-      `SELECT session_id, tenant_id, snapshot, message_count, model, provider, total_cost_usd, created_at, updated_at
+      `SELECT session_id, tenant_id, snapshot, message_count, model, provider, total_cost_usd, created_at, updated_at, version
        FROM ${this.qualifiedTableName()}
        WHERE tenant_id = $1 AND session_id = $2
        LIMIT 1`,
@@ -378,48 +565,84 @@ export class PostgresSessionStore<
     snapshot: TSnapshot,
     options: SessionStoreSetOptions = {},
   ): Promise<SessionRecord<TSnapshot>> {
+    validateExpectedVersion(options.expectedVersion);
     await this.ensureSchema();
 
     const timestamp = this.now().toISOString();
     const tenantId = normalizeTenantId(options.tenantId);
     const pool = await this.getPool();
-    const result = await pool.query<PostgresSessionStoreRow<TSnapshot>>(
-      `INSERT INTO ${this.qualifiedTableName()} (
-         tenant_id,
-         session_id,
-         snapshot,
-         message_count,
-         model,
-         provider,
-         total_cost_usd,
-         created_at,
-         updated_at
-       )
-       VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT (tenant_id, session_id)
-       DO UPDATE SET
-         snapshot = EXCLUDED.snapshot,
-         message_count = EXCLUDED.message_count,
-         model = EXCLUDED.model,
-         provider = EXCLUDED.provider,
-         total_cost_usd = EXCLUDED.total_cost_usd,
-         updated_at = EXCLUDED.updated_at
-       RETURNING session_id, tenant_id, snapshot, message_count, model, provider, total_cost_usd, created_at, updated_at`,
-      [
-        tenantId,
-        sessionId,
-        JSON.stringify(snapshot),
-        snapshot.messages.length,
-        options.model ?? null,
-        options.provider ?? null,
-        snapshot.totalCostUSD,
-        options.createdAt ?? timestamp,
-        timestamp,
-      ],
-    );
+    const nextVersion = (options.expectedVersion ?? 0) + 1;
+    const values: unknown[] = [
+      tenantId,
+      sessionId,
+      JSON.stringify(withSnapshotVersion(snapshot, nextVersion)),
+      snapshot.messages.length,
+      options.model ?? null,
+      options.provider ?? null,
+      snapshot.totalCostUSD,
+      options.createdAt ?? timestamp,
+      timestamp,
+    ];
+    let result: PostgresSessionStoreQueryResult<
+      PostgresSessionStoreRow<TSnapshot>
+    >;
+    if (options.expectedVersion === 0) {
+      result = await pool.query<PostgresSessionStoreRow<TSnapshot>>(
+        `INSERT INTO ${this.qualifiedTableName()} AS current_session (
+           tenant_id, session_id, snapshot, message_count, model, provider,
+           total_cost_usd, created_at, updated_at, version
+         )
+         VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, 1)
+         ON CONFLICT (tenant_id, session_id) DO NOTHING
+         RETURNING session_id, tenant_id, snapshot, message_count, model, provider, total_cost_usd, created_at, updated_at, version`,
+        values,
+      );
+    } else if (options.expectedVersion !== undefined) {
+      values.push(options.expectedVersion);
+      result = await pool.query<PostgresSessionStoreRow<TSnapshot>>(
+        `UPDATE ${this.qualifiedTableName()}
+         SET snapshot = $3::jsonb,
+             message_count = $4,
+             model = COALESCE(model, $5),
+             provider = COALESCE(provider, $6),
+             total_cost_usd = $7,
+             updated_at = $9,
+             version = version + 1
+         WHERE tenant_id = $1 AND session_id = $2 AND version = $10
+         RETURNING session_id, tenant_id, snapshot, message_count, model, provider, total_cost_usd, created_at, updated_at, version`,
+        values,
+      );
+    } else {
+      result = await pool.query<PostgresSessionStoreRow<TSnapshot>>(
+        `INSERT INTO ${this.qualifiedTableName()} AS current_session (
+           tenant_id, session_id, snapshot, message_count, model, provider,
+           total_cost_usd, created_at, updated_at, version
+         )
+         VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, 1)
+         ON CONFLICT (tenant_id, session_id)
+         DO UPDATE SET
+           snapshot = jsonb_set(
+             EXCLUDED.snapshot,
+             '{version}',
+             to_jsonb(current_session.version + 1),
+             true
+           ),
+           message_count = EXCLUDED.message_count,
+           model = COALESCE(current_session.model, EXCLUDED.model),
+           provider = COALESCE(current_session.provider, EXCLUDED.provider),
+           total_cost_usd = EXCLUDED.total_cost_usd,
+           updated_at = EXCLUDED.updated_at,
+           version = current_session.version + 1
+         RETURNING session_id, tenant_id, snapshot, message_count, model, provider, total_cost_usd, created_at, updated_at, version`,
+        values,
+      );
+    }
 
     const row = result.rows[0];
     if (!row) {
+      if (options.expectedVersion !== undefined) {
+        throw new SessionStoreConflictError('set');
+      }
       throw new Error('Postgres session upsert did not return a row.');
     }
 
@@ -493,8 +716,13 @@ export class PostgresSessionStore<
          total_cost_usd DOUBLE PRECISION NOT NULL,
          created_at TIMESTAMPTZ NOT NULL,
          updated_at TIMESTAMPTZ NOT NULL,
+         version BIGINT NOT NULL DEFAULT 1,
          PRIMARY KEY (tenant_id, session_id)
        )`,
+    );
+    await pool.query(
+      `ALTER TABLE ${qualifiedTableName}
+       ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1`,
     );
     await pool.query(
       `CREATE INDEX IF NOT EXISTS ${updatedAtIndexName}
@@ -540,6 +768,7 @@ export class RedisSessionStore<
   TSnapshot extends { messages: unknown[]; totalCostUSD: number },
 > implements SessionStore<TSnapshot> {
   private readonly client: RedisSessionStoreClient;
+  private readonly evalMode: 'ioredis' | 'node-redis';
   private readonly keyPrefix: string;
   private readonly maxScanIterations: number;
   private readonly maxScanKeys: number;
@@ -550,6 +779,7 @@ export class RedisSessionStore<
 
   constructor(options: RedisSessionStoreOptions) {
     this.client = options.client;
+    this.evalMode = options.evalMode ?? 'node-redis';
     this.keyPrefix = options.keyPrefix ?? 'llm:sessions';
     this.maxScanIterations = boundedScanOption(
       options.maxScanIterations,
@@ -565,7 +795,31 @@ export class RedisSessionStore<
     this.ttlSeconds = options.ttlSeconds;
   }
 
-  async delete(sessionId: string, tenantId?: string): Promise<void> {
+  async delete(
+    sessionId: string,
+    tenantId?: string,
+    options: SessionStoreDeleteOptions = {},
+  ): Promise<void> {
+    validateExpectedVersion(options.expectedVersion);
+    if (options.expectedVersion !== undefined) {
+      const result = await this.atomicEval(
+        REDIS_CAS_DELETE_SCRIPT,
+        [this.key(sessionId, tenantId), this.legacyKey(sessionId, tenantId)],
+        [
+          String(options.expectedVersion),
+          sessionId,
+          normalizeTenantId(tenantId),
+        ],
+        'delete',
+      );
+      if (result === REDIS_KEY_CONFLICT) {
+        throw new RedisSessionStoreKeyConflictError();
+      }
+      if (result !== REDIS_OK) {
+        throw new SessionStoreConflictError('delete');
+      }
+      return;
+    }
     await this.deleteIfIdentityMatches(
       this.key(sessionId, tenantId),
       sessionId,
@@ -676,7 +930,45 @@ export class RedisSessionStore<
     snapshot: TSnapshot,
     options: SessionStoreSetOptions = {},
   ): Promise<SessionRecord<TSnapshot>> {
+    validateExpectedVersion(options.expectedVersion);
     const key = this.key(sessionId, options.tenantId);
+    const timestamp = this.now().toISOString();
+    if (options.expectedVersion !== undefined) {
+      const candidate: SessionRecord<TSnapshot> = {
+        meta: {
+          createdAt: options.createdAt ?? timestamp,
+          messageCount: snapshot.messages.length,
+          sessionId,
+          totalCostUSD: snapshot.totalCostUSD,
+          updatedAt: timestamp,
+          ...(options.model ? { model: options.model } : {}),
+          ...(options.provider ? { provider: options.provider } : {}),
+          ...(options.tenantId !== undefined
+            ? { tenantId: options.tenantId }
+            : {}),
+        },
+        snapshot: cloneValue(snapshot),
+      };
+      const result = await this.atomicEval(
+        REDIS_CAS_SET_SCRIPT,
+        [key, this.legacyKey(sessionId, options.tenantId)],
+        [
+          String(options.expectedVersion),
+          JSON.stringify(candidate),
+          String(this.ttlSeconds ?? 0),
+          sessionId,
+          normalizeTenantId(options.tenantId),
+        ],
+        'set',
+      );
+      if (result === REDIS_KEY_CONFLICT) {
+        throw new RedisSessionStoreKeyConflictError();
+      }
+      if (result === REDIS_VERSION_CONFLICT) {
+        throw new SessionStoreConflictError('set');
+      }
+      return parseRedisRecord<TSnapshot>(result);
+    }
     const v2Raw = await this.client.get(key);
     let existing: null | SessionRecord<TSnapshot>;
     if (v2Raw) {
@@ -691,13 +983,13 @@ export class RedisSessionStore<
     } else {
       existing = await this.get(sessionId, options.tenantId);
     }
-    const timestamp = this.now().toISOString();
     const meta: SessionMeta = {
       createdAt: existing?.meta.createdAt ?? options.createdAt ?? timestamp,
       messageCount: snapshot.messages.length,
       sessionId,
       totalCostUSD: snapshot.totalCostUSD,
       updatedAt: timestamp,
+      version: (existing?.meta.version ?? 0) + 1,
       ...((existing?.meta.model ?? options.model)
         ? { model: existing?.meta.model ?? options.model }
         : {}),
@@ -708,7 +1000,7 @@ export class RedisSessionStore<
     };
     const record: SessionRecord<TSnapshot> = {
       meta,
-      snapshot: cloneValue(snapshot),
+      snapshot: withSnapshotVersion(snapshot, meta.version ?? 1),
     };
 
     await this.client.set(
@@ -718,6 +1010,32 @@ export class RedisSessionStore<
     );
 
     return cloneRecord(record);
+  }
+
+  private async atomicEval(
+    script: string,
+    keys: string[],
+    args: string[],
+    operation: 'delete' | 'set',
+  ): Promise<string> {
+    if (!this.client.eval) {
+      throw new RedisSessionStoreCapabilityError(
+        operation,
+        'unsupported_redis_atomic_write_capability',
+      );
+    }
+    const evaluator = this.client.eval.bind(this.client);
+    const result =
+      this.evalMode === 'ioredis'
+        ? await evaluator(script, keys.length, ...keys, ...args)
+        : await evaluator(script, { arguments: args, keys });
+    if (typeof result === 'string') {
+      return result;
+    }
+    if (result instanceof Uint8Array) {
+      return new TextDecoder().decode(result);
+    }
+    return String(result);
   }
 
   private key(sessionId: string, tenantId?: string): string {
@@ -1261,7 +1579,7 @@ function buildPostgresSessionListQuery(
       : 'updated_at DESC, tenant_id COLLATE "C" ASC, session_id COLLATE "C" ASC';
   const limit = normalized ? ` LIMIT ${parameter(normalized.limit + 1)}` : '';
   return {
-    text: `SELECT session_id, tenant_id, message_count, model, provider, total_cost_usd, created_at, updated_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS updated_at_cursor FROM ${tableName}${where} ORDER BY ${order}${limit}`,
+    text: `SELECT session_id, tenant_id, message_count, model, provider, total_cost_usd, created_at, updated_at, version, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS updated_at_cursor FROM ${tableName}${where} ORDER BY ${order}${limit}`,
     values,
   };
 }
@@ -1361,6 +1679,7 @@ function mapPostgresMeta<TSnapshot>(
       'updated_at_cursor' in row && row.updated_at_cursor !== undefined
         ? row.updated_at_cursor
         : toIsoString(row.updated_at),
+    version: normalizeStoredVersion(row.version),
   };
 }
 
@@ -1397,6 +1716,37 @@ function cloneValue<TValue>(value: TValue): TValue {
   return JSON.parse(JSON.stringify(value)) as TValue;
 }
 
+function validateExpectedVersion(version: number | undefined): void {
+  if (
+    version !== undefined &&
+    (!Number.isSafeInteger(version) || version < 0)
+  ) {
+    throw new TypeError('expectedVersion must be a non-negative safe integer.');
+  }
+}
+
+function normalizeStoredVersion(version: number | string | undefined): number {
+  const normalized = version === undefined ? 1 : Number(version);
+  return Number.isSafeInteger(normalized) && normalized >= 1 ? normalized : 1;
+}
+
+function versionMatches(
+  storedVersion: number | undefined,
+  expectedVersion: number,
+  exists: boolean,
+): boolean {
+  if (expectedVersion === 0) {
+    return !exists;
+  }
+  return exists && (storedVersion ?? 1) === expectedVersion;
+}
+
+function withSnapshotVersion<
+  TSnapshot extends { messages: unknown[]; totalCostUSD: number },
+>(snapshot: TSnapshot, version: number): TSnapshot {
+  return { ...cloneValue(snapshot), version };
+}
+
 function buildRedisSetOptions(
   ttlSeconds: number | undefined,
 ):
@@ -1412,7 +1762,23 @@ function buildRedisSetOptions(
   };
 }
 
-function parseRedisRecord<TSnapshot>(raw: string): SessionRecord<TSnapshot> {
+function parseRedisRecord<
+  TSnapshot extends { messages: unknown[]; totalCostUSD: number },
+>(raw: string): SessionRecord<TSnapshot> {
   const parsed = JSON.parse(raw) as SessionRecord<TSnapshot>;
-  return cloneRecord(parsed);
+  const record = cloneRecord(parsed);
+  const version = normalizeStoredVersion(record.meta.version);
+  record.meta.version = version;
+  record.snapshot = withSnapshotVersion(record.snapshot, version);
+  return record;
+}
+
+function normalizeRecordVersion<
+  TSnapshot extends { messages: unknown[]; totalCostUSD: number },
+>(record: SessionRecord<TSnapshot>): SessionRecord<TSnapshot> {
+  const normalized = cloneRecord(record);
+  const version = normalizeStoredVersion(normalized.meta.version);
+  normalized.meta.version = version;
+  normalized.snapshot = withSnapshotVersion(normalized.snapshot, version);
+  return normalized;
 }

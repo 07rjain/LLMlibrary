@@ -320,7 +320,7 @@ const client = new LLMClient({
 
 ### Redis
 
-`RedisSessionStore` is bring-your-own-client. Pass a Redis client that implements `get()`, `set()`, `del()`, and a bounded, cluster-safe `scanIterator()`. Session listing never falls back to Redis `KEYS`; clients without a safe scan capability fail closed.
+`RedisSessionStore` is bring-your-own-client. Pass a Redis client that implements `get()`, `set()`, `del()`, and a bounded, cluster-safe `scanIterator()`. Conversation and Session API writes also require Redis `eval()` for atomic compare-and-set; guarded writes fail closed before reading when it is unavailable. Node Redis uses the default object-form `eval()` call; set `evalMode: 'ioredis'` for ioredis-style numeric key-count clients. Session listing never falls back to Redis `KEYS`; clients without a safe scan capability fail closed.
 
 ```ts
 import { LLMClient, RedisSessionStore } from 'unified-llm-client';
@@ -337,6 +337,8 @@ const client = new LLMClient({
 ```
 
 Session keys use separator-safe, UTF-8 base64url-encoded v2 tenant and session components. New writes use v2 keys. Reads and deletes can still use a legacy key only when its stored metadata exactly matches the requested tenant/session tuple, preventing legacy delimiter collisions from crossing tenants. Listing deduplicates verified legacy and v2 records with v2 precedence. Compatibility reads do not rewrite keys or refresh TTL; migrate legacy keys through an explicit TTL-preserving maintenance process. For clustered Redis, the supplied iterator must cover every relevant primary node and terminate normally; scan work is bounded by the store options.
+
+Core session stores expose a monotonic `record.meta.version`. Pass `expectedVersion` to `set()` (or the delete options) for optimistic concurrency: `0` creates only when absent, while values `>= 1` require an exact match. A stale mutation throws the retryable HTTP-409-compatible `SessionStoreConflictError`. Omitting the option preserves legacy last-write-wins behavior for direct store callers; `Conversation` and `SessionApi` always use guarded mutations. Reload the session before retrying a rejected turn so provider or tool execution is not repeated automatically.
 
 Session listing supports additive `model`, `provider`, `limit`, `cursor`, and
 `direction` filters through the optional `listPage()` store method. Core stores

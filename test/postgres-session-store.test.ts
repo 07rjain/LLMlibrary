@@ -20,6 +20,19 @@ import {
   type PostgresSessionStorePool,
   type PostgresSessionStoreQueryResult,
 } from '../src/session-store.js';
+import { SessionStoreConflictError } from '../src/errors.js';
+
+interface TestSnapshot {
+  marker?: string;
+  messages: unknown[];
+  totalCostUSD: number;
+}
+
+const snapshot = (marker: string): TestSnapshot => ({
+  marker,
+  messages: [{ content: marker, role: 'user' }],
+  totalCostUSD: 0,
+});
 
 describe('PostgresSessionStore', () => {
   beforeEach(() => {
@@ -73,25 +86,26 @@ describe('PostgresSessionStore', () => {
       },
     );
 
-    expect(pool.queries).toHaveLength(7);
+    expect(pool.queries).toHaveLength(8);
     expect(pool.queries[0]?.text).toContain(
       'CREATE SCHEMA IF NOT EXISTS "llm"',
     );
     expect(pool.queries[1]?.text).toContain(
       'CREATE TABLE IF NOT EXISTS "llm"."sessions"',
     );
-    expect(pool.queries[2]?.text).toContain(
+    expect(pool.queries[3]?.text).toContain(
       'CREATE INDEX IF NOT EXISTS "sessions_tenant_updated_at_idx"',
     );
-    expect(pool.queries[6]?.text).toContain(
+    expect(pool.queries[7]?.text).toContain(
       'ON CONFLICT (tenant_id, session_id)',
     );
-    expect(pool.queries[6]?.values).toEqual([
+    expect(pool.queries[7]?.values).toEqual([
       'tenant-1',
       'session-1',
       JSON.stringify({
         messages: [{ content: 'Hello', role: 'user' }],
         totalCostUSD: 0.5,
+        version: 1,
       }),
       1,
       'gpt-4o',
@@ -110,6 +124,7 @@ describe('PostgresSessionStore', () => {
         tenantId: 'tenant-1',
         totalCostUSD: 0.5,
         updatedAt: '2026-04-15T10:00:00.000Z',
+        version: 1,
       },
       snapshot: {
         messages: [{ content: 'Hello', role: 'user' }],
@@ -186,6 +201,7 @@ describe('PostgresSessionStore', () => {
         sessionId: 'session-1',
         totalCostUSD: 0.75,
         updatedAt: '2026-04-15T10:00:00.000Z',
+        version: 1,
       },
       snapshot: {
         messages: [
@@ -205,6 +221,7 @@ describe('PostgresSessionStore', () => {
         sessionId: 'session-1',
         totalCostUSD: 0.75,
         updatedAt: '2026-04-15T10:00:00.000Z',
+        version: 1,
       },
       {
         createdAt: '2026-04-15T08:00:00.000Z',
@@ -213,6 +230,7 @@ describe('PostgresSessionStore', () => {
         tenantId: 'tenant-2',
         totalCostUSD: 0,
         updatedAt: '2026-04-15T09:00:00.000Z',
+        version: 1,
       },
     ]);
 
@@ -362,7 +380,7 @@ describe('PostgresSessionStore', () => {
     await store.ensureSchema();
     await store.ensureSchema();
 
-    expect(pool.queries).toHaveLength(6);
+    expect(pool.queries).toHaveLength(7);
   });
 
   it('throws when DATABASE_URL is missing and no pool is provided', async () => {
@@ -383,6 +401,48 @@ describe('PostgresSessionStore', () => {
     });
 
     await expect(store.get('missing')).resolves.toBeNull();
+  });
+
+  it('uses version predicates for atomic guarded create, update, and delete', async () => {
+    const pool = new MockPool();
+    const row = {
+      created_at: '2026-04-15T09:00:00.000Z',
+      message_count: 1,
+      model: null,
+      provider: null,
+      session_id: 'cas-session',
+      snapshot: snapshot('created'),
+      tenant_id: '',
+      total_cost_usd: 0,
+      updated_at: '2026-04-15T10:00:00.000Z',
+      version: 1,
+    };
+    pool.queueRows([row]);
+    const store = new PostgresSessionStore<TestSnapshot>({ pool });
+
+    const created = await store.set('cas-session', snapshot('created'), {
+      expectedVersion: 0,
+    });
+    expect(created.meta.version).toBe(1);
+    expect(pool.queries.at(-1)?.text).toContain(
+      'ON CONFLICT (tenant_id, session_id) DO NOTHING',
+    );
+
+    pool.queueRows([{ ...row, snapshot: snapshot('updated'), version: 2 }]);
+    const updated = await store.set('cas-session', snapshot('updated'), {
+      expectedVersion: 1,
+    });
+    expect(updated.meta.version).toBe(2);
+    expect(pool.queries.at(-1)?.text).toContain('AND version = $10');
+
+    await expect(
+      store.set('cas-session', snapshot('stale'), { expectedVersion: 1 }),
+    ).rejects.toBeInstanceOf(SessionStoreConflictError);
+
+    pool.queueRows([{ deleted: true, existed: true }]);
+    await store.delete('cas-session', undefined, { expectedVersion: 2 });
+    expect(pool.queries.at(-1)?.text).toContain('FOR UPDATE');
+    expect(pool.queries.at(-1)?.values).toEqual(['', 'cas-session', 2]);
   });
 });
 
@@ -412,7 +472,7 @@ class MockPool implements PostgresSessionStorePool {
     });
 
     if (
-      !/^(INSERT|SELECT)\b/i.test(normalizedText) ||
+      !/^(INSERT|SELECT|UPDATE|WITH)\b/i.test(normalizedText) ||
       this.responses.length === 0
     ) {
       return { rows: [] };

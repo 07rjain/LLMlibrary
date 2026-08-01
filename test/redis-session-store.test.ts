@@ -54,10 +54,12 @@ describe('RedisSessionStore', () => {
         tenantId: 'tenant-1',
         totalCostUSD: 0.25,
         updatedAt: '2026-04-15T12:00:00.000Z',
+        version: 1,
       },
       snapshot: {
         messages: [{ content: 'Hello', role: 'user' }],
         totalCostUSD: 0.25,
+        version: 1,
       },
     });
     expect(client.lastSetOptions).toEqual({ EX: 300 });

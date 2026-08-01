@@ -620,16 +620,26 @@ export class LLMClient {
         conversationOptions.tenantId,
       );
       if (stored) {
-        return Conversation.restore(this, stored.snapshot, {
-          ...conversationOptions,
-          ...(conversationOptions.budgetExceededAction !== undefined
-            ? { budgetExceededAction: conversationOptions.budgetExceededAction }
-            : { budgetExceededAction: this.budgetExceededAction }),
-          ...(conversationOptions.onWarning !== undefined
-            ? { onWarning: conversationOptions.onWarning }
-            : { onWarning: this.onWarning }),
-          ...(store ? { store } : {}),
-        });
+        return Conversation.restore(
+          this,
+          {
+            ...stored.snapshot,
+            version: stored.meta.version ?? stored.snapshot.version ?? 0,
+          },
+          {
+            ...conversationOptions,
+            ...(conversationOptions.budgetExceededAction !== undefined
+              ? {
+                  budgetExceededAction:
+                    conversationOptions.budgetExceededAction,
+                }
+              : { budgetExceededAction: this.budgetExceededAction }),
+            ...(conversationOptions.onWarning !== undefined
+              ? { onWarning: conversationOptions.onWarning }
+              : { onWarning: this.onWarning }),
+            ...(store ? { store } : {}),
+          },
+        );
       }
     }
 
