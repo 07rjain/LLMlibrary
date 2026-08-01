@@ -978,6 +978,7 @@ describe('OpenAI adapter', () => {
         filename: 'verbose.wav',
         mediaType: 'audio/wav',
       },
+      inputAudioSeconds: 99,
       model: 'gpt-4o-transcribe-diarize',
       prompt: 'Names are Ada and Grace.',
       provider: 'openai',
@@ -1000,6 +1001,8 @@ describe('OpenAI adapter', () => {
     expect(plain.text).toBe('plain transcript');
     expect(plain.usage?.inputAudioSeconds).toBe(3);
     expect(verbose.text).toBe('hello world');
+    expect(verbose.durationSeconds).toBe(3);
+    expect(verbose.usage?.inputAudioSeconds).toBe(3);
     expect(verbose.segments).toHaveLength(1);
     expect(verbose.words).toHaveLength(1);
     expect(verboseForm.get('prompt')).toBe('Names are Ada and Grace.');

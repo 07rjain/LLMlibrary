@@ -34,6 +34,10 @@ import {
   formatCost,
 } from './utils/index.js';
 import { calcSpeechCostUSD } from './utils/cost.js';
+import {
+  deriveAudioInputDurationSeconds,
+  mediaTypeForSpeechFormat,
+} from './utils/audio-duration.js';
 import { estimateTokens } from './utils/token-estimator.js';
 import { exportSpeechUsageSummary, exportUsageSummary } from './usage.js';
 
@@ -71,6 +75,7 @@ import type {
   EmbeddingRequestOptions,
   EmbeddingResponse,
   JsonValue,
+  ModelInfo,
   ProviderOptions,
   RemoteModelInfo,
   RemoteModelListOptions,
@@ -78,6 +83,7 @@ import type {
   SpeechProvider,
   SpeechRequestOptions,
   SpeechResponse,
+  SpeechUsageMetrics,
   StreamChunk,
   TranscriptionRequestOptions,
   TranscriptionResponse,
@@ -541,8 +547,26 @@ export class LLMClient {
     const validated = validateSpeechRequest(options);
     throwIfAborted(validated.signal);
     const resolved = this.resolveSpeechRequest(validated);
-    this.handleSpeechBudgetExceededAction(resolved, 'speech');
     const startedAt = Date.now();
+    const budgetDecision = this.handleSpeechBudgetExceededAction(
+      resolved,
+      'speech',
+    );
+    if (budgetDecision.action === 'skip') {
+      const response = buildSpeechBudgetSkipResponse(
+        resolved,
+        budgetDecision.usage,
+      );
+      await this.logSpeechUsageEvent({
+        durationMs: Date.now() - startedAt,
+        kind: 'speech',
+        model: response.model,
+        options,
+        provider: response.provider,
+        usage: response.usage,
+      });
+      return response;
+    }
     const response = await this.dispatchSpeak(resolved);
     throwIfAborted(resolved.signal);
     await this.logSpeechUsageEvent({
@@ -564,8 +588,26 @@ export class LLMClient {
     const validated = validateTranscriptionRequest(options);
     throwIfAborted(validated.signal);
     const resolved = this.resolveTranscriptionRequest(validated);
-    this.handleSpeechBudgetExceededAction(resolved, 'transcription');
     const startedAt = Date.now();
+    const budgetDecision = this.handleSpeechBudgetExceededAction(
+      resolved,
+      'transcription',
+    );
+    if (budgetDecision.action === 'skip') {
+      const response = buildTranscriptionBudgetSkipResponse(
+        resolved,
+        budgetDecision.usage,
+      );
+      await this.logSpeechUsageEvent({
+        durationMs: Date.now() - startedAt,
+        kind: 'transcription',
+        model: response.model,
+        options,
+        provider: response.provider,
+        usage: response.usage,
+      });
+      return response;
+    }
     const response = await this.dispatchTranscribe(resolved);
     throwIfAborted(resolved.signal);
     await this.logSpeechUsageEvent({
@@ -1228,7 +1270,7 @@ export class LLMClient {
     throw error;
   }
 
-  private handleSpeechBudgetExceededAction(
+  protected handleSpeechBudgetExceededAction(
     options:
       | (SpeechRequestOptions & { model: string; provider: SpeechProvider })
       | (TranscriptionRequestOptions & {
@@ -1236,9 +1278,15 @@ export class LLMClient {
           provider: SpeechProvider;
         }),
     kind: 'speech' | 'transcription',
-  ): void {
+  ):
+    | { action: 'continue' }
+    | {
+        action: 'skip';
+        error: BudgetExceededError;
+        usage: SpeechUsageMetrics;
+      } {
     if (options.budgetUsd === undefined) {
-      return;
+      return { action: 'continue' };
     }
 
     const model = this.modelRegistry.get(options.model);
@@ -1283,17 +1331,19 @@ export class LLMClient {
         },
         this.modelRegistry,
       );
-      this.throwIfSpeechBudgetExceeded(options, estimatedCost.costUSD);
-      return;
+      return this.resolveSpeechBudgetExceededAction(options, estimatedCost);
     }
 
     const transcriptionOptions = options as TranscriptionRequestOptions & {
       model: string;
       provider: SpeechProvider;
     };
+    const inputAudioSeconds =
+      transcriptionOptions.inputAudioSeconds ??
+      deriveAudioInputDurationSeconds(transcriptionOptions.input);
     if (
       speechPrices.inputAudioSecondPrice !== undefined &&
-      transcriptionOptions.inputAudioSeconds === undefined
+      inputAudioSeconds === undefined
     ) {
       throw new BudgetExceededError(
         'Transcription budget preflight requires inputAudioSeconds when audio duration affects cost.',
@@ -1307,31 +1357,36 @@ export class LLMClient {
     const estimatedCost = calcSpeechCostUSD(
       {
         estimated: true,
-        ...(transcriptionOptions.inputAudioSeconds !== undefined
-          ? { inputAudioSeconds: transcriptionOptions.inputAudioSeconds }
-          : {}),
+        ...(inputAudioSeconds !== undefined ? { inputAudioSeconds } : {}),
         model: options.model,
       },
       this.modelRegistry,
     );
-    this.throwIfSpeechBudgetExceeded(options, estimatedCost.costUSD);
+    return this.resolveSpeechBudgetExceededAction(options, estimatedCost);
   }
 
-  private throwIfSpeechBudgetExceeded(
+  private resolveSpeechBudgetExceededAction(
     options: {
       budgetExceededAction?: BudgetExceededAction;
       budgetUsd?: number;
       model: string;
       provider: SpeechProvider;
     },
-    estimatedCostUSD: number | undefined,
-  ): void {
+    estimatedCost: ReturnType<typeof calcSpeechCostUSD>,
+  ):
+    | { action: 'continue' }
+    | {
+        action: 'skip';
+        error: BudgetExceededError;
+        usage: SpeechUsageMetrics;
+      } {
+    const estimatedCostUSD = estimatedCost.costUSD;
     if (options.budgetUsd === undefined || estimatedCostUSD === undefined) {
-      return;
+      return { action: 'continue' };
     }
 
     if (estimatedCostUSD <= options.budgetUsd) {
-      return;
+      return { action: 'continue' };
     }
 
     const error = new BudgetExceededError(
@@ -1351,7 +1406,15 @@ export class LLMClient {
     const action = options.budgetExceededAction ?? this.budgetExceededAction;
     if (action === 'warn') {
       this.onWarning(error.message);
-      return;
+      return { action: 'continue' };
+    }
+
+    if (action === 'skip') {
+      return {
+        action: 'skip',
+        error,
+        usage: buildSkippedSpeechUsage(estimatedCost),
+      };
     }
 
     throw error;
@@ -1369,7 +1432,7 @@ export class LLMClient {
     }
   }
 
-  private async logSpeechUsageEvent(input: {
+  protected async logSpeechUsageEvent(input: {
     durationMs: number;
     kind: 'speech' | 'transcription';
     model: string;
@@ -1568,6 +1631,7 @@ class MockLLMClient extends LLMClient {
     this.speechQueue = [...(options.speeches ?? [])];
     this.streamQueue = [...(options.streams ?? [])];
     this.transcriptionQueue = [...(options.transcriptions ?? [])];
+    ensureMockSpeechModels(this);
   }
 
   override resolveContext(options: {
@@ -1648,13 +1712,42 @@ class MockLLMClient extends LLMClient {
     const validated = validateSpeechRequest(options);
     throwIfAborted(validated.signal);
     const resolved = this.resolveMockSpeechRequest(validated);
+    const startedAt = Date.now();
+    const budgetDecision = this.handleSpeechBudgetExceededAction(
+      resolved,
+      'speech',
+    );
+    if (budgetDecision.action === 'skip') {
+      const response = buildSpeechBudgetSkipResponse(
+        resolved,
+        budgetDecision.usage,
+      );
+      await this.logSpeechUsageEvent({
+        durationMs: Date.now() - startedAt,
+        kind: 'speech',
+        model: response.model,
+        options,
+        provider: response.provider,
+        usage: response.usage,
+      });
+      return response;
+    }
     const next = this.speechQueue.shift();
 
     if (!next) {
       throw new MockQueueExhaustedError('speak', resolved);
     }
 
-    return typeof next === 'function' ? await next(resolved) : next;
+    const response = typeof next === 'function' ? await next(resolved) : next;
+    await this.logSpeechUsageEvent({
+      durationMs: Date.now() - startedAt,
+      kind: 'speech',
+      model: response.model,
+      options,
+      provider: response.provider,
+      usage: response.usage,
+    });
+    return response;
   }
 
   override async transcribe(
@@ -1663,13 +1756,42 @@ class MockLLMClient extends LLMClient {
     const validated = validateTranscriptionRequest(options);
     throwIfAborted(validated.signal);
     const resolved = this.resolveMockTranscriptionRequest(validated);
+    const startedAt = Date.now();
+    const budgetDecision = this.handleSpeechBudgetExceededAction(
+      resolved,
+      'transcription',
+    );
+    if (budgetDecision.action === 'skip') {
+      const response = buildTranscriptionBudgetSkipResponse(
+        resolved,
+        budgetDecision.usage,
+      );
+      await this.logSpeechUsageEvent({
+        durationMs: Date.now() - startedAt,
+        kind: 'transcription',
+        model: response.model,
+        options,
+        provider: response.provider,
+        usage: response.usage,
+      });
+      return response;
+    }
     const next = this.transcriptionQueue.shift();
 
     if (!next) {
       throw new MockQueueExhaustedError('transcribe', resolved);
     }
 
-    return typeof next === 'function' ? await next(resolved) : next;
+    const response = typeof next === 'function' ? await next(resolved) : next;
+    await this.logSpeechUsageEvent({
+      durationMs: Date.now() - startedAt,
+      kind: 'transcription',
+      model: response.model,
+      options,
+      provider: response.provider,
+      usage: response.usage,
+    });
+    return response;
   }
 
   override stream(options: LLMRequestOptions): CancelableStream<StreamChunk> {
@@ -1869,6 +1991,127 @@ function buildBudgetSkipResponse(
     toolCalls: [],
     usage: buildZeroUsage(),
   };
+}
+
+function buildSpeechBudgetSkipResponse(
+  request: SpeechRequestOptions & {
+    model: string;
+    provider: SpeechProvider;
+  },
+  usage: SpeechUsageMetrics,
+): SpeechResponse {
+  const format = request.format ?? 'mp3';
+  return {
+    audio: new Uint8Array(),
+    format,
+    mediaType: mediaTypeForSpeechFormat(format),
+    model: request.model,
+    provider: request.provider,
+    raw: {
+      reason: 'budget_exceeded',
+      skipped: true,
+    },
+    usage,
+  };
+}
+
+function buildTranscriptionBudgetSkipResponse(
+  request: TranscriptionRequestOptions & {
+    model: string;
+    provider: SpeechProvider;
+  },
+  usage: SpeechUsageMetrics,
+): TranscriptionResponse {
+  return {
+    ...(usage.inputAudioSeconds !== undefined
+      ? { durationSeconds: usage.inputAudioSeconds }
+      : {}),
+    model: request.model,
+    provider: request.provider,
+    raw: {
+      reason: 'budget_exceeded',
+      skipped: true,
+    },
+    text: '',
+    usage,
+  };
+}
+
+function buildSkippedSpeechUsage(
+  estimate: ReturnType<typeof calcSpeechCostUSD>,
+): SpeechUsageMetrics {
+  return {
+    ...estimate.billingUnits,
+    billingUnits: { ...estimate.billingUnits },
+    cost: '$0.00',
+    costBreakdown: [],
+    costUSD: 0,
+    estimated: true,
+  };
+}
+
+const DEFAULT_MOCK_SPEECH_MODELS: ModelInfo[] = [
+  {
+    contextWindow: 2_000,
+    id: 'mock-speech-model',
+    inputPrice: 0,
+    kind: 'speech',
+    lastUpdated: '2026-07-13',
+    outputPrice: 0,
+    provider: 'mock',
+    speechPrices: {
+      outputAudioSecondPrice: 0.00025,
+      textInputTokenPrice: 0.6,
+    },
+    supportedInputModalities: ['text'],
+    supportedOutputModalities: ['audio'],
+    supportsStreaming: false,
+    supportsTools: false,
+    supportsVision: false,
+  },
+  {
+    contextWindow: 16_000,
+    id: 'mock-transcription-model',
+    inputPrice: 0,
+    kind: 'transcription',
+    lastUpdated: '2026-07-13',
+    outputPrice: 0,
+    provider: 'mock',
+    speechPrices: {
+      inputAudioSecondPrice: 0.00005,
+    },
+    supportedInputModalities: ['audio'],
+    supportedOutputModalities: ['text'],
+    supportsStreaming: false,
+    supportsTools: false,
+    supportsVision: false,
+  },
+];
+
+function ensureMockSpeechModels(client: LLMClient): void {
+  const registered = new Map(
+    client.models.list().map((model) => [model.id, model]),
+  );
+  for (const defaultModel of DEFAULT_MOCK_SPEECH_MODELS) {
+    const current = registered.get(defaultModel.id);
+    if (!current) {
+      client.models.register(defaultModel);
+      continue;
+    }
+
+    if (current.provider !== 'mock' || current.kind !== defaultModel.kind) {
+      continue;
+    }
+
+    client.models.register({
+      ...defaultModel,
+      ...current,
+      speechPrices: {
+        ...defaultModel.speechPrices,
+        ...current.speechPrices,
+      },
+    });
+  }
 }
 
 function isAsyncIterable(

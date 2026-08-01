@@ -21,12 +21,17 @@ import {
   ProviderError,
 } from '../src/errors.js';
 import { LLMClient } from '../src/client.js';
+import { ModelRegistry } from '../src/models/registry.js';
 import { ModelRouter } from '../src/router.js';
 import { InMemorySessionStore } from '../src/session-store.js';
 
 import type { ConversationSnapshot } from '../src/conversation.js';
 import type { StreamChunk } from '../src/types.js';
-import type { SpeechUsageSummary, UsageSummary } from '../src/usage.js';
+import type {
+  SpeechUsageEvent,
+  SpeechUsageSummary,
+  UsageSummary,
+} from '../src/usage.js';
 
 const createdPools = pgMockState.createdPools as MockPool[];
 
@@ -1234,6 +1239,322 @@ describe('LLMClient', () => {
       expect.stringContaining('Estimated speech request cost'),
     );
     expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it('applies speech budget actions before real dispatch with separate usage logs', async () => {
+    const fetchImplementation = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2]), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ duration: 2, text: 'done' }), {
+          headers: { 'content-type': 'application/json' },
+          status: 200,
+        }),
+      );
+    const onWarning = vi.fn();
+    const usageLogger = {
+      log: vi.fn(async () => undefined),
+      logSpeech: vi.fn(async (_event: SpeechUsageEvent) => undefined),
+    };
+    const client = new LLMClient({
+      fetchImplementation,
+      onWarning,
+      openaiApiKey: 'openai-key',
+      usageLogger,
+    });
+
+    await expect(
+      client.speak({
+        budgetExceededAction: 'throw',
+        budgetUsd: 0,
+        estimatedOutputSeconds: 2,
+        input: 'throw',
+      }),
+    ).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(fetchImplementation).not.toHaveBeenCalled();
+    expect(usageLogger.logSpeech).not.toHaveBeenCalled();
+
+    const skippedSpeech = await client.speak({
+      budgetExceededAction: 'skip',
+      budgetUsd: 0,
+      estimatedOutputSeconds: 2,
+      format: 'wav',
+      input: 'skip',
+    });
+    expect(skippedSpeech).toMatchObject({
+      format: 'wav',
+      mediaType: 'audio/wav',
+      model: 'gpt-4o-mini-tts',
+      provider: 'openai',
+      raw: { reason: 'budget_exceeded', skipped: true },
+      usage: {
+        cost: '$0.00',
+        costUSD: 0,
+        estimated: true,
+        outputAudioSeconds: 2,
+      },
+    });
+    expect([...skippedSpeech.audio]).toEqual([]);
+    expect(fetchImplementation).not.toHaveBeenCalled();
+
+    const skippedTranscription = await client.transcribe({
+      budgetExceededAction: 'skip',
+      budgetUsd: 0,
+      input: { file: makeWavBytes({ seconds: 2 }), mediaType: 'audio/wav' },
+    });
+    expect(skippedTranscription).toMatchObject({
+      durationSeconds: 2,
+      model: 'gpt-4o-mini-transcribe',
+      provider: 'openai',
+      raw: { reason: 'budget_exceeded', skipped: true },
+      text: '',
+      usage: {
+        cost: '$0.00',
+        costUSD: 0,
+        estimated: true,
+        inputAudioSeconds: 2,
+      },
+    });
+    expect(fetchImplementation).not.toHaveBeenCalled();
+
+    await expect(
+      client.speak({
+        budgetExceededAction: 'warn',
+        budgetUsd: 0,
+        estimatedOutputSeconds: 2,
+        input: 'warn',
+      }),
+    ).resolves.toMatchObject({ provider: 'openai' });
+    await expect(
+      client.transcribe({
+        budgetExceededAction: 'warn',
+        budgetUsd: 0,
+        input: {
+          file: new Uint8Array([1]),
+          mediaType: 'audio/mpeg',
+        },
+        inputAudioSeconds: 2,
+      }),
+    ).resolves.toMatchObject({ text: 'done' });
+
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    expect(onWarning).toHaveBeenCalledTimes(2);
+    expect(usageLogger.log).not.toHaveBeenCalled();
+    expect(usageLogger.logSpeech).toHaveBeenCalledTimes(4);
+    expect(
+      usageLogger.logSpeech.mock.calls.map(([event]) => event.kind),
+    ).toEqual(['speech', 'transcription', 'speech', 'transcription']);
+    expect(usageLogger.logSpeech.mock.calls[0]?.[0]).toMatchObject({
+      kind: 'speech',
+      speechUsage: {
+        billingUnits: expect.objectContaining({ outputAudioSeconds: 2 }),
+        costUSD: 0,
+      },
+    });
+    expect(usageLogger.logSpeech.mock.calls[1]?.[0]).toMatchObject({
+      kind: 'transcription',
+      speechUsage: {
+        billingUnits: expect.objectContaining({ inputAudioSeconds: 2 }),
+        costUSD: 0,
+      },
+    });
+  });
+
+  it('enforces speech budgets and logging without consuming mock queues on skip', async () => {
+    const modelRegistry = new ModelRegistry({
+      'paid-mock': {
+        contextWindow: 1_000,
+        inputPrice: 1,
+        kind: 'completion',
+        lastUpdated: '2026-07-13',
+        outputPrice: 1,
+        provider: 'mock',
+        supportsStreaming: true,
+        supportsTools: false,
+        supportsVision: false,
+      },
+    });
+    const speechWarn = vi.fn(() => mockSpeechResponse('warn'));
+    const speechAfterSkip = vi.fn(() => mockSpeechResponse('after-skip'));
+    const transcriptionWarn = vi.fn(() =>
+      mockTranscriptionResponse('warn transcript'),
+    );
+    const transcriptionAfterSkip = vi.fn(() =>
+      mockTranscriptionResponse('after skip transcript'),
+    );
+    const onWarning = vi.fn();
+    const usageLogger = {
+      log: vi.fn(async () => undefined),
+      logSpeech: vi.fn(async (_event: SpeechUsageEvent) => undefined),
+    };
+    const client = LLMClient.mock({
+      defaultModel: 'paid-mock',
+      modelRegistry,
+      onWarning,
+      speeches: [speechWarn, speechAfterSkip],
+      transcriptions: [transcriptionWarn, transcriptionAfterSkip],
+      usageLogger,
+    });
+
+    expect(client.models.get('mock-speech-model').speechPrices).toMatchObject({
+      outputAudioSecondPrice: expect.any(Number),
+    });
+    expect(
+      client.models.get('mock-transcription-model').speechPrices,
+    ).toMatchObject({ inputAudioSecondPrice: expect.any(Number) });
+
+    await expect(
+      client.speak({
+        budgetExceededAction: 'throw',
+        budgetUsd: 0,
+        estimatedOutputSeconds: 10,
+        input: 'throw',
+      }),
+    ).rejects.toBeInstanceOf(BudgetExceededError);
+    await expect(
+      client.transcribe({
+        budgetExceededAction: 'throw',
+        budgetUsd: 0,
+        input: { file: new Uint8Array([1]), mediaType: 'audio/mpeg' },
+        inputAudioSeconds: 10,
+      }),
+    ).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(speechWarn).not.toHaveBeenCalled();
+    expect(transcriptionWarn).not.toHaveBeenCalled();
+    expect(usageLogger.logSpeech).not.toHaveBeenCalled();
+
+    await client.speak({
+      budgetExceededAction: 'warn',
+      budgetUsd: 0,
+      estimatedOutputSeconds: 10,
+      input: 'warn',
+    });
+    await client.transcribe({
+      budgetExceededAction: 'warn',
+      budgetUsd: 0,
+      input: { file: new Uint8Array([1]), mediaType: 'audio/mpeg' },
+      inputAudioSeconds: 10,
+    });
+    expect(speechWarn).toHaveBeenCalledOnce();
+    expect(transcriptionWarn).toHaveBeenCalledOnce();
+    expect(onWarning).toHaveBeenCalledTimes(2);
+
+    const skippedSpeech = await client.speak({
+      budgetExceededAction: 'skip',
+      budgetUsd: 0,
+      estimatedOutputSeconds: 10,
+      input: 'skip',
+    });
+    const skippedTranscription = await client.transcribe({
+      budgetExceededAction: 'skip',
+      budgetUsd: 0,
+      input: { file: new Uint8Array([1]), mediaType: 'audio/mpeg' },
+      inputAudioSeconds: 10,
+    });
+    expect(skippedSpeech.usage).toMatchObject({
+      costUSD: 0,
+      outputAudioSeconds: 10,
+    });
+    expect(skippedTranscription.usage).toMatchObject({
+      costUSD: 0,
+      inputAudioSeconds: 10,
+    });
+    expect(speechAfterSkip).not.toHaveBeenCalled();
+    expect(transcriptionAfterSkip).not.toHaveBeenCalled();
+
+    await client.speak({ input: 'consume remaining speech' });
+    await client.transcribe({
+      input: { file: new Uint8Array([1]), mediaType: 'audio/mpeg' },
+    });
+    expect(speechAfterSkip).toHaveBeenCalledOnce();
+    expect(transcriptionAfterSkip).toHaveBeenCalledOnce();
+    expect(usageLogger.log).not.toHaveBeenCalled();
+    expect(usageLogger.logSpeech).toHaveBeenCalledTimes(6);
+    expect(
+      usageLogger.logSpeech.mock.calls.map(([event]) => event.kind),
+    ).toEqual([
+      'speech',
+      'transcription',
+      'speech',
+      'transcription',
+      'speech',
+      'transcription',
+    ]);
+  });
+
+  it('derives transcription budget seconds locally and prefers explicit duration', async () => {
+    const transcriptionFactory = vi.fn(() => mockTranscriptionResponse('ok'));
+    const client = LLMClient.mock({ transcriptions: [transcriptionFactory] });
+    const wav = makeWavBytes({ seconds: 2 });
+    const arrayBuffer = new ArrayBuffer(wav.byteLength);
+    new Uint8Array(arrayBuffer).set(wav);
+
+    for (const input of [
+      { file: wav, mediaType: 'audio/wav' as const },
+      { file: arrayBuffer, mediaType: 'audio/x-wav' as const },
+      {
+        data: Buffer.from(wav).toString('base64'),
+        mediaType: 'audio/wav' as const,
+      },
+    ]) {
+      await expect(
+        client.transcribe({ budgetUsd: 0, input }),
+      ).rejects.toBeInstanceOf(BudgetExceededError);
+    }
+    expect(transcriptionFactory).not.toHaveBeenCalled();
+
+    await expect(
+      client.transcribe({
+        budgetUsd: 0.00006,
+        input: { file: wav, mediaType: 'audio/wav' },
+        inputAudioSeconds: 1,
+      }),
+    ).resolves.toMatchObject({ text: 'ok' });
+    expect(transcriptionFactory).toHaveBeenCalledOnce();
+
+    const fetchImplementation = vi.fn();
+    const realClient = new LLMClient({
+      fetchImplementation,
+      openaiApiKey: 'openai-key',
+    });
+    await expect(
+      realClient.transcribe({
+        budgetUsd: 1,
+        input: {
+          mediaType: 'audio/mpeg',
+          url: 'https://example.test/audio.mp3',
+        },
+      }),
+    ).rejects.toThrow('inputAudioSeconds');
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it('merges mock speech prices without overriding explicit custom prices', () => {
+    const modelRegistry = new ModelRegistry({
+      'mock-speech-model': {
+        contextWindow: 2_000,
+        inputPrice: 0,
+        kind: 'speech',
+        lastUpdated: '2026-07-13',
+        outputPrice: 0,
+        provider: 'mock',
+        speechPrices: { outputAudioSecondPrice: 0.123 },
+        supportsStreaming: false,
+        supportsTools: false,
+        supportsVision: false,
+      },
+    });
+    const client = LLMClient.mock({ modelRegistry });
+
+    expect(client.models.get('mock-speech-model').speechPrices).toEqual({
+      outputAudioSecondPrice: 0.123,
+      textInputTokenPrice: 0.6,
+    });
+    expect(client.models.list().some(({ id }) => id === 'unknown-speech')).toBe(
+      false,
+    );
   });
 
   it('rejects invalid budgets before routing or consuming mock queues', async () => {
@@ -3827,5 +4148,64 @@ class MockPool {
       rowCount: rows.length,
       rows,
     };
+  }
+}
+
+function mockSpeechResponse(marker: string) {
+  return {
+    audio: new Uint8Array([1]),
+    format: 'mp3' as const,
+    mediaType: 'audio/mpeg',
+    model: 'mock-speech-model',
+    provider: 'mock' as const,
+    raw: { marker },
+    usage: {
+      cost: '$0.00',
+      costUSD: 0,
+      inputCharacters: 4,
+    },
+  };
+}
+
+function mockTranscriptionResponse(text: string) {
+  return {
+    model: 'mock-transcription-model',
+    provider: 'mock' as const,
+    raw: {},
+    text,
+    usage: {
+      cost: '$0.00',
+      costUSD: 0,
+      inputAudioSeconds: 1,
+    },
+  };
+}
+
+function makeWavBytes(options: { seconds: number }): Uint8Array {
+  const sampleRate = 24_000;
+  const bytesPerSample = 2;
+  const channels = 1;
+  const dataSize = options.seconds * sampleRate * bytesPerSample * channels;
+  const bytes = new Uint8Array(44 + dataSize);
+  const view = new DataView(bytes.buffer);
+  writeAscii(bytes, 0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeAscii(bytes, 8, 'WAVE');
+  writeAscii(bytes, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * channels * bytesPerSample, true);
+  view.setUint16(32, channels * bytesPerSample, true);
+  view.setUint16(34, 8 * bytesPerSample, true);
+  writeAscii(bytes, 36, 'data');
+  view.setUint32(40, dataSize, true);
+  return bytes;
+}
+
+function writeAscii(bytes: Uint8Array, offset: number, text: string): void {
+  for (let index = 0; index < text.length; index += 1) {
+    bytes[offset + index] = text.charCodeAt(index);
   }
 }

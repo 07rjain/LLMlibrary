@@ -106,8 +106,26 @@ Use:
 
 For budget preflight, duration-priced calls need enough information before the request is sent:
 
-- `client.speak()` should pass `estimatedOutputSeconds` or `maxOutputSeconds` when output audio duration affects cost.
-- `client.transcribe()` should pass `inputAudioSeconds` when the source duration cannot be derived from the audio bytes.
+- `client.speak()` uses `estimatedOutputSeconds` first and
+  `maxOutputSeconds` as its fallback when output audio duration affects cost.
+- `client.transcribe()` uses `inputAudioSeconds` first. Otherwise it derives
+  duration locally from supported WAV `Uint8Array`, `ArrayBuffer`, or base64
+  data. It never fetches a URL or calls a provider merely to estimate cost.
+- If duration-based pricing applies and the required duration remains unknown,
+  preflight fails closed with `BudgetExceededError` before dispatch.
+
+`budgetExceededAction` has the same contract for speech and transcription:
+
+- `throw` rejects before dispatch and emits no usage event.
+- `warn` calls the configured warning callback once, dispatches once, and logs
+  the successful speech usage event.
+- `skip` does not fetch, consume a mock queue entry, or dispatch an adapter. It
+  returns an empty operation-specific response and logs one estimated,
+  zero-cost speech usage event so budget decisions remain auditable.
+
+Speech and transcription events always use `UsageLogger.logSpeech()` with a
+`kind` of `speech` or `transcription`; they are never added to text-generation
+usage totals.
 
 `budgetUsd`, `estimatedOutputSeconds`, `maxOutputSeconds`, and
 `inputAudioSeconds` accept finite non-negative decimals. Negative values,
@@ -161,6 +179,12 @@ const client = LLMClient.mock({
   ],
 });
 ```
+
+The reserved `mock-speech-model` and `mock-transcription-model` entries include
+default non-zero speech pricing so budget actions exercise the same preflight
+path as provider-backed clients. When a custom registry defines either reserved
+model, missing default price units are merged while explicit custom prices win.
+Other custom model IDs are never assigned implicit speech prices.
 
 ## Production Notes
 
