@@ -35,8 +35,14 @@ describe('agent file helpers', () => {
     const serviceDir = join(workspace, 'services', 'api');
     await mkdir(serviceDir, { recursive: true });
     await writeFile(join(workspace, 'AGENTS.md'), 'Use pnpm.\n');
-    await writeFile(join(workspace, 'services', 'AGENTS.md'), 'Base service instructions.\n');
-    await writeFile(join(workspace, 'services', 'AGENTS.override.md'), 'Override service instructions.\n');
+    await writeFile(
+      join(workspace, 'services', 'AGENTS.md'),
+      'Base service instructions.\n',
+    );
+    await writeFile(
+      join(workspace, 'services', 'AGENTS.override.md'),
+      'Override service instructions.\n',
+    );
     await writeFile(join(serviceDir, 'AGENTS.md'), 'API instructions.\n');
 
     const instructions = await loadAgentInstructions({ cwd: serviceDir });
@@ -90,9 +96,9 @@ describe('agent file helpers', () => {
   it('enforces the AGENTS byte limit across loaded files', async () => {
     await writeFile(join(workspace, 'AGENTS.md'), '12345');
 
-    await expect(loadAgentInstructions({ cwd: workspace, maxBytes: 4 })).rejects.toThrow(
-      AgentFilesError,
-    );
+    await expect(
+      loadAgentInstructions({ cwd: workspace, maxBytes: 4 }),
+    ).rejects.toThrow(AgentFilesError);
   });
 
   it('discovers skill metadata without loading references or scripts', async () => {
@@ -199,7 +205,12 @@ describe('agent file helpers', () => {
 
   it('parses false and preserves invalid disable-model-invocation metadata values', async () => {
     const falseSkillDir = join(workspace, '.agents', 'skills', 'model-enabled');
-    const invalidSkillDir = join(workspace, '.agents', 'skills', 'invalid-toggle');
+    const invalidSkillDir = join(
+      workspace,
+      '.agents',
+      'skills',
+      'invalid-toggle',
+    );
     await mkdir(falseSkillDir, { recursive: true });
     await mkdir(invalidSkillDir, { recursive: true });
     await writeFile(
@@ -247,7 +258,9 @@ describe('agent file helpers', () => {
       ['---', 'name: broken', '---', '', 'No description.'].join('\n'),
     );
 
-    await expect(discoverSkills({ cwd: workspace })).rejects.toThrow(/description/);
+    await expect(discoverSkills({ cwd: workspace })).rejects.toThrow(
+      /description/,
+    );
   });
 
   it('returns duplicate skill names as separate manifests with distinct paths', async () => {
@@ -283,7 +296,12 @@ describe('agent file helpers', () => {
     await writeFile(join(workspace, 'AGENTS.md'), 'Use focused tests.');
     const skillDir = join(workspace, '.agents', 'skills', 'release');
     await mkdir(skillDir, { recursive: true });
-    await writeSkill(skillDir, 'release', 'Release workflow.', 'Run ci before publish.');
+    await writeSkill(
+      skillDir,
+      'release',
+      'Release workflow.',
+      'Run ci before publish.',
+    );
 
     const instructions = await loadAgentInstructions({ cwd: workspace });
     const [manifest] = await discoverSkills({ cwd: workspace });
@@ -402,7 +420,9 @@ describe('loadSkill path containment', () => {
     await mkdir(skillsRoot, { recursive: true });
     await writeSkill(skillsRoot, 'demo', 'Demo skill.');
 
-    await expect(loadSkill(join(skillsRoot, 'SKILL.md'))).rejects.toThrow(AgentFilesError);
+    await expect(loadSkill(join(skillsRoot, 'SKILL.md'))).rejects.toThrow(
+      AgentFilesError,
+    );
   });
 
   it('loads a string path that stays inside the trusted root', async () => {
@@ -416,23 +436,158 @@ describe('loadSkill path containment', () => {
     expect(skill.body).toContain('Body here.');
   });
 
+  it('loads legitimate deep paths with spaces and Unicode', async () => {
+    const root = join(workspace, '.agents', 'skills');
+    const skillDir = join(root, 'nested folder', '安全');
+    await mkdir(skillDir, { recursive: true });
+    await writeSkill(
+      skillDir,
+      'unicode-skill',
+      'Unicode skill.',
+      'SAFE_UNICODE_BODY',
+    );
+
+    await expect(
+      loadSkill('nested folder/安全/SKILL.md', { root }),
+    ).resolves.toMatchObject({
+      body: 'SAFE_UNICODE_BODY',
+      name: 'unicode-skill',
+    });
+  });
+
   it('rejects a traversal path that escapes the trusted root', async () => {
     const root = join(workspace, '.agents', 'skills');
     await mkdir(root, { recursive: true });
-    await writeFile(join(workspace, 'secret.md'), '---\nname: x\ndescription: y\n---\nsecret');
+    await writeFile(
+      join(workspace, 'secret.md'),
+      '---\nname: x\ndescription: y\n---\nsecret',
+    );
 
-    await expect(
-      loadSkill('../../secret.md', { root }),
-    ).rejects.toThrow(/outside root/);
+    await expect(loadSkill('../../secret.md', { root })).rejects.toBeInstanceOf(
+      AgentFilesError,
+    );
   });
 
   it('rejects an absolute path outside the trusted root', async () => {
     const root = join(workspace, '.agents', 'skills');
     await mkdir(root, { recursive: true });
 
+    await expect(loadSkill('/etc/passwd', { root })).rejects.toBeInstanceOf(
+      AgentFilesError,
+    );
+  });
+
+  it('rejects traversal and portable absolute raw paths before filesystem access', async () => {
+    const root = join(workspace, '.agents', 'skills');
+    await mkdir(root, { recursive: true });
+
+    for (const path of [
+      '../outside.md',
+      '..\\outside.md',
+      'nested/../../outside.md',
+      '/absolute/SKILL.md',
+      'C:\\absolute\\SKILL.md',
+      'C:/absolute/SKILL.md',
+      '\\\\server\\share\\SKILL.md',
+      '\\\\?\\C:\\absolute\\SKILL.md',
+      '\\\\.\\pipe\\skill',
+      '',
+      '   ',
+    ]) {
+      await expect(loadSkill(path, { root })).rejects.toBeInstanceOf(
+        AgentFilesError,
+      );
+    }
+  });
+
+  it('rejects outside symlink files and ancestor directories without leaking targets', async () => {
+    const root = join(workspace, '.agents', 'skills');
+    const outsideDir = join(workspace, 'outside');
+    const outsidePath = join(outsideDir, 'SKILL.md');
+    await mkdir(root, { recursive: true });
+    await mkdir(outsideDir);
+    await writeSkill(
+      outsideDir,
+      'outside',
+      'Outside skill.',
+      'OUTSIDE_SECRET_BODY',
+    );
+    await symlink(outsidePath, join(root, 'escape.md'));
+    await symlink(outsideDir, join(root, 'escape-directory'));
+
+    for (const path of ['escape.md', 'escape-directory/SKILL.md']) {
+      const error = await loadSkill(path, { root }).catch(
+        (caught: unknown) => caught,
+      );
+      expect(error).toBeInstanceOf(AgentFilesError);
+      expect(String(error)).not.toContain(outsidePath);
+      expect(String(error)).not.toContain('OUTSIDE_SECRET_BODY');
+    }
+  });
+
+  it('accepts a symlink whose canonical file target remains inside the trusted root', async () => {
+    const root = join(workspace, '.agents', 'skills');
+    const skillDir = join(root, 'safe');
+    await mkdir(skillDir, { recursive: true });
+    await writeSkill(skillDir, 'safe', 'Safe skill.', 'IN_ROOT_BODY');
+    await symlink(join(skillDir, 'SKILL.md'), join(root, 'safe-link.md'));
+
+    await expect(loadSkill('safe-link.md', { root })).resolves.toMatchObject({
+      body: 'IN_ROOT_BODY',
+      name: 'safe',
+    });
+  });
+
+  it('rejects configured roots that are symlinks', async () => {
+    const realRoot = join(workspace, 'real-skills');
+    const linkedRoot = join(workspace, 'linked-skills');
+    const skillDir = join(realRoot, 'demo');
+    await mkdir(skillDir, { recursive: true });
+    await writeSkill(skillDir, 'demo', 'Demo skill.');
+    await symlink(realRoot, linkedRoot);
+
     await expect(
-      loadSkill('/etc/passwd', { root }),
-    ).rejects.toThrow(/outside root/);
+      loadSkill('demo/SKILL.md', { root: linkedRoot }),
+    ).rejects.toBeInstanceOf(AgentFilesError);
+  });
+
+  it('rejects symlinked discovery parents that escape the configured root', async () => {
+    const outsideAgents = join(workspace, 'outside-agents');
+    const firstRoot = join(workspace, 'first-root');
+    const secondRoot = join(workspace, 'second-root');
+    await mkdir(join(outsideAgents, 'skills', 'outside'), { recursive: true });
+    await writeSkill(
+      join(outsideAgents, 'skills', 'outside'),
+      'outside',
+      'Outside skill.',
+    );
+    await mkdir(firstRoot);
+    await symlink(outsideAgents, join(firstRoot, '.agents'));
+    await mkdir(join(secondRoot, '.agents'), { recursive: true });
+    await symlink(
+      join(outsideAgents, 'skills'),
+      join(secondRoot, '.agents', 'skills'),
+    );
+
+    await expect(
+      discoverSkills({ cwd: firstRoot, root: firstRoot }),
+    ).rejects.toBeInstanceOf(AgentFilesError);
+    await expect(
+      discoverSkills({ cwd: secondRoot, root: secondRoot }),
+    ).rejects.toBeInstanceOf(AgentFilesError);
+  });
+
+  it('rejects a cwd symlink that escapes the instruction root', async () => {
+    const root = join(workspace, 'instruction-root');
+    const outside = join(workspace, 'outside-instructions');
+    await mkdir(root);
+    await mkdir(outside);
+    await writeFile(join(outside, 'AGENTS.md'), 'OUTSIDE_INSTRUCTIONS');
+    await symlink(outside, join(root, 'linked-cwd'));
+
+    await expect(
+      loadAgentInstructions({ cwd: join(root, 'linked-cwd'), root }),
+    ).rejects.toBeInstanceOf(AgentFilesError);
   });
 
   it('still accepts manifests from discoverSkills without a root', async () => {
@@ -444,6 +599,118 @@ describe('loadSkill path containment', () => {
     const [manifest] = await discoverSkills({ cwd: agentDir });
     const skill = await loadSkill(manifest!);
     expect(skill.body).toContain('Manifest body.');
+  });
+
+  it('requires provenance or an explicit root for structural manifests', async () => {
+    const root = join(workspace, '.agents', 'skills');
+    const skillDir = join(root, 'demo');
+    const outsideDir = join(workspace, 'outside-manifest');
+    await mkdir(skillDir, { recursive: true });
+    await mkdir(outsideDir);
+    await writeSkill(skillDir, 'demo', 'Demo skill.', 'STRUCTURAL_BODY');
+    await writeSkill(outsideDir, 'outside', 'Outside skill.', 'OUTSIDE_BODY');
+    const structural = {
+      description: 'Demo skill.',
+      directory: skillDir,
+      metadata: {},
+      name: 'demo',
+      path: join(skillDir, 'SKILL.md'),
+    };
+    const outside = { ...structural, path: join(outsideDir, 'SKILL.md') };
+
+    await expect(loadSkill(structural)).rejects.toBeInstanceOf(AgentFilesError);
+    await expect(loadSkill(outside, { root })).rejects.toBeInstanceOf(
+      AgentFilesError,
+    );
+    await expect(loadSkill(structural, { root })).resolves.toMatchObject({
+      body: 'STRUCTURAL_BODY',
+      name: 'demo',
+    });
+  });
+
+  it('requires an explicit root after spreading or serializing a discovered manifest', async () => {
+    const root = join(workspace, '.agents', 'skills');
+    const skillDir = join(root, 'demo');
+    await mkdir(skillDir, { recursive: true });
+    await writeSkill(skillDir, 'demo', 'Demo skill.', 'SERIALIZED_BODY');
+    const [manifest] = await discoverSkills({
+      cwd: workspace,
+      root: workspace,
+    });
+    const spread = { ...manifest! };
+    const serialized = JSON.parse(JSON.stringify(manifest)) as typeof manifest;
+
+    await expect(loadSkill(spread)).rejects.toBeInstanceOf(AgentFilesError);
+    await expect(loadSkill(serialized!)).rejects.toBeInstanceOf(
+      AgentFilesError,
+    );
+    await expect(loadSkill(spread, { root: workspace })).resolves.toMatchObject(
+      {
+        body: 'SERIALIZED_BODY',
+      },
+    );
+  });
+
+  it('rejects mutation and outside replacement of discovered manifests', async () => {
+    const root = join(workspace, 'agent-root');
+    const skillDir = join(root, '.agents', 'skills', 'demo');
+    const outsideDir = join(workspace, 'replacement');
+    await mkdir(skillDir, { recursive: true });
+    await mkdir(outsideDir);
+    await writeSkill(skillDir, 'demo', 'Demo skill.', 'SAFE_BODY');
+    await writeSkill(outsideDir, 'demo', 'Demo skill.', 'OUTSIDE_REPLACEMENT');
+    const [manifest] = await discoverSkills({ cwd: root, root });
+
+    manifest!.path = join(outsideDir, 'SKILL.md');
+    await expect(loadSkill(manifest!)).rejects.toBeInstanceOf(AgentFilesError);
+    manifest!.path = join(skillDir, 'SKILL.md');
+    manifest!.directory = outsideDir;
+    await expect(loadSkill(manifest!)).rejects.toBeInstanceOf(AgentFilesError);
+    manifest!.directory = skillDir;
+
+    await rm(join(skillDir, 'SKILL.md'));
+    await symlink(join(outsideDir, 'SKILL.md'), join(skillDir, 'SKILL.md'));
+    await expect(loadSkill(manifest!)).rejects.toBeInstanceOf(AgentFilesError);
+  });
+
+  it('reloads safe in-root content but rejects root replacement after discovery', async () => {
+    const root = join(workspace, 'reload-root');
+    const skillDir = join(root, '.agents', 'skills', 'demo');
+    const replacementRoot = join(workspace, 'replacement-root');
+    await mkdir(skillDir, { recursive: true });
+    await mkdir(join(replacementRoot, '.agents', 'skills', 'demo'), {
+      recursive: true,
+    });
+    await writeSkill(skillDir, 'demo', 'Demo skill.', 'FIRST_BODY');
+    await writeSkill(
+      join(replacementRoot, '.agents', 'skills', 'demo'),
+      'demo',
+      'Demo skill.',
+      'ROOT_REPLACEMENT',
+    );
+    const [manifest] = await discoverSkills({ cwd: root, root });
+
+    await writeSkill(skillDir, 'demo', 'Demo skill.', 'SECOND_BODY');
+    await expect(loadSkill(manifest!)).resolves.toMatchObject({
+      body: 'SECOND_BODY',
+    });
+
+    await rm(root, { recursive: true });
+    await symlink(replacementRoot, root);
+    await expect(loadSkill(manifest!)).rejects.toBeInstanceOf(AgentFilesError);
+  });
+
+  it('treats path-like frontmatter names as metadata, never file locations', async () => {
+    const root = join(workspace, '.agents', 'skills');
+    const skillDir = join(root, 'demo');
+    await mkdir(skillDir, { recursive: true });
+    await writeSkill(skillDir, '../../outside', 'Path-like name.', 'SAFE_BODY');
+
+    await expect(loadSkill('demo/SKILL.md', { root })).resolves.toMatchObject({
+      body: 'SAFE_BODY',
+      name: '../../outside',
+      path: join(skillDir, 'SKILL.md'),
+    });
   });
 });
 
@@ -519,6 +786,13 @@ async function writeSkill(
 ): Promise<void> {
   await writeFile(
     join(directory, 'SKILL.md'),
-    ['---', `name: ${name}`, `description: ${description}`, '---', '', body].join('\n'),
+    [
+      '---',
+      `name: ${name}`,
+      `description: ${description}`,
+      '---',
+      '',
+      body,
+    ].join('\n'),
   );
 }

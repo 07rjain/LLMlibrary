@@ -770,6 +770,13 @@ const conversation = await client.conversation({
 
 `loadAgentInstructions()` walks from the repository root to `cwd`, loading `AGENTS.override.md`, `AGENTS.md`, `agent.md`, or `Agent.md` in that order. Pass `filenames` when an application wants to restrict the accepted instruction filenames. `discoverSkills()` reads frontmatter from `.agents/skills/*/SKILL.md`; manifests preserve the raw `metadata` map and expose `disableModelInvocation` when `disable-model-invocation: true|false` is present. Full skill bodies are loaded only with `loadSkill()`. The library does not run skill scripts, load skill references, call a model while discovering skills, or implicitly select skills.
 
+Agent roots must be real directories rather than symlinks. The loader canonicalizes
+roots, working directories, skill directories, and files before every read and rejects
+paths whose resolved target escapes the trusted root. Raw `loadSkill()` paths must be
+relative and traversal-free. A manifest returned directly by `discoverSkills()` can be
+loaded without repeating the root; copied, serialized, or caller-created manifests must
+provide `root` again and are revalidated.
+
 For file layout, `agent.md` examples, skill frontmatter, explicit skill selection, and isolation with `root`, see [docs/AGENT_INSTRUCTIONS_AND_SKILLS.md](docs/AGENT_INSTRUCTIONS_AND_SKILLS.md).
 
 ## Docs

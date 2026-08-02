@@ -1,5 +1,5 @@
-import { lstat, readdir, readFile } from 'node:fs/promises';
-import { dirname, relative, resolve } from 'node:path';
+import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
+import { dirname, isAbsolute, relative, resolve, win32 } from 'node:path';
 
 const DEFAULT_INSTRUCTION_MAX_BYTES = 32_768;
 const DEFAULT_SKILL_MAX_BYTES = 65_536;
@@ -48,8 +48,9 @@ export interface LoadSkillOptions {
   /**
    * Trusted root that a string `skillOrPath` must resolve inside. Required when
    * loading by raw path so untrusted input cannot escape the skills directory.
-   * Ignored when a manifest returned by {@link discoverSkills} is passed, since
-   * those paths are already validated against their root.
+   * Structurally supplied or deserialized manifests also require this option;
+   * manifests returned directly by {@link discoverSkills} carry private
+   * provenance and can be loaded without repeating the root.
    */
   root?: string;
 }
@@ -71,25 +72,45 @@ export class AgentFilesError extends Error {
   }
 }
 
+interface TrustedRoot {
+  displayPath: string;
+  canonicalPath: string;
+}
+
+interface SkillProvenance {
+  canonicalPath: string;
+  directory: string;
+  path: string;
+  root: TrustedRoot;
+}
+
+const skillProvenance = new WeakMap<object, SkillProvenance>();
+
 export async function loadAgentInstructions(
   options: LoadAgentInstructionsOptions,
 ): Promise<AgentInstructions> {
-  const root = await resolveAgentRoot(options.cwd, options.root);
+  const root = await getTrustedRoot(
+    await resolveAgentRoot(options.cwd, options.root),
+  );
   const cwd = resolve(options.cwd);
-  assertWithinRoot(cwd, root);
+  await assertDirectoryWithinRoot(cwd, root);
 
   const maxBytes = options.maxBytes ?? DEFAULT_INSTRUCTION_MAX_BYTES;
   const filenames = options.filenames ?? DEFAULT_INSTRUCTION_FILENAMES;
   const files: AgentInstructionFile[] = [];
   let totalBytes = 0;
 
-  for (const directory of directoriesFromRoot(root, cwd)) {
+  for (const directory of directoriesFromRoot(root.displayPath, cwd)) {
     const file = await findInstructionFile(directory, filenames);
     if (!file) {
       continue;
     }
 
-    const content = await readUtf8FileWithLimit(file, maxBytes);
+    const { content } = await readUtf8FileWithLimit(
+      file,
+      maxBytes,
+      root.canonicalPath,
+    );
     totalBytes += utf8Bytes(content);
     if (totalBytes > maxBytes) {
       throw new AgentFilesError(
@@ -102,25 +123,34 @@ export async function loadAgentInstructions(
   return {
     content: files.map((file) => file.content.trimEnd()).join('\n\n'),
     files,
-    root,
+    root: root.displayPath,
   };
 }
 
 export async function discoverSkills(
   options: DiscoverSkillsOptions,
 ): Promise<AgentSkillManifest[]> {
-  const root = await resolveAgentRoot(options.cwd, options.root);
+  const root = await getTrustedRoot(
+    await resolveAgentRoot(options.cwd, options.root),
+  );
   const cwd = resolve(options.cwd);
-  assertWithinRoot(cwd, root);
+  await assertDirectoryWithinRoot(cwd, root);
 
   const maxBytes = options.maxBytes ?? DEFAULT_SKILL_MAX_BYTES;
   const manifests: AgentSkillManifest[] = [];
 
-  for (const directory of directoriesFromRoot(root, cwd)) {
+  for (const directory of directoriesFromRoot(root.displayPath, cwd)) {
     const skillsRoot = resolve(directory, '.agents', 'skills');
-    for (const skillDirectory of await listSkillDirectories(skillsRoot)) {
+    for (const skillDirectory of await listSkillDirectories(
+      skillsRoot,
+      root.canonicalPath,
+    )) {
       const skillPath = resolve(skillDirectory, 'SKILL.md');
-      const content = await readUtf8FileWithLimit(skillPath, maxBytes);
+      const { content, canonicalPath } = await readUtf8FileWithLimit(
+        skillPath,
+        maxBytes,
+        root.canonicalPath,
+      );
       const parsed = parseSkillMarkdown(content, skillPath);
       const manifest: AgentSkillManifest = {
         description: parsed.description,
@@ -132,6 +162,12 @@ export async function discoverSkills(
       if (parsed.disableModelInvocation !== undefined) {
         manifest.disableModelInvocation = parsed.disableModelInvocation;
       }
+      skillProvenance.set(manifest, {
+        canonicalPath,
+        directory: skillDirectory,
+        path: skillPath,
+        root,
+      });
       manifests.push(manifest);
     }
   }
@@ -144,6 +180,8 @@ export async function loadSkill(
   options: LoadSkillOptions = {},
 ): Promise<AgentSkill> {
   let skillPath: string;
+  let root: TrustedRoot;
+  let expectedCanonicalPath: string | undefined;
   if (typeof skillOrPath === 'string') {
     if (options.root === undefined) {
       throw new AgentFilesError(
@@ -151,16 +189,49 @@ export async function loadSkill(
           'Pass a manifest from discoverSkills() or set options.root.',
       );
     }
-    const root = resolve(options.root);
-    skillPath = resolve(root, skillOrPath);
-    assertPathWithinRoot(skillPath, root);
+    root = await getTrustedRoot(options.root);
+    validateRawSkillPath(skillOrPath);
+    skillPath = resolve(root.displayPath, skillOrPath);
+    assertLexicalPathWithinRoot(skillPath, root.displayPath);
   } else {
-    skillPath = skillOrPath.path;
+    const provenance = skillProvenance.get(skillOrPath);
+    if (provenance) {
+      if (
+        skillOrPath.path !== provenance.path ||
+        skillOrPath.directory !== provenance.directory
+      ) {
+        throw new AgentFilesError('Skill manifest provenance was modified.');
+      }
+      root = await getTrustedRoot(provenance.root.displayPath);
+      if (root.canonicalPath !== provenance.root.canonicalPath) {
+        throw new AgentFilesError(
+          'Trusted skill root changed after discovery.',
+        );
+      }
+      skillPath = provenance.path;
+      expectedCanonicalPath = provenance.canonicalPath;
+    } else {
+      if (options.root === undefined) {
+        throw new AgentFilesError(
+          'loadSkill() requires a trusted "root" option for an untrusted manifest.',
+        );
+      }
+      if (!skillOrPath || typeof skillOrPath.path !== 'string') {
+        throw new AgentFilesError('Skill manifest has an invalid path.');
+      }
+      root = await getTrustedRoot(options.root);
+      skillPath = resolve(root.displayPath, skillOrPath.path);
+      assertLexicalPathWithinRoot(skillPath, root.displayPath);
+    }
   }
-  const content = await readUtf8FileWithLimit(
+  const { content, canonicalPath } = await readUtf8FileWithLimit(
     skillPath,
     options.maxBytes ?? DEFAULT_SKILL_MAX_BYTES,
+    root.canonicalPath,
   );
+  if (expectedCanonicalPath && canonicalPath !== expectedCanonicalPath) {
+    throw new AgentFilesError('Skill path changed after discovery.');
+  }
   const parsed = parseSkillMarkdown(content, skillPath);
 
   const skill: AgentSkill = {
@@ -215,7 +286,10 @@ export function composeAgentSystemPrompt(
   return sections.join('\n\n');
 }
 
-async function resolveAgentRoot(cwd: string, explicitRoot: string | undefined): Promise<string> {
+async function resolveAgentRoot(
+  cwd: string,
+  explicitRoot: string | undefined,
+): Promise<string> {
   if (explicitRoot) {
     return resolve(explicitRoot);
   }
@@ -233,17 +307,21 @@ async function resolveAgentRoot(cwd: string, explicitRoot: string | undefined): 
   }
 }
 
-function assertWithinRoot(cwd: string, root: string): void {
-  const relativePath = relative(root, cwd);
+function assertLexicalPathWithinRoot(target: string, root: string): void {
+  const relativePath = relative(root, target);
   if (relativePath === '') {
     return;
   }
-  if (relativePath === '..' || relativePath.startsWith('../') || relativePath.startsWith('..\\')) {
-    throw new AgentFilesError(`cwd "${cwd}" is outside root "${root}".`);
+  if (
+    relativePath === '..' ||
+    relativePath.startsWith('../') ||
+    relativePath.startsWith('..\\')
+  ) {
+    throw new AgentFilesError('Path is outside the trusted agent root.');
   }
 }
 
-function assertPathWithinRoot(target: string, root: string): void {
+function assertCanonicalPathWithinRoot(target: string, root: string): void {
   const relativePath = relative(root, target);
   if (
     relativePath === '..' ||
@@ -251,7 +329,76 @@ function assertPathWithinRoot(target: string, root: string): void {
     relativePath.startsWith('..\\') ||
     resolve(root, relativePath) !== target
   ) {
-    throw new AgentFilesError(`Skill path "${target}" is outside root "${root}".`);
+    throw new AgentFilesError('Path is outside the trusted agent root.');
+  }
+}
+
+async function getTrustedRoot(path: string): Promise<TrustedRoot> {
+  const displayPath = resolve(path);
+  let stats;
+  try {
+    stats = await lstat(displayPath);
+  } catch {
+    throw new AgentFilesError('Trusted agent root does not exist.');
+  }
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new AgentFilesError('Trusted agent root must be a real directory.');
+  }
+  let canonicalPath: string;
+  try {
+    canonicalPath = await realpath(displayPath);
+  } catch {
+    throw new AgentFilesError('Trusted agent root could not be canonicalized.');
+  }
+  return { canonicalPath, displayPath };
+}
+
+async function assertDirectoryWithinRoot(
+  path: string,
+  root: TrustedRoot,
+): Promise<void> {
+  const displayPath = resolve(path);
+  assertLexicalPathWithinRoot(displayPath, root.displayPath);
+  const canonicalPath = await canonicalizePath(
+    displayPath,
+    'Agent working directory',
+  );
+  assertCanonicalPathWithinRoot(canonicalPath, root.canonicalPath);
+  let stats;
+  try {
+    stats = await lstat(canonicalPath);
+  } catch {
+    throw new AgentFilesError('Agent working directory does not exist.');
+  }
+  if (!stats.isDirectory()) {
+    throw new AgentFilesError('Agent working directory must be a directory.');
+  }
+}
+
+async function canonicalizePath(path: string, label: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    throw new AgentFilesError(`${label} could not be canonicalized.`);
+  }
+}
+
+function validateRawSkillPath(path: string): void {
+  if (!path || path.trim().length === 0 || path.includes('\0')) {
+    throw new AgentFilesError('Skill path must be a non-empty relative path.');
+  }
+  if (
+    isAbsolute(path) ||
+    win32.isAbsolute(path) ||
+    /^[A-Za-z]:/.test(path) ||
+    /^[/\\]{2}/.test(path)
+  ) {
+    throw new AgentFilesError('Skill path must be a non-empty relative path.');
+  }
+  if (path.split(/[\\/]/).some((segment) => segment === '..')) {
+    throw new AgentFilesError(
+      'Skill path must not contain traversal segments.',
+    );
   }
 }
 
@@ -284,7 +431,15 @@ async function findInstructionFile(
   return undefined;
 }
 
-async function listSkillDirectories(skillsRoot: string): Promise<string[]> {
+async function listSkillDirectories(
+  skillsRoot: string,
+  canonicalRoot: string,
+): Promise<string[]> {
+  const canonicalSkillsRoot = await canonicalizeOptionalPath(skillsRoot);
+  if (!canonicalSkillsRoot) {
+    return [];
+  }
+  assertCanonicalPathWithinRoot(canonicalSkillsRoot, canonicalRoot);
   let entries;
   try {
     entries = await readdir(skillsRoot, { withFileTypes: true });
@@ -307,18 +462,53 @@ async function listSkillDirectories(skillsRoot: string): Promise<string[]> {
       continue;
     }
     if (await isRegularFile(resolve(directory, 'SKILL.md'))) {
+      const canonicalDirectory = await canonicalizePath(
+        directory,
+        'Skill directory',
+      );
+      assertCanonicalPathWithinRoot(canonicalDirectory, canonicalRoot);
       directories.push(directory);
     }
   }
   return directories.sort();
 }
 
-async function readUtf8FileWithLimit(path: string, maxBytes: number): Promise<string> {
-  const buffer = await readFile(path);
-  if (buffer.byteLength > maxBytes) {
-    throw new AgentFilesError(`File "${path}" exceeds the ${maxBytes} byte limit.`);
+async function readUtf8FileWithLimit(
+  path: string,
+  maxBytes: number,
+  canonicalRoot: string,
+): Promise<{ canonicalPath: string; content: string }> {
+  const canonicalPath = await canonicalizePath(path, 'Skill file');
+  assertCanonicalPathWithinRoot(canonicalPath, canonicalRoot);
+  let stats;
+  try {
+    stats = await lstat(canonicalPath);
+  } catch {
+    throw new AgentFilesError('Skill file does not exist.');
   }
-  return buffer.toString('utf8');
+  if (!stats.isFile()) {
+    throw new AgentFilesError('Skill file must be a regular file.');
+  }
+  const buffer = await readFile(canonicalPath);
+  if (buffer.byteLength > maxBytes) {
+    throw new AgentFilesError(`Agent file exceeds the ${maxBytes} byte limit.`);
+  }
+  return { canonicalPath, content: buffer.toString('utf8') };
+}
+
+async function canonicalizeOptionalPath(
+  path: string,
+): Promise<string | undefined> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if (isNodeError(error, 'ENOENT') || isNodeError(error, 'ENOTDIR')) {
+      return undefined;
+    }
+    throw new AgentFilesError(
+      'Agent skill directory could not be canonicalized.',
+    );
+  }
 }
 
 function parseSkillMarkdown(
@@ -332,12 +522,16 @@ function parseSkillMarkdown(
   name: string;
 } {
   if (!content.startsWith('---\n')) {
-    throw new AgentFilesError(`Skill "${path}" must start with YAML frontmatter.`);
+    throw new AgentFilesError(
+      `Skill "${path}" must start with YAML frontmatter.`,
+    );
   }
 
   const end = content.indexOf('\n---', 4);
   if (end === -1) {
-    throw new AgentFilesError(`Skill "${path}" is missing closing YAML frontmatter.`);
+    throw new AgentFilesError(
+      `Skill "${path}" is missing closing YAML frontmatter.`,
+    );
   }
 
   const frontmatter = content.slice(4, end);
@@ -348,7 +542,9 @@ function parseSkillMarkdown(
   const description = fields.get('description');
 
   if (!name) {
-    throw new AgentFilesError(`Skill "${path}" is missing required frontmatter field "name".`);
+    throw new AgentFilesError(
+      `Skill "${path}" is missing required frontmatter field "name".`,
+    );
   }
   if (!description) {
     throw new AgentFilesError(
@@ -368,7 +564,9 @@ function parseSkillMarkdown(
     metadata: Object.fromEntries(fields),
     name,
   };
-  const disableModelInvocation = parseOptionalBoolean(fields.get('disable-model-invocation'));
+  const disableModelInvocation = parseOptionalBoolean(
+    fields.get('disable-model-invocation'),
+  );
   if (disableModelInvocation !== undefined) {
     parsedSkill.disableModelInvocation = disableModelInvocation;
   }
@@ -438,6 +636,9 @@ function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
-function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {
+function isNodeError(
+  error: unknown,
+  code: string,
+): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error && error.code === code;
 }

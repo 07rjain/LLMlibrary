@@ -172,6 +172,33 @@ const skills = await discoverSkills({
 
 Use this for hosted agent builders where every agent folder should be self-contained.
 
+The configured root must exist as a directory and cannot itself be a symbolic link.
+Before reading, the loader resolves the real filesystem location of the root, `cwd`,
+skill parents, and target file, then verifies that the canonical target remains inside
+the root. Symlinks whose targets remain inside the root are allowed; symlink escapes are
+rejected. Immediate symlinked skill-directory entries discovered under
+`.agents/skills` continue to be skipped.
+
+String paths passed to `loadSkill()` must be non-empty relative paths without `..`
+segments. POSIX absolute paths, Windows drive paths, UNC paths, and device paths are
+rejected on every platform. Pass the trusted skills directory as `root`:
+
+```ts
+const skill = await loadSkill('release/SKILL.md', {
+  root: '/srv/agents/example/.agents/skills',
+});
+```
+
+Manifests returned directly by `discoverSkills()` carry private in-process provenance,
+so `loadSkill(discoveredManifest)` remains supported. Spreading, serializing, or
+constructing a manifest removes that provenance; pass an explicit trusted `root` when
+loading such a structure. Manifest paths and filesystem targets are revalidated on
+every load, including after files are replaced.
+
+The implementation reads the freshly validated canonical path to narrow symlink races.
+A fully adversarial concurrent rename/open race would require platform-specific
+directory-handle APIs and is outside this portable filesystem contract.
+
 ## Restrict Instruction Filenames
 
 If your product only wants to support `agent.md`, pass `filenames`:
