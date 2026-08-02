@@ -85,4 +85,124 @@ describe('sanitizeForLogging key redaction', () => {
       list: [{ openaiApiKey: '[REDACTED]' }],
     });
   });
+
+  it('redacts prompts, messages, explicit tool data, and raw payloads', () => {
+    const result = sanitizeForLogging({
+      messages: [{ content: 'message-canary', role: 'user' }],
+      prompt: 'prompt-canary',
+      raw_body: 'raw-body-snake-canary',
+      rawBody: 'raw-body-canary',
+      rawRequest: { body: 'request-canary' },
+      responseBody: 'response-canary',
+      systemPrompt: 'system-canary',
+      toolArgs: { query: 'args-canary' },
+      toolCalls: [{ arguments: 'call-canary' }],
+      toolPayload: { value: 'payload-canary' },
+      toolResults: ['result-canary'],
+      transcript: 'transcript-canary',
+      user_prompt: 'user-canary',
+    });
+
+    expect(Object.values(result).every((value) => value === '[REDACTED]')).toBe(
+      true,
+    );
+    expect(JSON.stringify(result)).not.toMatch(
+      /(?:message|prompt|request|response|system|args|call|payload|result|transcript|user)-canary/,
+    );
+  });
+
+  it('preserves safe metrics and benign attribution fields', () => {
+    const result = sanitizeForLogging({
+      contentType: 'application/json',
+      body: 'body-visible',
+      content: 'content-visible',
+      data: 'data-visible',
+      feature: 'ticket-summary',
+      inputTokens: 100,
+      maxTokens: 4096,
+      outputTokens: 25,
+      promptTokens: 100,
+      provider: 'openai',
+      request: 'request-visible',
+      requestId: 'request-1',
+      response: 'response-visible',
+      tokenizer: 'cl100k',
+      toolRound: 2,
+    });
+
+    expect(result).toEqual({
+      contentType: 'application/json',
+      body: 'body-visible',
+      content: 'content-visible',
+      data: 'data-visible',
+      feature: 'ticket-summary',
+      inputTokens: 100,
+      maxTokens: 4096,
+      outputTokens: 25,
+      promptTokens: 100,
+      provider: 'openai',
+      request: 'request-visible',
+      requestId: 'request-1',
+      response: 'response-visible',
+      tokenizer: 'cl100k',
+      toolRound: 2,
+    });
+  });
+
+  it('does not enumerate binary values or retain encoded media', () => {
+    const bytes = new Uint8Array([115, 101, 99, 114, 101, 116]);
+    const longBase64 = Buffer.from('binary-canary'.repeat(60)).toString(
+      'base64',
+    );
+    const chunks = longBase64.match(/.{1,64}/g) ?? [];
+    const result = sanitizeForLogging({
+      arbitraryBytes: bytes,
+      buffer: bytes.buffer,
+      crlfWrapped: `\r\n${chunks.join('\r\n')}\r\n`,
+      generic: longBase64,
+      imageUrl: 'https://example.test/private.png',
+      inline: 'data:audio/wav;base64,Y2FuYXJ5',
+      newlineWrapped: chunks.join('\n'),
+      spaceWrapped: ` ${chunks.join(' ')} `,
+    });
+
+    expect(result).toEqual({
+      arbitraryBytes: '[REDACTED]',
+      buffer: '[REDACTED]',
+      crlfWrapped: '[REDACTED]',
+      generic: '[REDACTED]',
+      imageUrl: '[REDACTED]',
+      inline: '[REDACTED]',
+      newlineWrapped: '[REDACTED]',
+      spaceWrapped: '[REDACTED]',
+    });
+    expect(JSON.stringify(result)).not.toContain('binary-canary');
+  });
+
+  it('preserves ordinary multiline text and wrapped near-misses', () => {
+    const multiline = 'ordinary multiline words\n'.repeat(30);
+    const nearMiss = `${'QUJD'.repeat(20)}\n${'REVG'.repeat(20)}*`;
+    const result = sanitizeForLogging({
+      body: multiline,
+      data: nearMiss,
+      request: multiline,
+      response: nearMiss,
+    });
+
+    expect(result).toEqual({
+      body: multiline,
+      data: nearMiss,
+      request: multiline,
+      response: nearMiss,
+    });
+  });
+
+  it('sanitizes a large base64 fixture without retaining its contents', () => {
+    const payload = Buffer.alloc(700_000, 97).toString('base64');
+    const startedAt = performance.now();
+    const result = sanitizeForLogging({ data: payload });
+
+    expect(result).toEqual({ data: '[REDACTED]' });
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+  });
 });

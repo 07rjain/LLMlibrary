@@ -98,13 +98,15 @@ Practical rule:
 
 ## Logging And Data Hygiene
 
-The library sanitizes logged usage and error payloads before writing them through the built-in logging paths, but you still need to decide what your own application logs.
+The built-in `ConsoleLogger` and `PostgresUsageLogger` sanitize usage metadata before writing it. They remove credentials, prompts, canonical messages, explicit tool arguments/results, raw request and response payloads, transcripts, and binary or encoded media while retaining attribution and usage metrics. `PostgresUsageLogger` sanitizes and clones metadata before it enters the in-memory batch queue.
+
+The `UsageLogger` interface itself receives the original `UsageEvent`. A custom logger must apply its own allowlist or equivalent sanitization before retaining, forwarding, or printing the event. Treat that interface as a trusted application boundary.
 
 Recommended production posture:
 
 - Log request ids, session ids, tenant ids, model ids, finish reasons, duration, and cost.
-- Avoid logging raw prompts or tool payloads unless you have a clear compliance reason.
-- Avoid logging raw audio, base64 audio, or full transcripts unless your product has explicit retention and consent controls.
+- Do not add raw prompts or tool payloads to a custom logger unless you have a clear compliance reason.
+- Do not add raw audio, base64 audio, or full transcripts to a custom logger unless your product has explicit retention and consent controls.
 - Keep tool results narrow and structured so downstream logging stays predictable.
 
 ## Speech In Production

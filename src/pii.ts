@@ -99,15 +99,20 @@ export function redactPIIFromMessages(
   const occurrences: PIIRedactionOccurrence[] = [];
   const redactedMessages = messages.map((message, messageIndex) => {
     const contentPath = `$[${messageIndex}].content`;
+    const clonedMetadata =
+      message.metadata === undefined
+        ? {}
+        : { metadata: clonePreservedValue(message.metadata) };
 
     if (typeof message.content === 'string') {
       const result = redactTextAtPath(message.content, options, contentPath);
       occurrences.push(...result.summary.occurrences);
-      return { ...message, content: result.text };
+      return { ...message, ...clonedMetadata, content: result.text };
     }
 
     return {
       ...message,
+      ...clonedMetadata,
       content: message.content.map((part, partIndex) =>
         redactPart(part, options, `${contentPath}[${partIndex}]`, occurrences),
       ),
@@ -128,13 +133,15 @@ function redactPart(
 ): CanonicalPart {
   switch (part.type) {
     case 'text': {
+      const clonedPart = clonePreservedValue(part);
       const result = redactTextAtPath(part.text, options, `${path}.text`);
       occurrences.push(...result.summary.occurrences);
-      return { ...part, text: result.text };
+      return { ...clonedPart, text: result.text };
     }
-    case 'tool_call':
+    case 'tool_call': {
+      const clonedPart = clonePreservedValue(part);
       return {
-        ...part,
+        ...clonedPart,
         args: redactJsonValue(
           part.args,
           options,
@@ -142,9 +149,11 @@ function redactPart(
           occurrences,
         ) as JsonObject,
       };
-    case 'tool_result':
+    }
+    case 'tool_result': {
+      const clonedPart = clonePreservedValue(part);
       return {
-        ...part,
+        ...clonedPart,
         result: redactJsonValue(
           part.result,
           options,
@@ -152,8 +161,9 @@ function redactPart(
           occurrences,
         ),
       };
+    }
     default:
-      return { ...part };
+      return clonePreservedValue(part);
   }
 }
 
@@ -164,6 +174,9 @@ function redactJsonValue(
   occurrences: PIIRedactionOccurrence[],
 ): JsonValue {
   if (typeof value === 'string') {
+    if (isPreservedString(value)) {
+      return value;
+    }
     const result = redactTextAtPath(value, options, path);
     occurrences.push(...result.summary.occurrences);
     return result.text;
@@ -177,16 +190,95 @@ function redactJsonValue(
 
   if (typeof value === 'object' && value !== null) {
     return Object.fromEntries(
-      Object.entries(value).map(([key, entry], index) => [
-        key,
-        redactJsonValue(
-          entry,
-          options,
-          appendObjectPath(path, key, index),
-          occurrences,
-        ),
-      ]),
+      Object.entries(value).map(([key, entry], index) => {
+        if (isPreservedSubtreeKey(key)) {
+          return [key, clonePreservedValue(entry)];
+        }
+        if (
+          typeof entry === 'string' &&
+          (isUrlKey(key) || isCanonicalMediaData(value, key))
+        ) {
+          return [key, entry];
+        }
+        return [
+          key,
+          redactJsonValue(
+            entry,
+            options,
+            appendObjectPath(path, key, index),
+            occurrences,
+          ),
+        ];
+      }),
     );
+  }
+
+  return value;
+}
+
+function isPreservedSubtreeKey(key: string): boolean {
+  const normalized = key.replaceAll(/[^a-z0-9]/gi, '').toLowerCase();
+  return normalized.endsWith('metadata') || normalized.endsWith('annotations');
+}
+
+function isUrlKey(key: string): boolean {
+  return (
+    /^(?:href|src|uri|url)$/i.test(key) ||
+    /(?:Href|Src|URI|URL|Uri|Url)$/.test(key) ||
+    /(?:^|[_-])(?:href|src|uri|url)$/i.test(key)
+  );
+}
+
+function isCanonicalMediaData(parent: JsonObject, key: string): boolean {
+  if (key !== 'data') {
+    return false;
+  }
+
+  return (
+    parent.type === 'audio' ||
+    parent.type === 'document' ||
+    parent.type === 'image_base64'
+  );
+}
+
+function isPreservedString(value: string): boolean {
+  if (/^[A-Za-z][A-Za-z\d+.-]*:\/\//.test(value)) {
+    return true;
+  }
+  if (/^(?:blob:|data:)/i.test(value)) {
+    return true;
+  }
+
+  return isLikelyBase64(value);
+}
+
+function isLikelyBase64(value: string): boolean {
+  if (
+    value.length < 4 ||
+    value.length % 4 !== 0 ||
+    !/[A-Za-z]/.test(value) ||
+    !/^[A-Za-z\d+/]+={0,2}$/.test(value)
+  ) {
+    return false;
+  }
+
+  // A padded value such as the PII-010 `aGVsbG8=` fixture is a strong signal.
+  // For unpadded values, require enough data to avoid exempting ordinary IDs.
+  return value.endsWith('=') || value.length >= 32;
+}
+
+function clonePreservedValue<TValue>(value: TValue): TValue {
+  if (Array.isArray(value)) {
+    return value.map((item) => clonePreservedValue(item)) as TValue;
+  }
+
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        key,
+        clonePreservedValue(entry),
+      ]),
+    ) as TValue;
   }
 
   return value;

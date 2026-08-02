@@ -75,6 +75,90 @@ describe('Usage logging', () => {
     expect(write.mock.calls[0]?.[0]).not.toContain('sk-secret-value');
   });
 
+  it('redacts prompt and tool content while preserving safe console attribution', () => {
+    const write = vi.fn();
+    const logger = new ConsoleLogger({ enabled: true, write });
+
+    logger.log({
+      ...buildUsageEvent(),
+      metadata: {
+        authorization: 'Bearer private-token',
+        feature: 'billing',
+        prompt: 'full-prompt-canary',
+        promptTokens: 10,
+        toolPayload: { query: 'tool-canary' },
+      },
+      requestId: 'request-safe',
+      sessionId: 'session-safe',
+    });
+
+    const output = write.mock.calls[0]?.[0] ?? '';
+    expect(output).toContain('"feature":"billing"');
+    expect(output).toContain('"promptTokens":10');
+    expect(output).toContain('"requestId":"request-safe"');
+    expect(output).toContain('"sessionId":"session-safe"');
+    expect(output).not.toContain('full-prompt-canary');
+    expect(output).not.toContain('tool-canary');
+    expect(output).not.toContain('private-token');
+  });
+
+  it('passes the exact CST-015 and ERR-010 sanitizer fixtures', () => {
+    const write = vi.fn();
+    const logger = new ConsoleLogger({ enabled: true, write });
+    const fixtureBase = {
+      model: 'm',
+      provider: 'openai',
+      timestamp: new Date().toISOString(),
+      usage: {
+        cachedTokens: 0,
+        cost: '$0',
+        costUSD: 0,
+        inputTokens: 1,
+        outputTokens: 1,
+      },
+    };
+
+    logger.log({
+      ...fixtureBase,
+      metadata: { prompt: 'full prompt', secret: 'private-value' },
+    } as unknown as UsageEvent);
+    logger.log({
+      ...fixtureBase,
+      metadata: {
+        apiKey: 'private',
+        authorization: 'Bearer private',
+        prompt: 'secret prompt',
+        tool: { secret: 'tool secret' },
+      },
+    } as unknown as UsageEvent);
+
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(write.mock.calls.flat().join('')).not.toMatch(
+      /private-value|full prompt|private|secret prompt|tool secret/,
+    );
+  });
+
+  it('applies the same media sanitization to speech console logs', () => {
+    const write = vi.fn();
+    const logger = new ConsoleLogger({ enabled: true, write });
+    const event = {
+      ...buildSpeechUsageEvent(),
+      speechUsage: {
+        ...buildSpeechUsageEvent().speechUsage,
+        audio: new Uint8Array([1, 2, 3]),
+        transcript: 'speech-transcript-canary',
+      },
+    } as SpeechUsageEvent;
+
+    logger.logSpeech(event);
+
+    const output = write.mock.calls[0]?.[0] ?? '';
+    expect(output).toContain('"audio":"[REDACTED]"');
+    expect(output).toContain('"transcript":"[REDACTED]"');
+    expect(output).not.toContain('speech-transcript-canary');
+    expect(output).not.toContain('"0":1');
+  });
+
   it('batches Postgres usage writes and aggregates usage summaries', async () => {
     const pool = new MockPool();
     const logger = new PostgresUsageLogger({
@@ -149,6 +233,46 @@ describe('Usage logging', () => {
       totalOutputTokens: 12,
       totalReasoningTokens: 5,
     });
+  });
+
+  it('queues a sanitized metadata snapshot without mutating the caller event', async () => {
+    const pool = new MockPool();
+    const logger = new PostgresUsageLogger({
+      batchSize: 10,
+      flushIntervalMs: 0,
+      pool,
+    });
+    const event = buildUsageEvent({
+      metadata: {
+        feature: 'billing',
+        nested: { systemPrompt: 'queued-prompt-canary' },
+        toolArguments: { query: 'queued-tool-canary' },
+      },
+    });
+    const originalMetadata = event.metadata;
+
+    await logger.log(event);
+    const queued = (logger as unknown as { queue: UsageEvent[] }).queue[0];
+
+    expect(queued?.metadata).toEqual({
+      feature: 'billing',
+      nested: { systemPrompt: '[REDACTED]' },
+      toolArguments: '[REDACTED]',
+    });
+    expect(queued?.metadata).not.toBe(originalMetadata);
+    expect(event.metadata).toEqual({
+      feature: 'billing',
+      nested: { systemPrompt: 'queued-prompt-canary' },
+      toolArguments: { query: 'queued-tool-canary' },
+    });
+
+    (event.metadata?.nested as { systemPrompt: string }).systemPrompt =
+      'later-mutation';
+    await logger.flush();
+    const serializedValues = JSON.stringify(pool.queries.at(-1)?.values);
+    expect(serializedValues).not.toContain('queued-prompt-canary');
+    expect(serializedValues).not.toContain('queued-tool-canary');
+    expect(serializedValues).not.toContain('later-mutation');
   });
 
   it('batches Postgres speech usage writes and aggregates speech summaries', async () => {

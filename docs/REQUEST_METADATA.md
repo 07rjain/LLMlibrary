@@ -15,6 +15,12 @@ The values are copied to the corresponding `UsageEvent` sent to the configured
 usage logger. Metadata is application context; it is not sent to providers.
 `requestId` is also copied to v3 stream events.
 
+The built-in console and Postgres usage loggers remove credentials, prompts,
+messages, explicit tool data, raw request/response payloads, transcripts, and
+media payloads from this metadata while preserving benign attribution such as
+feature labels. A custom `UsageLogger` receives the original `UsageEvent` and
+must implement its own logging allowlist or sanitization policy.
+
 Metadata is validated and cloned before dispatch. It may contain only null,
 booleans, strings, finite numbers, arrays, and plain or null-prototype objects.
 Undefined values, BigInt, symbols, functions, non-finite numbers, cycles,
@@ -45,5 +51,6 @@ callbacks retain the deterministic `sessionId:toolRound` fallback.
 
 The Session API accepts both fields in `POST /sessions/{id}/message` requests
 and forwards them to the underlying conversation and usage logger. Metadata
-must contain JSON values only; secrets and credentials should never be placed
-in request metadata.
+must contain JSON values only. Secrets, credentials, prompts, tool payloads,
+transcripts, and media should never be placed in request metadata, even when a
+built-in logger is configured.

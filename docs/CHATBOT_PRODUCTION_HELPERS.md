@@ -130,10 +130,18 @@ await analytics.write({
 ```
 
 `redactPIIFromMessages()` clones messages and redacts plain text, text parts,
-tool-call arguments, and tool results. It intentionally does not inspect base64
-media, document payloads, URLs, arbitrary message metadata, or JSON object keys.
-Keep object keys schema-controlled; unusual keys are represented by numeric
-placeholders in redaction paths so metadata does not echo them.
+tool-call arguments, and tool results. `redactPIIInJson()` applies the same scan
+to ordinary nested JSON strings. Both helpers preserve object keys, metadata and
+annotation subtrees, absolute `scheme://` values, URL/URI/href/src fields,
+data/blob URLs, and structurally identified media or base64 values. Preserved
+metadata is deep-cloned. Relative URLs and `mailto:` values in ordinary fields
+are scanned; values in explicitly URL-like fields are preserved as supplied.
+
+This fidelity boundary means preserved URLs, metadata, annotations, and media
+can still contain PII. If those fields must also be scrubbed, preprocess them or
+pass their individual text through `redactPII()` before using the structured
+helpers. Keep object keys schema-controlled; unusual keys are represented by
+numeric placeholders in redaction paths so metadata does not echo them.
 
 Pattern redaction is best-effort. It can produce false positives and negatives,
 so use a dedicated DLP provider when regulation, contractual controls, or broad

@@ -793,6 +793,9 @@ function clearScheduledFlush(logger: PostgresUsageLogger): void {
 function cloneUsageEvent(event: UsageEvent): UsageEvent {
   return {
     ...event,
+    ...(event.metadata !== undefined
+      ? { metadata: sanitizeForLogging(event.metadata) }
+      : {}),
   };
 }
 

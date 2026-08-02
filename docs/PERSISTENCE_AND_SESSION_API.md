@@ -127,6 +127,10 @@ const client = LLMClient.fromEnv({
 ```
 
 This is helpful during development because it prints sanitized usage events.
+The built-in logger removes credentials, prompts, messages, explicit tool data,
+raw request/response bodies, transcripts, and media payloads while retaining
+safe usage attribution. Custom `UsageLogger` implementations receive raw events
+and must enforce their own logging policy.
 
 ### Postgres Usage Logger
 
@@ -157,7 +161,7 @@ console.log(usage.totalReasoningTokens ?? 0);
 console.log(csv);
 ```
 
-Use `PostgresUsageLogger` when you need dashboards, billing reports, or operational monitoring by tenant, model, or session.
+Use `PostgresUsageLogger` when you need dashboards, billing reports, or operational monitoring by tenant, model, or session. It applies the same sanitizer as `ConsoleLogger` and stores a sanitized metadata snapshot in its batch queue.
 
 ## Build An HTTP Session Layer
 

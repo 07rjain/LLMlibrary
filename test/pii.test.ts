@@ -111,9 +111,119 @@ describe('PII redaction', () => {
     expect(JSON.stringify(result.summary)).not.toContain('owner@example.com');
   });
 
+  it('preserves URLs, encoded media, metadata, and annotations in JSON', () => {
+    const metadata = {
+      owner: 'metadata-owner@example.com',
+      nested: { phone: '+1 415 555 2671' },
+    };
+    const annotations = { reviewer: 'reviewer@example.com' };
+    const input = {
+      annotations,
+      blob: 'blob:https://example.test/asset-id',
+      data: 'aGVsbG8=',
+      dataUrl: 'data:text/plain;base64,bWVAZXhhbXBsZS5jb20=',
+      metadata,
+      nested: ['me@example.com', { phone: '+1 415 555 2671' }],
+      url: 'https://example.com/me@example.com',
+    };
+
+    const result = redactPIIInJson(input);
+
+    expect(result.value).toEqual({
+      ...input,
+      nested: ['[REDACTED_EMAIL]', { phone: '[REDACTED_PHONE]' }],
+    });
+    const value = result.value as typeof input;
+    expect(value.metadata).not.toBe(metadata);
+    expect(value.metadata.nested).not.toBe(metadata.nested);
+    expect(value.annotations).not.toBe(annotations);
+    expect(result.summary.total).toBe(2);
+    expect(result.summary.occurrences.map(({ path }) => path)).toEqual([
+      '$.nested[0]',
+      '$.nested[1].phone',
+    ]);
+  });
+
+  it('preserves URL-like keys but scans relative and mailto values elsewhere', () => {
+    const result = redactPIIInJson({
+      callbackUrl: '/contact/user@example.com',
+      mailLink: 'mailto:user@example.com',
+      relative: '/contact/user@example.com',
+      src: 'user@example.com',
+      website: 'https://example.test/user@example.com',
+    });
+
+    expect(result.value).toEqual({
+      callbackUrl: '/contact/user@example.com',
+      mailLink: 'mailto:[REDACTED_EMAIL]',
+      relative: '/contact/[REDACTED_EMAIL]',
+      src: 'user@example.com',
+      website: 'https://example.test/user@example.com',
+    });
+    expect(result.summary.total).toBe(2);
+  });
+
+  it('preserves canonical media data but still scans ordinary generic data', () => {
+    const result = redactPIIInJson({
+      audio: {
+        data: 'audio-owner@example.com',
+        mediaType: 'audio/wav',
+        type: 'audio',
+      },
+      business: { data: 'Contact business-owner@example.com' },
+      document: {
+        data: 'document-owner@example.com',
+        mediaType: 'application/pdf',
+        title: 'Send to title-owner@example.com',
+        type: 'document',
+      },
+      image: {
+        data: 'image-owner@example.com',
+        mediaType: 'image/png',
+        type: 'image_base64',
+      },
+    });
+
+    expect(result.value).toEqual({
+      audio: {
+        data: 'audio-owner@example.com',
+        mediaType: 'audio/wav',
+        type: 'audio',
+      },
+      business: { data: 'Contact [REDACTED_EMAIL]' },
+      document: {
+        data: 'document-owner@example.com',
+        mediaType: 'application/pdf',
+        title: 'Send to [REDACTED_EMAIL]',
+        type: 'document',
+      },
+      image: {
+        data: 'image-owner@example.com',
+        mediaType: 'image/png',
+        type: 'image_base64',
+      },
+    });
+    expect(result.summary.total).toBe(2);
+  });
+
+  it('does not mistake an all-digit card value for base64', () => {
+    const result = redactPIIInJson({ data: '4242424242424242' });
+
+    expect(result.value).toEqual({ data: '[REDACTED_CREDIT_CARD]' });
+    expect(result.summary.byKind.credit_card).toBe(1);
+  });
+
   it('redacts message text and structured tool data but not media or URLs', () => {
+    const metadata = {
+      owner: 'metadata-owner@example.com',
+      settings: { reviewer: 'reviewer@example.com' },
+    };
     const messages: CanonicalMessage[] = [
-      { content: 'Contact me at user@example.com', role: 'user' },
+      {
+        content: 'Contact me at user@example.com',
+        metadata,
+        role: 'user',
+      },
       {
         content: [
           { text: 'Call +91 98765 43210', type: 'text' },
@@ -169,6 +279,9 @@ describe('PII redaction', () => {
       },
     ]);
     expect(messages[0]?.content).toBe('Contact me at user@example.com');
+    expect(result.messages[0]?.metadata).toEqual(metadata);
+    expect(result.messages[0]?.metadata).not.toBe(metadata);
+    expect(result.messages[0]?.metadata?.settings).not.toBe(metadata.settings);
     expect(result.summary.total).toBe(4);
   });
 
