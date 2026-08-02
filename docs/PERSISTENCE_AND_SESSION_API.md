@@ -163,6 +163,35 @@ console.log(csv);
 
 Use `PostgresUsageLogger` when you need dashboards, billing reports, or operational monitoring by tenant, model, or session. It applies the same sanitizer as `ConsoleLogger` and stores a sanitized metadata snapshot in its batch queue.
 
+Every queued text or speech usage event has a stable event identity. Postgres
+stores it behind a unique index and uses conflict-safe inserts, so retrying a
+batch after an ambiguous commit does not duplicate aggregates. Explicit
+`flush()`, `getUsage()`, `getSpeechUsage()`, and `close()` calls propagate
+pending persistence failures. Timer-triggered flushes remain best-effort,
+invoke the logger's `onError` callback, and suppress rejected timer promises.
+
+Client request logging remains best-effort by default. Applications that need
+the request itself to reject when logging fails can opt into strict mode:
+
+```ts
+const client = LLMClient.fromEnv({
+  defaultModel: 'gpt-4o',
+  usageLogger,
+  usageLoggerFailureMode: 'strict',
+  onUsageLoggerError(error) {
+    metrics.increment('usage_logger_failure', {
+      operation: String(error.details?.operation),
+    });
+  },
+});
+```
+
+Strict failures use the sanitized, non-retryable `UsageLoggerError`. They do
+not trigger provider fallback or repeat a completed provider call. Conversation
+token and cost totals incorporate the completed usage exactly once without
+adding fabricated assistant content. The observer is diagnostic only: an
+observer exception is suppressed and never replaces the request outcome.
+
 ## Build An HTTP Session Layer
 
 The library exports `createSessionApi()` so you can expose session operations over HTTP without rewriting the conversation logic yourself.

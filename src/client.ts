@@ -5,6 +5,7 @@ import {
   MockQueueExhaustedError,
   ProviderCapabilityError,
   RateLimitError,
+  UsageLoggerError,
 } from 'unified-llm-client/errors';
 import { ModelRegistry } from 'unified-llm-client/models';
 import { PostgresSessionStore } from 'unified-llm-client/session-store';
@@ -39,7 +40,11 @@ import {
   mediaTypeForSpeechFormat,
 } from './utils/audio-duration.js';
 import { estimateTokens } from './utils/token-estimator.js';
-import { exportSpeechUsageSummary, exportUsageSummary } from './usage.js';
+import {
+  createUsageEventId,
+  exportSpeechUsageSummary,
+  exportUsageSummary,
+} from './usage.js';
 
 import type {
   ModelRegistryOptions,
@@ -98,6 +103,7 @@ import type {
   SpeechUsageQuery,
   SpeechUsageSummary,
 } from './usage.js';
+import type { UsageLoggerReceipt } from 'unified-llm-client/errors';
 import type { RetryOptions } from './utils/retry.js';
 
 /** Constructor options for `LLMClient`. */
@@ -113,6 +119,7 @@ export interface LLMClientOptions {
   modelRegistry?: ModelRegistry;
   modelRegistryOptions?: ModelRegistryOptions;
   modelRouter?: ModelRouter;
+  onUsageLoggerError?: (error: UsageLoggerError) => void;
   onWarning?: (message: string) => void;
   openaiApiKey?: string;
   openaiOrganization?: string;
@@ -120,6 +127,7 @@ export interface LLMClientOptions {
   retryOptions?: RetryOptions;
   sessionStore?: SessionStore<ConversationSnapshot>;
   usageLogger?: UsageLogger;
+  usageLoggerFailureMode?: 'best-effort' | 'strict';
 }
 
 /** Canonical request options shared by `complete()` and `stream()`. */
@@ -251,9 +259,13 @@ export class LLMClient {
   private readonly modelRegistry: ModelRegistry;
   private readonly modelRouter: ModelRouter | undefined;
   private readonly onWarning: (message: string) => void;
+  private readonly onUsageLoggerError:
+    | ((error: UsageLoggerError) => void)
+    | undefined;
   private readonly openaiAdapter: OpenAIAdapter | null;
   private readonly sessionStore: SessionStore<ConversationSnapshot> | undefined;
   private readonly usageLogger: UsageLogger | undefined;
+  private readonly usageLoggerFailureMode: 'best-effort' | 'strict';
 
   readonly models: {
     get: ModelRegistry['get'];
@@ -286,9 +298,23 @@ export class LLMClient {
     this.defaultProvider = options.defaultProvider;
     this.modelRouter = options.modelRouter;
     this.onWarning = options.onWarning ?? ((message) => console.warn(message));
+    this.onUsageLoggerError = options.onUsageLoggerError;
     this.sessionStore =
       options.sessionStore ?? resolveDefaultSessionStore(options.sessionStore);
     this.usageLogger = options.usageLogger;
+    if (
+      options.usageLoggerFailureMode !== undefined &&
+      options.usageLoggerFailureMode !== 'best-effort' &&
+      options.usageLoggerFailureMode !== 'strict'
+    ) {
+      throw new ProviderCapabilityError('Invalid usage logger failure mode.', {
+        details: { code: 'invalid_usage_logger_failure_mode' },
+        retryable: false,
+        statusCode: 400,
+      });
+    }
+    this.usageLoggerFailureMode =
+      options.usageLoggerFailureMode ?? 'best-effort';
 
     const anthropicApiKey =
       options.anthropicApiKey ?? getEnvironmentVariable('ANTHROPIC_API_KEY');
@@ -1450,7 +1476,16 @@ export class LLMClient {
     try {
       await this.usageLogger.log(event);
     } catch {
-      return;
+      this.handleUsageLoggerFailure({
+        eventId: event.eventId ?? createUsageEventId(),
+        model: event.model,
+        operation: 'log',
+        provider: event.provider,
+        ...(event.requestId !== undefined
+          ? { requestId: event.requestId }
+          : {}),
+        usage: toUsageMetrics(event),
+      });
     }
   }
 
@@ -1471,9 +1506,11 @@ export class LLMClient {
       return;
     }
 
+    const eventId = createUsageEventId();
     try {
       await logSpeech.call(this.usageLogger, {
         durationMs: input.durationMs,
+        eventId,
         kind: input.kind,
         model: input.model,
         provider: input.provider,
@@ -1490,7 +1527,24 @@ export class LLMClient {
           : {}),
       });
     } catch {
-      return;
+      this.handleUsageLoggerFailure({
+        eventId,
+        model: input.model,
+        operation: 'logSpeech',
+        provider: input.provider,
+      });
+    }
+  }
+
+  private handleUsageLoggerFailure(receipt: UsageLoggerReceipt): void {
+    const error = new UsageLoggerError(receipt);
+    try {
+      this.onUsageLoggerError?.(error);
+    } catch {
+      // Observers are diagnostic only and cannot alter request outcomes.
+    }
+    if (this.usageLoggerFailureMode === 'strict') {
+      throw error;
     }
   }
 
@@ -1750,7 +1804,18 @@ class MockLLMClient extends LLMClient {
     }
 
     const response = typeof next === 'function' ? await next(resolved) : next;
-    return parseStructuredOutput(response, resolved.responseFormat);
+    const parsed = parseStructuredOutput(response, resolved.responseFormat);
+    await this.logUsageEvent(
+      buildUsageEvent({
+        durationMs: Date.now() - startedAt,
+        finishReason: parsed.finishReason,
+        model: parsed.model,
+        options: validated,
+        provider: parsed.provider,
+        usage: parsed.usage,
+      }),
+    );
+    return parsed;
   }
 
   override async speak(options: SpeechRequestOptions): Promise<SpeechResponse> {
@@ -1906,6 +1971,16 @@ class MockLLMClient extends LLMClient {
         if (isAsyncIterable(stream)) {
           for await (const chunk of stream) {
             if (chunk.type === 'done') {
+              await this.logUsageEvent(
+                buildUsageEvent({
+                  durationMs: Date.now() - startedAt,
+                  finishReason: chunk.finishReason,
+                  model: resolved.model,
+                  options: requestOptions,
+                  provider: resolved.provider,
+                  usage: chunk.usage,
+                }),
+              );
               yield decorate({ type: 'usage-update', usage: chunk.usage });
             }
             yield decorate(chunk);
@@ -1915,6 +1990,16 @@ class MockLLMClient extends LLMClient {
 
         for (const chunk of stream) {
           if (chunk.type === 'done') {
+            await this.logUsageEvent(
+              buildUsageEvent({
+                durationMs: Date.now() - startedAt,
+                finishReason: chunk.finishReason,
+                model: resolved.model,
+                options: requestOptions,
+                provider: resolved.provider,
+                usage: chunk.usage,
+              }),
+            );
             yield decorate({ type: 'usage-update', usage: chunk.usage });
           }
           yield decorate(chunk);
@@ -2231,6 +2316,7 @@ function buildUsageEvent(input: {
   return {
     ...input.usage,
     durationMs: input.durationMs,
+    eventId: createUsageEventId(),
     finishReason: input.finishReason,
     model: input.model,
     provider: input.provider,
@@ -2252,6 +2338,25 @@ function buildUsageEvent(input: {
       : {}),
     ...(input.options.tenantId !== undefined
       ? { tenantId: input.options.tenantId }
+      : {}),
+  };
+}
+
+function toUsageMetrics(event: UsageEvent): UsageMetrics {
+  return {
+    ...(event.cachedReadTokens !== undefined
+      ? { cachedReadTokens: event.cachedReadTokens }
+      : {}),
+    cachedTokens: event.cachedTokens,
+    ...(event.cachedWriteTokens !== undefined
+      ? { cachedWriteTokens: event.cachedWriteTokens }
+      : {}),
+    cost: event.cost,
+    costUSD: event.costUSD,
+    inputTokens: event.inputTokens,
+    outputTokens: event.outputTokens,
+    ...(event.reasoningTokens !== undefined
+      ? { reasoningTokens: event.reasoningTokens }
       : {}),
   };
 }

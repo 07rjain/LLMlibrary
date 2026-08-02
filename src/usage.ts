@@ -59,34 +59,39 @@ export interface SpeechUsageQuery {
 }
 
 export interface SpeechUsageBreakdown {
+  costComplete?: boolean;
   kind: 'speech' | 'transcription';
   model: string;
   provider: SpeechProvider;
   requestCount: number;
   totalAudioInputSeconds: number;
   totalAudioOutputSeconds: number;
-  totalCostUSD: number;
+  totalCostUSD?: number;
   totalInputCharacters: number;
   totalInputTokens: number;
   totalOutputCharacters: number;
   totalOutputTokens: number;
+  unknownCostCount?: number;
 }
 
 export interface SpeechUsageSummary {
   breakdown: SpeechUsageBreakdown[];
+  costComplete?: boolean;
   requestCount: number;
   totalAudioInputSeconds: number;
   totalAudioOutputSeconds: number;
-  totalCostUSD: number;
+  totalCostUSD?: number;
   totalInputCharacters: number;
   totalInputTokens: number;
   totalOutputCharacters: number;
   totalOutputTokens: number;
+  unknownCostCount?: number;
 }
 
 export interface SpeechUsageEvent {
   botId?: string;
   durationMs: number;
+  eventId?: string;
   kind: 'speech' | 'transcription';
   model: string;
   provider: SpeechProvider;
@@ -143,11 +148,12 @@ interface PostgresSpeechUsageSummaryRow {
   request_count: number | string;
   total_audio_input_seconds: number | string;
   total_audio_output_seconds: number | string;
-  total_cost_usd: number | string;
+  total_cost_usd: null | number | string;
   total_input_characters: number | string;
   total_input_tokens: number | string;
   total_output_characters: number | string;
   total_output_tokens: number | string;
+  unknown_cost_count: number | string;
 }
 
 export class ConsoleLogger implements UsageLogger {
@@ -229,15 +235,22 @@ export class PostgresUsageLogger implements UsageLogger {
 
   async close(): Promise<void> {
     clearScheduledFlush(this);
-    await this.flush().catch(() => undefined);
-
-    if (!this.internalPool?.end) {
-      return;
+    let flushError: unknown;
+    try {
+      await this.flush();
+    } catch (error) {
+      flushError = error;
     }
 
-    await this.internalPool.end();
-    this.internalPool = undefined;
-    this.ensureSchemaPromise = null;
+    if (this.internalPool?.end) {
+      await this.internalPool.end();
+      this.internalPool = undefined;
+      this.ensureSchemaPromise = null;
+    }
+
+    if (flushError !== undefined) {
+      throw flushError;
+    }
   }
 
   async ensureSchema(): Promise<void> {
@@ -248,10 +261,13 @@ export class PostgresUsageLogger implements UsageLogger {
 
     this.ensureSchemaPromise = (async () => {
       const pool = await this.getPool();
-      await pool.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(this.schemaName)}`);
+      await pool.query(
+        `CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(this.schemaName)}`,
+      );
       await pool.query(
         `CREATE TABLE IF NOT EXISTS ${this.qualifiedTableName()} (
           id BIGSERIAL PRIMARY KEY,
+          event_id TEXT,
           timestamp TIMESTAMPTZ NOT NULL,
           provider TEXT NOT NULL,
           model TEXT NOT NULL,
@@ -271,6 +287,10 @@ export class PostgresUsageLogger implements UsageLogger {
           request_id TEXT,
           metadata JSONB
         )`,
+      );
+      await pool.query(
+        `ALTER TABLE ${this.qualifiedTableName()}
+         ADD COLUMN IF NOT EXISTS event_id TEXT`,
       );
       await pool.query(
         `ALTER TABLE ${this.qualifiedTableName()}
@@ -300,8 +320,14 @@ export class PostgresUsageLogger implements UsageLogger {
         )} ON ${this.qualifiedTableName()} (provider, model, timestamp DESC)`,
       );
       await pool.query(
+        `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdentifier(
+          `${this.tableName}_event_id_uidx`,
+        )} ON ${this.qualifiedTableName()} (event_id)`,
+      );
+      await pool.query(
         `CREATE TABLE IF NOT EXISTS ${this.speechQualifiedTableName()} (
           id BIGSERIAL PRIMARY KEY,
+          event_id TEXT,
           timestamp TIMESTAMPTZ NOT NULL,
           provider TEXT NOT NULL,
           model TEXT NOT NULL,
@@ -314,7 +340,7 @@ export class PostgresUsageLogger implements UsageLogger {
           output_audio_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
           input_characters INTEGER NOT NULL DEFAULT 0,
           output_characters INTEGER NOT NULL DEFAULT 0,
-          cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+          cost_usd DOUBLE PRECISION,
           estimated BOOLEAN NOT NULL DEFAULT FALSE,
           cost_breakdown_json JSONB NOT NULL DEFAULT '[]'::jsonb,
           duration_ms INTEGER NOT NULL,
@@ -322,6 +348,18 @@ export class PostgresUsageLogger implements UsageLogger {
           session_id TEXT,
           bot_id TEXT
         )`,
+      );
+      await pool.query(
+        `ALTER TABLE ${this.speechQualifiedTableName()}
+         ADD COLUMN IF NOT EXISTS event_id TEXT`,
+      );
+      await pool.query(
+        `ALTER TABLE ${this.speechQualifiedTableName()}
+         ALTER COLUMN cost_usd DROP NOT NULL`,
+      );
+      await pool.query(
+        `ALTER TABLE ${this.speechQualifiedTableName()}
+         ALTER COLUMN cost_usd DROP DEFAULT`,
       );
       await pool.query(
         `CREATE INDEX IF NOT EXISTS ${quoteIdentifier(
@@ -332,6 +370,11 @@ export class PostgresUsageLogger implements UsageLogger {
         `CREATE INDEX IF NOT EXISTS ${quoteIdentifier(
           `${this.tableName}_speech_provider_model_timestamp_idx`,
         )} ON ${this.speechQualifiedTableName()} (provider, model, timestamp DESC)`,
+      );
+      await pool.query(
+        `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdentifier(
+          `${this.tableName}_speech_event_id_uidx`,
+        )} ON ${this.speechQualifiedTableName()} (event_id)`,
       );
     })();
 
@@ -345,7 +388,11 @@ export class PostgresUsageLogger implements UsageLogger {
 
   async flush(): Promise<void> {
     if (this.flushPromise) {
-      return this.flushPromise;
+      await this.flushPromise;
+      if (this.queue.length > 0 || this.speechQueue.length > 0) {
+        await this.flush();
+      }
+      return;
     }
 
     if (this.queue.length === 0 && this.speechQueue.length === 0) {
@@ -357,9 +404,16 @@ export class PostgresUsageLogger implements UsageLogger {
     const speechBatch = this.speechQueue.splice(0, this.speechQueue.length);
 
     this.flushPromise = (async () => {
+      let textBatchCompleted = false;
       try {
         await this.flushBatch(batch);
+        textBatchCompleted = true;
         await this.flushSpeechBatch(speechBatch);
+      } catch (error) {
+        if (!textBatchCompleted && speechBatch.length > 0) {
+          this.speechQueue = [...speechBatch, ...this.speechQueue];
+        }
+        throw error;
       } finally {
         this.flushPromise = null;
         if (this.speechQueue.length > 0 || this.queue.length > 0) {
@@ -372,11 +426,12 @@ export class PostgresUsageLogger implements UsageLogger {
   }
 
   async getUsage(query: UsageQuery = {}): Promise<UsageSummary> {
-    await this.flush().catch(() => undefined);
+    await this.flush();
     await this.ensureSchema();
 
     const { conditions, values } = buildUsageFilters(query);
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const whereClause =
+      conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const pool = await this.getPool();
     const result = await pool.query<PostgresUsageSummaryRow>(
       `SELECT
@@ -414,7 +469,8 @@ export class PostgresUsageLogger implements UsageLogger {
         summary.totalCostUSD += row.totalCostUSD;
         summary.totalInputTokens += row.totalInputTokens;
         summary.totalOutputTokens += row.totalOutputTokens;
-        summary.totalReasoningTokens = (summary.totalReasoningTokens ?? 0) + (row.totalReasoningTokens ?? 0);
+        summary.totalReasoningTokens =
+          (summary.totalReasoningTokens ?? 0) + (row.totalReasoningTokens ?? 0);
         return summary;
       },
       {
@@ -432,11 +488,12 @@ export class PostgresUsageLogger implements UsageLogger {
   async getSpeechUsage(
     query: SpeechUsageQuery = {},
   ): Promise<SpeechUsageSummary> {
-    await this.flush().catch(() => undefined);
+    await this.flush();
     await this.ensureSchema();
 
     const { conditions, values } = buildSpeechUsageFilters(query);
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const whereClause =
+      conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const pool = await this.getPool();
     const result = await pool.query<PostgresSpeechUsageSummaryRow>(
       `SELECT
@@ -450,7 +507,8 @@ export class PostgresUsageLogger implements UsageLogger {
          COALESCE(SUM(output_audio_seconds), 0) AS total_audio_output_seconds,
          COALESCE(SUM(input_characters), 0) AS total_input_characters,
          COALESCE(SUM(output_characters), 0) AS total_output_characters,
-         COALESCE(SUM(cost_usd), 0) AS total_cost_usd
+         SUM(cost_usd) AS total_cost_usd,
+         COUNT(*) FILTER (WHERE cost_usd IS NULL) AS unknown_cost_count
        FROM ${this.speechQualifiedTableName()}
        ${whereClause}
        GROUP BY provider, model, kind
@@ -458,19 +516,26 @@ export class PostgresUsageLogger implements UsageLogger {
       values,
     );
 
-    const breakdown = result.rows.map((row) => ({
-      kind: row.kind,
-      model: row.model,
-      provider: row.provider,
-      requestCount: Number(row.request_count),
-      totalAudioInputSeconds: Number(row.total_audio_input_seconds),
-      totalAudioOutputSeconds: Number(row.total_audio_output_seconds),
-      totalCostUSD: Number(row.total_cost_usd),
-      totalInputCharacters: Number(row.total_input_characters),
-      totalInputTokens: Number(row.total_input_tokens),
-      totalOutputCharacters: Number(row.total_output_characters),
-      totalOutputTokens: Number(row.total_output_tokens),
-    }));
+    const breakdown = result.rows.map((row) => {
+      const unknownCostCount = Number(row.unknown_cost_count ?? 0);
+      return {
+        costComplete: unknownCostCount === 0,
+        kind: row.kind,
+        model: row.model,
+        provider: row.provider,
+        requestCount: Number(row.request_count),
+        totalAudioInputSeconds: Number(row.total_audio_input_seconds),
+        totalAudioOutputSeconds: Number(row.total_audio_output_seconds),
+        ...(unknownCostCount === 0
+          ? { totalCostUSD: Number(row.total_cost_usd ?? 0) }
+          : {}),
+        totalInputCharacters: Number(row.total_input_characters),
+        totalInputTokens: Number(row.total_input_tokens),
+        totalOutputCharacters: Number(row.total_output_characters),
+        totalOutputTokens: Number(row.total_output_tokens),
+        unknownCostCount,
+      };
+    });
 
     return breakdown.reduce<SpeechUsageSummary>(
       (summary, row) => {
@@ -478,7 +543,14 @@ export class PostgresUsageLogger implements UsageLogger {
         summary.requestCount += row.requestCount;
         summary.totalAudioInputSeconds += row.totalAudioInputSeconds;
         summary.totalAudioOutputSeconds += row.totalAudioOutputSeconds;
-        summary.totalCostUSD += row.totalCostUSD;
+        summary.unknownCostCount =
+          (summary.unknownCostCount ?? 0) + (row.unknownCostCount ?? 0);
+        summary.costComplete = summary.unknownCostCount === 0;
+        if (summary.costComplete && row.totalCostUSD !== undefined) {
+          summary.totalCostUSD = (summary.totalCostUSD ?? 0) + row.totalCostUSD;
+        } else {
+          delete summary.totalCostUSD;
+        }
         summary.totalInputCharacters += row.totalInputCharacters;
         summary.totalInputTokens += row.totalInputTokens;
         summary.totalOutputCharacters += row.totalOutputCharacters;
@@ -487,6 +559,7 @@ export class PostgresUsageLogger implements UsageLogger {
       },
       {
         breakdown: [],
+        costComplete: true,
         requestCount: 0,
         totalAudioInputSeconds: 0,
         totalAudioOutputSeconds: 0,
@@ -495,12 +568,13 @@ export class PostgresUsageLogger implements UsageLogger {
         totalInputTokens: 0,
         totalOutputCharacters: 0,
         totalOutputTokens: 0,
+        unknownCostCount: 0,
       },
     );
   }
 
   async log(event: UsageEvent): Promise<void> {
-    this.queue.push(cloneUsageEvent(event));
+    this.queue.push(cloneUsageEvent(withUsageEventId(event)));
 
     if (this.queue.length >= this.batchSize) {
       return this.flush();
@@ -510,7 +584,7 @@ export class PostgresUsageLogger implements UsageLogger {
   }
 
   async logSpeech(event: SpeechUsageEvent): Promise<void> {
-    this.speechQueue.push(cloneSpeechUsageEvent(event));
+    this.speechQueue.push(cloneSpeechUsageEvent(withUsageEventId(event)));
 
     if (this.speechQueue.length >= this.batchSize) {
       return this.flush();
@@ -527,6 +601,7 @@ export class PostgresUsageLogger implements UsageLogger {
     try {
       await this.ensureSchema();
       const columns = [
+        'event_id',
         'timestamp',
         'provider',
         'model',
@@ -550,6 +625,7 @@ export class PostgresUsageLogger implements UsageLogger {
       const placeholders = batch.map((event, index) => {
         const offset = index * columns.length;
         values.push(
+          event.eventId,
           event.timestamp,
           event.provider,
           event.model,
@@ -567,7 +643,9 @@ export class PostgresUsageLogger implements UsageLogger {
           event.botId ?? null,
           event.routingDecision ?? null,
           event.requestId ?? null,
-          event.metadata !== undefined ? sanitizeForLogging(event.metadata) : null,
+          event.metadata !== undefined
+            ? sanitizeForLogging(event.metadata)
+            : null,
         );
         return `(${columns.map((_, columnIndex) => `$${offset + columnIndex + 1}`).join(', ')})`;
       });
@@ -575,7 +653,8 @@ export class PostgresUsageLogger implements UsageLogger {
       const pool = await this.getPool();
       await pool.query(
         `INSERT INTO ${this.qualifiedTableName()} (${columns.join(', ')})
-         VALUES ${placeholders.join(', ')}`,
+         VALUES ${placeholders.join(', ')}
+         ON CONFLICT (event_id) DO NOTHING`,
         values,
       );
     } catch (error) {
@@ -593,6 +672,7 @@ export class PostgresUsageLogger implements UsageLogger {
     try {
       await this.ensureSchema();
       const columns = [
+        'event_id',
         'timestamp',
         'provider',
         'model',
@@ -618,6 +698,7 @@ export class PostgresUsageLogger implements UsageLogger {
         const offset = index * columns.length;
         const usage = event.speechUsage;
         values.push(
+          event.eventId,
           event.timestamp,
           event.provider,
           event.model,
@@ -627,10 +708,12 @@ export class PostgresUsageLogger implements UsageLogger {
           usage.audioInputTokens ?? usage.billingUnits?.audioInputTokens ?? 0,
           usage.audioOutputTokens ?? usage.billingUnits?.audioOutputTokens ?? 0,
           usage.inputAudioSeconds ?? usage.billingUnits?.inputAudioSeconds ?? 0,
-          usage.outputAudioSeconds ?? usage.billingUnits?.outputAudioSeconds ?? 0,
+          usage.outputAudioSeconds ??
+            usage.billingUnits?.outputAudioSeconds ??
+            0,
           usage.inputCharacters ?? usage.billingUnits?.inputCharacters ?? 0,
           usage.outputCharacters ?? usage.billingUnits?.outputCharacters ?? 0,
-          usage.costUSD ?? 0,
+          usage.costUSD ?? null,
           usage.estimated ?? false,
           JSON.stringify(usage.costBreakdown ?? []),
           event.durationMs,
@@ -644,7 +727,8 @@ export class PostgresUsageLogger implements UsageLogger {
       const pool = await this.getPool();
       await pool.query(
         `INSERT INTO ${this.speechQualifiedTableName()} (${columns.join(', ')})
-         VALUES ${placeholders.join(', ')}`,
+         VALUES ${placeholders.join(', ')}
+         ON CONFLICT (event_id) DO NOTHING`,
         values,
       );
     } catch (error) {
@@ -663,7 +747,8 @@ export class PostgresUsageLogger implements UsageLogger {
       return this.internalPool;
     }
 
-    const connectionString = this.connectionString ?? getEnvironmentVariable('DATABASE_URL');
+    const connectionString =
+      this.connectionString ?? getEnvironmentVariable('DATABASE_URL');
     if (!connectionString) {
       throw new Error('DATABASE_URL is required for PostgresUsageLogger.');
     }
@@ -808,9 +893,33 @@ function cloneSpeechUsageEvent(event: SpeechUsageEvent): SpeechUsageEvent {
         ? { billingUnits: { ...event.speechUsage.billingUnits } }
         : {}),
       ...(event.speechUsage.costBreakdown
-        ? { costBreakdown: event.speechUsage.costBreakdown.map((line) => ({ ...line })) }
+        ? {
+            costBreakdown: event.speechUsage.costBreakdown.map((line) => ({
+              ...line,
+            })),
+          }
         : {}),
     },
+  };
+}
+
+/** Creates an edge-safe stable identity for one usage event. */
+export function createUsageEventId(): string {
+  if (
+    typeof crypto !== 'undefined' &&
+    typeof crypto.randomUUID === 'function'
+  ) {
+    return crypto.randomUUID();
+  }
+  return `usage_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
+function withUsageEventId<T extends UsageEvent | SpeechUsageEvent>(
+  event: T,
+): T {
+  return {
+    ...event,
+    eventId: event.eventId ?? createUsageEventId(),
   };
 }
 
@@ -915,7 +1024,7 @@ export function exportSpeechUsageSummary(
         row.totalOutputCharacters,
         row.totalAudioInputSeconds,
         row.totalAudioOutputSeconds,
-        row.totalCostUSD.toFixed(6),
+        row.totalCostUSD?.toFixed(6) ?? '',
       ]
         .map((value) => escapeCsvField(String(value)))
         .join(','),

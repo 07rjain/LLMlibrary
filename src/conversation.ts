@@ -3,6 +3,7 @@ import {
   LLMError,
   MaxToolRoundsError,
   ProviderError,
+  UsageLoggerError,
 } from 'unified-llm-client/errors';
 import { validateBudgetUsd } from './budget-validation.js';
 import { validateAndCloneConversationSnapshot } from './conversation-snapshot-validation.js';
@@ -280,6 +281,7 @@ export class Conversation {
   private totalInputTokens = 0;
   private totalOutputTokens = 0;
   private totalReasoningTokens = 0;
+  private readonly appliedUsageFailureEventIds = new Set<string>();
   private activeToolExecutions = 0;
   private turnActive = false;
   private readonly turnWaiters: TurnWaiter[] = [];
@@ -400,6 +402,11 @@ export class Conversation {
       throwIfAborted(options.signal);
       await this.finalizeExecution(result);
       return result.response;
+    } catch (error) {
+      if (error instanceof UsageLoggerError) {
+        await this.applyUsageLoggerFailure(error);
+      }
+      throw error;
     } finally {
       release();
     }
@@ -451,6 +458,11 @@ export class Conversation {
           );
           throwIfAborted(signal);
           await this.finalizeExecution(result);
+        } catch (error) {
+          if (error instanceof UsageLoggerError) {
+            await this.applyUsageLoggerFailure(error);
+          }
+          throw error;
         } finally {
           release();
         }
@@ -822,21 +834,31 @@ export class Conversation {
         };
       }
 
-      const response = await this.client.complete(
-        this.buildRequestOptions(
-          workingMessages,
-          signal,
-          toolRounds,
-          remainingBudget.budgetUsd,
-          requestId,
-          metadata,
-          model,
-          provider,
-          route,
-          turnPolicy.budgetExceededAction,
-          turnPolicy.maxTokens,
-        ),
-      );
+      let response: CanonicalResponse;
+      try {
+        response = await this.client.complete(
+          this.buildRequestOptions(
+            workingMessages,
+            signal,
+            toolRounds,
+            remainingBudget.budgetUsd,
+            requestId,
+            metadata,
+            model,
+            provider,
+            route,
+            turnPolicy.budgetExceededAction,
+            turnPolicy.maxTokens,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof UsageLoggerError && error.receipt.usage) {
+          throw error.withUsage(
+            accumulateUsage(aggregateUsage, error.receipt.usage),
+          );
+        }
+        throw error;
+      }
       model = response.model;
       provider = response.provider;
       contextWindow =
@@ -986,120 +1008,129 @@ export class Conversation {
       let usage: UsageMetrics | undefined;
       let budgetSkipped = false;
 
-      for await (const streamChunk of this.client.stream(requestOptions)) {
-        const chunk = streamChunk as ConversationInputStreamChunk;
-        if (chunk.type === 'response-start') {
-          model = chunk.model;
-          provider = chunk.provider;
-          contextWindow =
-            this.resolveConversationRoute(
-              workingMessages,
+      try {
+        for await (const streamChunk of this.client.stream(requestOptions)) {
+          const chunk = streamChunk as ConversationInputStreamChunk;
+          if (chunk.type === 'response-start') {
+            model = chunk.model;
+            provider = chunk.provider;
+            contextWindow =
+              this.resolveConversationRoute(
+                workingMessages,
+                model,
+                provider,
+                remainingBudget.budgetUsd,
+                turnPolicy.maxTokens,
+              )?.contextWindow ?? contextWindow;
+            route = {
+              ...(contextWindow !== undefined ? { contextWindow } : {}),
               model,
               provider,
-              remainingBudget.budgetUsd,
-              turnPolicy.maxTokens,
-            )?.contextWindow ?? contextWindow;
-          route = {
-            ...(contextWindow !== undefined ? { contextWindow } : {}),
-            model,
-            provider,
-          };
-          yield decorate(chunk);
-          continue;
-        }
-
-        if (chunk.type === 'text-delta') {
-          text += chunk.delta;
-          yield decorate(chunk);
-          continue;
-        }
-
-        if (chunk.type === 'tool-call-start') {
-          if (pendingToolCalls.has(chunk.id)) {
-            throw invalidToolStreamState(
-              model,
-              provider,
-              'duplicate_tool_call_start',
-            );
-          }
-          pendingToolCalls.set(chunk.id, { name: chunk.name });
-          yield decorate(chunk);
-          continue;
-        }
-
-        if (
-          chunk.type === 'tool-call-arguments' ||
-          (chunk.type === 'tool-call-result' && chunk.version === 2)
-        ) {
-          const current = pendingToolCalls.get(chunk.id);
-          if (!current) {
-            throw invalidToolStreamState(
-              model,
-              provider,
-              'orphan_tool_call_arguments',
-            );
-          }
-          if (current.name !== chunk.name || current.args !== undefined) {
-            throw invalidToolStreamState(
-              model,
-              provider,
-              'mismatched_or_duplicate_tool_call_arguments',
-            );
-          }
-          const args =
-            chunk.type === 'tool-call-arguments'
-              ? chunk.args
-              : isPlainJsonObject(chunk.result)
-                ? chunk.result
-                : undefined;
-          if (!args) {
-            throw invalidToolStreamState(
-              model,
-              provider,
-              'non_object_tool_call_arguments',
-            );
-          }
-          current.args = args;
-          if (chunk.type === 'tool-call-arguments') {
+            };
             yield decorate(chunk);
+            continue;
           }
-          continue;
-        }
 
-        if (chunk.type === 'tool-call-delta') {
-          const current = pendingToolCalls.get(chunk.id);
-          if (!current || current.args !== undefined) {
+          if (chunk.type === 'text-delta') {
+            text += chunk.delta;
+            yield decorate(chunk);
+            continue;
+          }
+
+          if (chunk.type === 'tool-call-start') {
+            if (pendingToolCalls.has(chunk.id)) {
+              throw invalidToolStreamState(
+                model,
+                provider,
+                'duplicate_tool_call_start',
+              );
+            }
+            pendingToolCalls.set(chunk.id, { name: chunk.name });
+            yield decorate(chunk);
+            continue;
+          }
+
+          if (
+            chunk.type === 'tool-call-arguments' ||
+            (chunk.type === 'tool-call-result' && chunk.version === 2)
+          ) {
+            const current = pendingToolCalls.get(chunk.id);
+            if (!current) {
+              throw invalidToolStreamState(
+                model,
+                provider,
+                'orphan_tool_call_arguments',
+              );
+            }
+            if (current.name !== chunk.name || current.args !== undefined) {
+              throw invalidToolStreamState(
+                model,
+                provider,
+                'mismatched_or_duplicate_tool_call_arguments',
+              );
+            }
+            const args =
+              chunk.type === 'tool-call-arguments'
+                ? chunk.args
+                : isPlainJsonObject(chunk.result)
+                  ? chunk.result
+                  : undefined;
+            if (!args) {
+              throw invalidToolStreamState(
+                model,
+                provider,
+                'non_object_tool_call_arguments',
+              );
+            }
+            current.args = args;
+            if (chunk.type === 'tool-call-arguments') {
+              yield decorate(chunk);
+            }
+            continue;
+          }
+
+          if (chunk.type === 'tool-call-delta') {
+            const current = pendingToolCalls.get(chunk.id);
+            if (!current || current.args !== undefined) {
+              throw invalidToolStreamState(
+                model,
+                provider,
+                'orphan_or_late_tool_call_delta',
+              );
+            }
+            yield decorate(chunk);
+            continue;
+          }
+
+          if (chunk.type === 'tool-call-result') {
             throw invalidToolStreamState(
               model,
               provider,
-              'orphan_or_late_tool_call_delta',
+              'provider_emitted_tool_result_before_execution',
             );
           }
-          yield decorate(chunk);
-          continue;
-        }
 
-        if (chunk.type === 'tool-call-result') {
-          throw invalidToolStreamState(
-            model,
-            provider,
-            'provider_emitted_tool_result_before_execution',
+          if (chunk.type === 'error') {
+            budgetSkipped ||= chunk.error instanceof BudgetExceededError;
+            yield decorate(chunk);
+            continue;
+          }
+
+          if (chunk.type !== 'done') {
+            yield decorate(chunk);
+            continue;
+          }
+
+          finishReason = chunk.finishReason;
+          usage = chunk.usage;
+        }
+      } catch (error) {
+        if (error instanceof UsageLoggerError && error.receipt.usage) {
+          throw error.withUsage(
+            accumulateUsage(aggregateUsage, error.receipt.usage),
           );
         }
-
-        if (chunk.type === 'error') {
-          budgetSkipped ||= chunk.error instanceof BudgetExceededError;
-          yield decorate(chunk);
-          continue;
-        }
-
-        if (chunk.type !== 'done') {
-          yield decorate(chunk);
-          continue;
-        }
-
-        finishReason = chunk.finishReason;
-        usage = chunk.usage;
+        throw error;
       }
 
       if (!finishReason || !usage) {
@@ -1363,6 +1394,22 @@ export class Conversation {
     this.totalReasoningTokens = state.totalReasoningTokens;
     this.updatedAt = state.updatedAt;
     this.version = committedVersion;
+  }
+
+  private async applyUsageLoggerFailure(
+    error: UsageLoggerError,
+  ): Promise<void> {
+    const usage = error.receipt.usage;
+    if (!usage || this.appliedUsageFailureEventIds.has(error.receipt.eventId)) {
+      return;
+    }
+    this.appliedUsageFailureEventIds.add(error.receipt.eventId);
+    await this.finalizeExecution({
+      messages: this.messages,
+      model: error.receipt.model,
+      provider: error.receipt.provider,
+      usage,
+    });
   }
 
   private async persistSnapshot(

@@ -15,11 +15,21 @@ The values are copied to the corresponding `UsageEvent` sent to the configured
 usage logger. Metadata is application context; it is not sent to providers.
 `requestId` is also copied to v3 stream events.
 
+The client also assigns an independent stable `eventId` to each usage event.
+Unlike `requestId`, it is unique per provider step, so automatic tool rounds
+can share one request ID without colliding in idempotent persistence.
+
 The built-in console and Postgres usage loggers remove credentials, prompts,
 messages, explicit tool data, raw request/response payloads, transcripts, and
 media payloads from this metadata while preserving benign attribution such as
 feature labels. A custom `UsageLogger` receives the original `UsageEvent` and
 must implement its own logging allowlist or sanitization policy.
+
+If `usageLoggerFailureMode: 'strict'` is enabled, logger rejection is reported
+as `UsageLoggerError`. Its callback/error receipt contains only safe operation,
+event, model/provider/request identifiers and canonical numeric usage. It never
+contains request metadata, prompts, tool arguments, media, raw provider data,
+credentials, or the underlying logger exception.
 
 Metadata is validated and cloned before dispatch. It may contain only null,
 booleans, strings, finite numbers, arrays, and plain or null-prototype objects.

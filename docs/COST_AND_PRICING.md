@@ -1,7 +1,7 @@
 # Cost And Pricing
 
 Prepared: 2026-04-16  
-Updated: 2026-04-25
+Updated: 2026-08-02
 
 ## Cost Semantics
 
@@ -29,6 +29,11 @@ Updated: 2026-04-25
 - `formatCost()` accepts finite non-negative numbers only. Use numeric
   `costUSD` values for arithmetic and call `formatCost()` only at display
   boundaries.
+- Completion pricing fails closed. `calcCostUSD()`, request estimates, and
+  budget preflight throw a non-retryable `ProviderCapabilityError` when a
+  model is not registered instead of treating unknown pricing as free. A
+  registered model whose validated input and output prices are genuinely zero
+  still returns zero.
 - When provider pricing is tiered by prompt size, execution mode, or preview/stable status, the checked-in registry stores one explicit baseline price per model. Those cases should be treated as routing-grade estimates, not invoice-grade pricing.
 
 ## Token Counting
@@ -48,6 +53,9 @@ Updated: 2026-04-25
   zero/free pricing, and validates nested cache and speech billing units. A
   mixed valid/invalid override batch is rejected atomically without changing
   any model record.
+- Every `ModelRegistry` constructor seed is validated before the registry is
+  populated. Missing, negative, `NaN`, or infinite prices and invalid model
+  metadata reject the entire constructor call.
 
 ## Accuracy Expectations
 

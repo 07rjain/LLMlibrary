@@ -5,7 +5,12 @@ import { defaultModelPrices } from './prices.js';
 
 import type { ModelCapability, ModelInfo } from '../types.js';
 
-const MODEL_KINDS = ['completion', 'embedding', 'speech', 'transcription'] as const;
+const MODEL_KINDS = [
+  'completion',
+  'embedding',
+  'speech',
+  'transcription',
+] as const;
 const MODEL_PROVIDERS = [
   'anthropic',
   'openai',
@@ -18,7 +23,13 @@ const MODEL_PROVIDERS = [
   'ollama',
   'mock',
 ] as const;
-const INPUT_MODALITIES = ['audio', 'document', 'image', 'text', 'video'] as const;
+const INPUT_MODALITIES = [
+  'audio',
+  'document',
+  'image',
+  'text',
+  'video',
+] as const;
 const OUTPUT_MODALITIES = ['audio', 'text'] as const;
 const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const SPEECH_PRICE_FIELDS = [
@@ -92,15 +103,18 @@ export class ModelRegistry {
     this.onWarning = options.onWarning ?? ((message) => console.warn(message));
 
     const isDefaultSeed = seed === defaultModelPrices;
-    for (const [id, model] of Object.entries(seed)) {
+    const validatedModels = Object.entries(seed).map(([id, model]) => {
       const modelInfo = normalizeModelInfo({ ...model, id });
-      if (isDefaultSeed) {
-        assertValidModelInfo(modelInfo, false);
-      }
-      this.models.set(
+      assertValidModelInfo(modelInfo, false);
+      return [
         id,
-        isDefaultSeed ? withBuiltInStructuredOutputDefaults(modelInfo) : modelInfo,
-      );
+        isDefaultSeed
+          ? withBuiltInStructuredOutputDefaults(modelInfo)
+          : modelInfo,
+      ] as const;
+    });
+    for (const [id, modelInfo] of validatedModels) {
+      this.models.set(id, modelInfo);
     }
 
     if (options.emitStalenessWarning ?? !isProductionRuntime()) {
@@ -115,7 +129,8 @@ export class ModelRegistry {
   ): ModelInfo {
     const model = this.get(modelId);
     if (!model[capability]) {
-      const label = featureLabel ?? capability.replace('supports', '').toLowerCase();
+      const label =
+        featureLabel ?? capability.replace('supports', '').toLowerCase();
       throw new ProviderCapabilityError(
         `Model "${modelId}" does not support ${label}.`,
         {
@@ -183,7 +198,12 @@ export class ModelRegistry {
     const prospective = new Map<string, ModelInfo>();
     for (const [modelId, override] of Object.entries(overrides)) {
       if (!isPlainObject(override)) {
-        throw modelValidationError(`overrides.${modelId}`, 'plain_object', override, modelId);
+        throw modelValidationError(
+          `overrides.${modelId}`,
+          'plain_object',
+          override,
+          modelId,
+        );
       }
       for (const field of Object.keys(override)) {
         if (!(MODEL_OVERRIDE_FIELDS as readonly string[]).includes(field)) {
@@ -262,7 +282,10 @@ function cloneModelInfo(model: ModelInfo): ModelInfo {
   };
 }
 
-function assertValidModelInfo(model: unknown, requireExplicitKind: boolean): asserts model is ModelInfo {
+function assertValidModelInfo(
+  model: unknown,
+  requireExplicitKind: boolean,
+): asserts model is ModelInfo {
   if (!isPlainObject(model)) {
     throw modelValidationError('model', 'plain_object', model);
   }
@@ -282,21 +305,41 @@ function assertValidModelInfo(model: unknown, requireExplicitKind: boolean): ass
   assertNonNegativePrice(model.inputPrice, 'inputPrice', id, provider);
   assertNonNegativePrice(model.outputPrice, 'outputPrice', id, provider);
   if (model.cacheReadPrice !== undefined) {
-    assertNonNegativePrice(model.cacheReadPrice, 'cacheReadPrice', id, provider);
+    assertNonNegativePrice(
+      model.cacheReadPrice,
+      'cacheReadPrice',
+      id,
+      provider,
+    );
   }
   if (model.cacheWritePrice !== undefined) {
-    assertNonNegativePrice(model.cacheWritePrice, 'cacheWritePrice', id, provider);
+    assertNonNegativePrice(
+      model.cacheWritePrice,
+      'cacheWritePrice',
+      id,
+      provider,
+    );
   }
 
-  assertContextWindow(model.contextWindow, kind, id, provider);
+  assertContextWindow(model.contextWindow, id, provider);
   if (model.maxInputTokens !== undefined) {
     assertPositiveInteger(model.maxInputTokens, 'maxInputTokens', id, provider);
   }
   assertDate(model.lastUpdated, id, provider);
 
-  for (const option of ['supportsStreaming', 'supportsTools', 'supportsVision'] as const) {
+  for (const option of [
+    'supportsStreaming',
+    'supportsTools',
+    'supportsVision',
+  ] as const) {
     if (typeof model[option] !== 'boolean') {
-      throw modelValidationError(option, 'boolean', model[option], id, provider);
+      throw modelValidationError(
+        option,
+        'boolean',
+        model[option],
+        id,
+        provider,
+      );
     }
   }
   for (const option of [
@@ -305,7 +348,13 @@ function assertValidModelInfo(model: unknown, requireExplicitKind: boolean): ass
     'supportsStructuredOutputStreaming',
   ] as const) {
     if (model[option] !== undefined && typeof model[option] !== 'boolean') {
-      throw modelValidationError(option, 'boolean', model[option], id, provider);
+      throw modelValidationError(
+        option,
+        'boolean',
+        model[option],
+        id,
+        provider,
+      );
     }
   }
 
@@ -364,19 +413,14 @@ function assertValidModelInfo(model: unknown, requireExplicitKind: boolean): ass
 
 function assertContextWindow(
   value: unknown,
-  kind: NonNullable<ModelInfo['kind']>,
   model: string,
   provider: ModelInfo['provider'],
 ): void {
-  const isValid =
-    Number.isSafeInteger(value) &&
-    (kind === 'transcription' ? (value as number) >= 0 : (value as number) > 0);
+  const isValid = Number.isSafeInteger(value) && (value as number) > 0;
   if (!isValid) {
     throw modelValidationError(
       'contextWindow',
-      kind === 'transcription'
-        ? 'finite_non_negative_safe_integer'
-        : 'finite_positive_safe_integer',
+      'finite_positive_safe_integer',
       value,
       model,
       provider,
@@ -390,15 +434,36 @@ function assertEmbeddingDimensions(
   provider: ModelInfo['provider'],
 ): void {
   if (!isPlainObject(value)) {
-    throw modelValidationError('embeddingDimensions', 'plain_object', value, model, provider);
+    throw modelValidationError(
+      'embeddingDimensions',
+      'plain_object',
+      value,
+      model,
+      provider,
+    );
   }
-  assertPositiveInteger(value.default, 'embeddingDimensions.default', model, provider);
+  assertPositiveInteger(
+    value.default,
+    'embeddingDimensions.default',
+    model,
+    provider,
+  );
   const defaultDimension = value.default as number;
   if (value.min !== undefined) {
-    assertPositiveInteger(value.min, 'embeddingDimensions.min', model, provider);
+    assertPositiveInteger(
+      value.min,
+      'embeddingDimensions.min',
+      model,
+      provider,
+    );
   }
   if (value.max !== undefined) {
-    assertPositiveInteger(value.max, 'embeddingDimensions.max', model, provider);
+    assertPositiveInteger(
+      value.max,
+      'embeddingDimensions.max',
+      model,
+      provider,
+    );
   }
   if (
     (typeof value.min === 'number' && defaultDimension < value.min) ||
@@ -444,11 +509,23 @@ function assertSpeechPrices(
   provider: ModelInfo['provider'],
 ): void {
   if (!isPlainObject(value)) {
-    throw modelValidationError('speechPrices', 'plain_object', value, model, provider);
+    throw modelValidationError(
+      'speechPrices',
+      'plain_object',
+      value,
+      model,
+      provider,
+    );
   }
   for (const [field, price] of Object.entries(value)) {
     if (!(SPEECH_PRICE_FIELDS as readonly string[]).includes(field)) {
-      throw modelValidationError(`speechPrices.${field}`, 'supported_price_unit', price, model, provider);
+      throw modelValidationError(
+        `speechPrices.${field}`,
+        'supported_price_unit',
+        price,
+        model,
+        provider,
+      );
     }
     assertNonNegativePrice(price, `speechPrices.${field}`, model, provider);
   }
@@ -467,7 +544,13 @@ function assertStringArray(
     (!allowEmpty && value.length === 0) ||
     value.some((entry) => typeof entry !== 'string' || !allowed.includes(entry))
   ) {
-    throw modelValidationError(option, 'non_empty_supported_values', value, model, provider);
+    throw modelValidationError(
+      option,
+      'non_empty_supported_values',
+      value,
+      model,
+      provider,
+    );
   }
 }
 
@@ -478,7 +561,13 @@ function assertNonNegativePrice(
   provider?: ModelInfo['provider'],
 ): void {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    throw modelValidationError(option, 'finite_non_negative_number', value, model, provider);
+    throw modelValidationError(
+      option,
+      'finite_non_negative_number',
+      value,
+      model,
+      provider,
+    );
   }
 }
 
@@ -489,7 +578,13 @@ function assertPositiveInteger(
   provider?: ModelInfo['provider'],
 ): void {
   if (!Number.isSafeInteger(value) || (value as number) <= 0) {
-    throw modelValidationError(option, 'finite_positive_safe_integer', value, model, provider);
+    throw modelValidationError(
+      option,
+      'finite_positive_safe_integer',
+      value,
+      model,
+      provider,
+    );
   }
 }
 
@@ -500,7 +595,13 @@ function assertNonEmptyString(
   provider?: ModelInfo['provider'],
 ): asserts value is string {
   if (typeof value !== 'string' || value.trim().length === 0) {
-    throw modelValidationError(option, 'non_empty_string', value, model, provider);
+    throw modelValidationError(
+      option,
+      'non_empty_string',
+      value,
+      model,
+      provider,
+    );
   }
 }
 
@@ -512,7 +613,14 @@ function assertAllowedString(
   provider?: ModelInfo['provider'],
 ): void {
   if (typeof value !== 'string' || !allowed.includes(value)) {
-    throw modelValidationError(option, 'supported_value', value, model, provider, allowed);
+    throw modelValidationError(
+      option,
+      'supported_value',
+      value,
+      model,
+      provider,
+      allowed,
+    );
   }
 }
 
@@ -530,7 +638,13 @@ function assertDate(
     Number.isNaN(parsed.getTime()) ||
     parsed.toISOString().slice(0, 10) !== value
   ) {
-    throw modelValidationError('lastUpdated', 'yyyy_mm_dd', value, model, provider);
+    throw modelValidationError(
+      'lastUpdated',
+      'yyyy_mm_dd',
+      value,
+      model,
+      provider,
+    );
   }
 }
 
@@ -542,20 +656,23 @@ function modelValidationError(
   provider?: unknown,
   allowed?: readonly string[],
 ): ProviderCapabilityError {
-  return new ProviderCapabilityError(`Invalid model registry option "${option}".`, {
-    details: {
-      ...(allowed ? { allowed } : {}),
-      constraint,
-      option,
-      ...(value !== undefined ? { value: safeDetailValue(value) } : {}),
+  return new ProviderCapabilityError(
+    `Invalid model registry option "${option}".`,
+    {
+      details: {
+        ...(allowed ? { allowed } : {}),
+        constraint,
+        option,
+        ...(value !== undefined ? { value: safeDetailValue(value) } : {}),
+      },
+      ...(model ? { model } : {}),
+      ...(typeof provider === 'string' &&
+      (MODEL_PROVIDERS as readonly string[]).includes(provider)
+        ? { provider: provider as ModelInfo['provider'] }
+        : {}),
+      statusCode: 400,
     },
-    ...(model ? { model } : {}),
-    ...(typeof provider === 'string' &&
-    (MODEL_PROVIDERS as readonly string[]).includes(provider)
-      ? { provider: provider as ModelInfo['provider'] }
-      : {}),
-    statusCode: 400,
-  });
+  );
 }
 
 function safeDetailValue(value: unknown): unknown {

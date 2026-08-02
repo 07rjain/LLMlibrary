@@ -171,7 +171,10 @@ describe('Usage logging', () => {
 
     await logger.log(
       buildUsageEvent({
-        metadata: { authorization: 'Bearer sk-secret-value', feature: 'billing' },
+        metadata: {
+          authorization: 'Bearer sk-secret-value',
+          feature: 'billing',
+        },
         requestId: 'usage-request-1',
         sessionId: 'session-1',
       }),
@@ -187,9 +190,15 @@ describe('Usage logging', () => {
       }),
     );
 
-    expect(pool.queries[0]?.text).toContain('CREATE SCHEMA IF NOT EXISTS "llm"');
-    expect(pool.queries[1]?.text).toContain('CREATE TABLE IF NOT EXISTS "llm"."usage_events"');
-    expect(pool.queries.at(-1)?.text).toContain('INSERT INTO "llm"."usage_events"');
+    expect(pool.queries[0]?.text).toContain(
+      'CREATE SCHEMA IF NOT EXISTS "llm"',
+    );
+    expect(pool.queries[1]?.text).toContain(
+      'CREATE TABLE IF NOT EXISTS "llm"."usage_events"',
+    );
+    expect(pool.queries.at(-1)?.text).toContain(
+      'INSERT INTO "llm"."usage_events"',
+    );
     expect(pool.queries.at(-1)?.values).toContain('usage-request-1');
     expect(pool.queries.at(-1)?.values).toContainEqual({
       authorization: '[REDACTED]',
@@ -330,7 +339,9 @@ describe('Usage logging', () => {
 
     expect(
       pool.queries.some((query) =>
-        query.text.includes('CREATE TABLE IF NOT EXISTS "llm"."usage_events_speech"'),
+        query.text.includes(
+          'CREATE TABLE IF NOT EXISTS "llm"."usage_events_speech"',
+        ),
       ),
     ).toBe(true);
     expect(pool.queries.at(-1)?.text).toContain(
@@ -353,13 +364,19 @@ describe('Usage logging', () => {
       },
     ]);
 
-    const summary = await logger.getSpeechUsage({ kind: 'speech', tenantId: 'tenant-1' });
+    const summary = await logger.getSpeechUsage({
+      kind: 'speech',
+      tenantId: 'tenant-1',
+    });
 
-    expect(pool.queries.at(-1)?.text).toContain('GROUP BY provider, model, kind');
+    expect(pool.queries.at(-1)?.text).toContain(
+      'GROUP BY provider, model, kind',
+    );
     expect(pool.queries.at(-1)?.values).toEqual(['tenant-1', 'speech']);
     expect(summary).toEqual({
       breakdown: [
         {
+          costComplete: true,
           kind: 'speech',
           model: 'gpt-4o-mini-tts',
           provider: 'openai',
@@ -371,8 +388,10 @@ describe('Usage logging', () => {
           totalInputTokens: 3,
           totalOutputCharacters: 0,
           totalOutputTokens: 0,
+          unknownCostCount: 0,
         },
       ],
+      costComplete: true,
       requestCount: 1,
       totalAudioInputSeconds: 0,
       totalAudioOutputSeconds: 4,
@@ -381,6 +400,7 @@ describe('Usage logging', () => {
       totalInputTokens: 3,
       totalOutputCharacters: 0,
       totalOutputTokens: 0,
+      unknownCostCount: 0,
     });
   });
 
@@ -400,7 +420,9 @@ describe('Usage logging', () => {
 
       await vi.advanceTimersByTimeAsync(5);
 
-      expect(pool.queries.at(-1)?.text).toContain('INSERT INTO "public"."llm_usage_events"');
+      expect(pool.queries.at(-1)?.text).toContain(
+        'INSERT INTO "public"."llm_usage_events"',
+      );
       await logger.close();
     } finally {
       vi.useRealTimers();
@@ -441,7 +463,18 @@ describe('Usage logging', () => {
     ).rejects.toThrow('insert failed');
     expect(onError).toHaveBeenCalled();
 
+    const failedInsert = pool.queries.find((query) =>
+      query.text.startsWith('INSERT INTO'),
+    );
+    expect(failedInsert?.text).toContain('ON CONFLICT (event_id) DO NOTHING');
+    expect(failedInsert?.values[0]).toEqual(expect.any(String));
+
     await logger.flush();
+    const inserts = pool.queries.filter((query) =>
+      query.text.startsWith('INSERT INTO'),
+    );
+    expect(inserts).toHaveLength(2);
+    expect(inserts[1]?.values[0]).toBe(inserts[0]?.values[0]);
 
     pool.queueRows([
       {
@@ -474,6 +507,106 @@ describe('Usage logging', () => {
       'bot-1',
       '2026-04-15T00:00:00.000Z',
       '2026-04-16T00:00:00.000Z',
+    ]);
+  });
+
+  it('keeps unknown speech cost NULL and reports incomplete aggregates', async () => {
+    const pool = new MockPool();
+    const logger = new PostgresUsageLogger({
+      batchSize: 1,
+      flushIntervalMs: 0,
+      pool,
+    });
+
+    await logger.logSpeech(
+      buildSpeechUsageEvent({
+        speechUsage: { estimated: true, outputAudioSeconds: 2 },
+      }),
+    );
+    const insert = pool.queries.find(
+      (query) =>
+        query.text.includes('llm_usage_events_speech') &&
+        query.text.startsWith('INSERT INTO'),
+    );
+    expect(insert?.text).toContain('ON CONFLICT (event_id) DO NOTHING');
+    expect(insert?.values[0]).toEqual(expect.any(String));
+    expect(insert?.values[13]).toBeNull();
+
+    pool.queueRows([
+      {
+        kind: 'speech',
+        model: 'unknown-speech-model',
+        provider: 'openai',
+        request_count: '1',
+        total_audio_input_seconds: '0',
+        total_audio_output_seconds: '2',
+        total_cost_usd: null,
+        total_input_characters: '0',
+        total_input_tokens: '0',
+        total_output_characters: '0',
+        total_output_tokens: '0',
+        unknown_cost_count: '1',
+      },
+    ]);
+    const summary = await logger.getSpeechUsage();
+    expect(summary).toMatchObject({
+      costComplete: false,
+      unknownCostCount: 1,
+    });
+    expect(summary).not.toHaveProperty('totalCostUSD');
+    expect(summary.breakdown[0]).toMatchObject({
+      costComplete: false,
+      unknownCostCount: 1,
+    });
+    expect(summary.breakdown[0]).not.toHaveProperty('totalCostUSD');
+  });
+
+  it('surfaces explicit flush failures through aggregate and close boundaries', async () => {
+    const aggregatePool = new MockPool();
+    const aggregateLogger = new PostgresUsageLogger({
+      batchSize: 10,
+      flushIntervalMs: 0,
+      onError: vi.fn(),
+      pool: aggregatePool,
+    });
+    await aggregateLogger.log(buildUsageEvent());
+    aggregatePool.failNextInsert = true;
+    await expect(aggregateLogger.getUsage()).rejects.toThrow('insert failed');
+
+    const closePool = new MockPool();
+    const closeLogger = new PostgresUsageLogger({
+      batchSize: 10,
+      flushIntervalMs: 0,
+      onError: vi.fn(),
+      pool: closePool,
+    });
+    await closeLogger.logSpeech(buildSpeechUsageEvent());
+    closePool.failNextInsert = true;
+    await expect(closeLogger.close()).rejects.toThrow('insert failed');
+  });
+
+  it('preserves an unattempted speech batch when the text batch fails', async () => {
+    const pool = new MockPool();
+    const logger = new PostgresUsageLogger({
+      batchSize: 10,
+      flushIntervalMs: 0,
+      onError: vi.fn(),
+      pool,
+    });
+    await logger.log(buildUsageEvent({ eventId: 'text-event' }));
+    await logger.logSpeech(buildSpeechUsageEvent({ eventId: 'speech-event' }));
+    pool.failNextInsert = true;
+
+    await expect(logger.flush()).rejects.toThrow('insert failed');
+    await logger.flush();
+
+    const inserts = pool.queries.filter((query) =>
+      query.text.startsWith('INSERT INTO'),
+    );
+    expect(inserts.map((query) => query.values[0])).toEqual([
+      'text-event',
+      'text-event',
+      'speech-event',
     ]);
   });
 
@@ -543,7 +676,9 @@ describe('Usage logging', () => {
       totalOutputTokens: 0,
     };
 
-    expect(exportSpeechUsageSummary(summary, 'json')).toContain('"requestCount": 1');
+    expect(exportSpeechUsageSummary(summary, 'json')).toContain(
+      '"requestCount": 1',
+    );
     expect(exportSpeechUsageSummary(summary, 'csv')).toContain(
       'provider,model,kind,requestCount,totalInputTokens,totalOutputTokens,totalInputCharacters,totalOutputCharacters,totalAudioInputSeconds,totalAudioOutputSeconds,totalCostUSD',
     );
@@ -583,7 +718,10 @@ class MockPool implements PostgresSessionStorePool {
       throw new Error('insert failed');
     }
 
-    if (!/^(INSERT|SELECT)\b/i.test(normalizedText) || this.responses.length === 0) {
+    if (
+      !/^(INSERT|SELECT)\b/i.test(normalizedText) ||
+      this.responses.length === 0
+    ) {
       return { rows: [] };
     }
 

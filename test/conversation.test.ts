@@ -12,6 +12,7 @@ import {
   MaxToolRoundsError,
   ProviderCapabilityError,
   ProviderError,
+  UsageLoggerError,
 } from '../src/errors.js';
 import { ModelRegistry } from '../src/models/registry.js';
 import { ModelRouter } from '../src/router.js';
@@ -2054,6 +2055,71 @@ describe('Conversation', () => {
       { content: 'stream skip', role: 'user' },
     ]);
     expect(streamConversation.totals.costUSD).toBe(0);
+  });
+
+  it('accounts completed tool-loop usage exactly once when strict logging fails', async () => {
+    const execute = vi.fn(async () => ({ ok: true }));
+    const log = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('SECRET_LOGGER_STORAGE_FAILURE'));
+    const client = LLMClient.mock({
+      responses: [toolCallResponse('lookup'), response('final answer')],
+      usageLogger: { log },
+      usageLoggerFailureMode: 'strict',
+    });
+    const conversation = await client.conversation({
+      tools: [buildTool('lookup', execute)],
+    });
+
+    const error = await conversation
+      .send('private user prompt')
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(UsageLoggerError);
+    expect(log).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(conversation.totals).toMatchObject({
+      costUSD: 0.02,
+      inputTokens: 2,
+      outputTokens: 2,
+    });
+    expect(conversation.history).toEqual([]);
+    expect(JSON.stringify((error as UsageLoggerError).toJSON())).not.toMatch(
+      /SECRET_LOGGER_STORAGE_FAILURE|private user prompt|final answer/,
+    );
+  });
+
+  it('accounts completed streaming usage once when strict logging fails', async () => {
+    const log = vi.fn(async () => {
+      throw new Error('stream logger failed');
+    });
+    const client = LLMClient.mock({
+      streams: [
+        [
+          { delta: 'visible output', type: 'text-delta' },
+          {
+            finishReason: 'stop',
+            type: 'done',
+            usage: usage(3, 2, 0.04),
+          },
+        ],
+      ],
+      usageLogger: { log },
+      usageLoggerFailureMode: 'strict',
+    });
+    const conversation = await client.conversation();
+
+    await expect(
+      collectStream(conversation.sendStream('private stream prompt')),
+    ).rejects.toBeInstanceOf(UsageLoggerError);
+    expect(log).toHaveBeenCalledOnce();
+    expect(conversation.totals).toMatchObject({
+      costUSD: 0.04,
+      inputTokens: 3,
+      outputTokens: 2,
+    });
+    expect(conversation.history).toEqual([]);
   });
 
   it('preserves real tool-loop state without persisting later budget-skip text', async () => {

@@ -1,6 +1,6 @@
 import { sanitizeForLogging } from './redaction.js';
 
-import type { CanonicalProvider } from './types.js';
+import type { CanonicalProvider, UsageMetrics } from './types.js';
 
 /** Metadata attached to typed LLM errors. */
 export interface LLMErrorOptions {
@@ -65,6 +65,49 @@ export class ProviderCapabilityError extends LLMError {}
 
 /** Budget guard failure raised before or during a request. */
 export class BudgetExceededError extends LLMError {}
+
+/** Safe receipt for provider usage that could not be written by a usage logger. */
+export interface UsageLoggerReceipt {
+  eventId: string;
+  model: string;
+  operation: 'log' | 'logSpeech';
+  provider: CanonicalProvider;
+  requestId?: string;
+  usage?: UsageMetrics;
+}
+
+/** A provider request completed, but its usage logger rejected the event. */
+export class UsageLoggerError extends LLMError {
+  readonly receipt: UsageLoggerReceipt;
+
+  constructor(receipt: UsageLoggerReceipt) {
+    super('Usage logging failed after provider usage was recorded.', {
+      details: {
+        code: 'usage_logger_failed',
+        eventId: receipt.eventId,
+        operation: receipt.operation,
+      },
+      model: receipt.model,
+      provider: receipt.provider,
+      ...(receipt.requestId !== undefined
+        ? { requestId: receipt.requestId }
+        : {}),
+      retryable: false,
+      statusCode: 500,
+    });
+    this.receipt = {
+      ...receipt,
+      ...(receipt.usage ? { usage: { ...receipt.usage } } : {}),
+    };
+  }
+
+  withUsage(usage: UsageMetrics): UsageLoggerError {
+    return new UsageLoggerError({
+      ...this.receipt,
+      usage: { ...usage },
+    });
+  }
+}
 
 /** Tool loop exceeded the configured maximum number of rounds. */
 export class MaxToolRoundsError extends LLMError {}

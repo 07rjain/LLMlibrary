@@ -19,6 +19,8 @@ import {
   MockQueueExhaustedError,
   ProviderCapabilityError,
   ProviderError,
+  RateLimitError,
+  UsageLoggerError,
 } from '../src/errors.js';
 import { LLMClient } from '../src/client.js';
 import { ModelRegistry } from '../src/models/registry.js';
@@ -1541,6 +1543,8 @@ describe('LLMClient', () => {
         outputPrice: 0,
         provider: 'mock',
         speechPrices: { outputAudioSecondPrice: 0.123 },
+        supportedInputModalities: ['text'],
+        supportedOutputModalities: ['audio'],
         supportsStreaming: false,
         supportsTools: false,
         supportsVision: false,
@@ -3239,7 +3243,7 @@ describe('LLMClient', () => {
     );
   });
 
-  it('swallows usage logger failures', async () => {
+  it('keeps usage logger failures best-effort by default and observes them safely', async () => {
     const fetchImplementation = vi.fn(
       async () =>
         new Response(
@@ -3274,15 +3278,16 @@ describe('LLMClient', () => {
           },
         ),
     );
+    const onUsageLoggerError = vi.fn();
+    const log = vi.fn(async () => {
+      throw new Error('SECRET_LOGGER_FAILURE');
+    });
     const client = new LLMClient({
       defaultModel: 'gpt-4o',
       fetchImplementation,
       openaiApiKey: 'openai-key',
-      usageLogger: {
-        log: vi.fn(async () => {
-          throw new Error('logger failed');
-        }),
-      },
+      onUsageLoggerError,
+      usageLogger: { log },
     });
 
     await expect(
@@ -3292,6 +3297,136 @@ describe('LLMClient', () => {
     ).resolves.toMatchObject({
       text: 'Still succeeds',
     });
+    expect(log).toHaveBeenCalledOnce();
+    expect(onUsageLoggerError).toHaveBeenCalledOnce();
+    const observed = onUsageLoggerError.mock.calls[0]?.[0] as UsageLoggerError;
+    expect(observed).toBeInstanceOf(UsageLoggerError);
+    expect(observed.retryable).toBe(false);
+    expect(JSON.stringify(observed.toJSON())).not.toContain(
+      'SECRET_LOGGER_FAILURE',
+    );
+  });
+
+  it('surfaces strict logger failures without provider fallback or secret leakage', async () => {
+    const fetchImplementation = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: 'resp_strict',
+            model: 'gpt-4o',
+            object: 'response',
+            output: [
+              {
+                content: [
+                  {
+                    annotations: [],
+                    text: 'Provider completed',
+                    type: 'output_text',
+                  },
+                ],
+                id: 'msg_strict',
+                role: 'assistant',
+                status: 'completed',
+                type: 'message',
+              },
+            ],
+            status: 'completed',
+            usage: { input_tokens: 5, output_tokens: 2 },
+          }),
+          { headers: { 'content-type': 'application/json' }, status: 200 },
+        ),
+    );
+    const log = vi.fn(async () => {
+      throw new RateLimitError('SECRET_RETRYABLE_LOGGER_FAILURE', {
+        retryable: true,
+      });
+    });
+    const onUsageLoggerError = vi.fn(() => {
+      throw new Error('SECRET_OBSERVER_FAILURE');
+    });
+    const client = new LLMClient({
+      fetchImplementation,
+      modelRouter: new ModelRouter({
+        rules: [
+          {
+            fallback: ['gpt-4o-mini'],
+            name: 'logger-must-not-fallback',
+            target: 'gpt-4o',
+          },
+        ],
+      }),
+      onUsageLoggerError,
+      openaiApiKey: 'SECRET_OPENAI_KEY',
+      usageLogger: { log },
+      usageLoggerFailureMode: 'strict',
+    });
+
+    const error = await client
+      .complete({
+        messages: [{ content: 'SECRET_PROMPT', role: 'user' }],
+        requestId: 'strict-request',
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(UsageLoggerError);
+    expect(error).toMatchObject({ retryable: false });
+    expect(fetchImplementation).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenCalledOnce();
+    expect(onUsageLoggerError).toHaveBeenCalledOnce();
+    expect(JSON.stringify((error as UsageLoggerError).toJSON())).not.toMatch(
+      /SECRET_RETRYABLE_LOGGER_FAILURE|SECRET_OBSERVER_FAILURE|SECRET_OPENAI_KEY|SECRET_PROMPT|Provider completed/,
+    );
+  });
+
+  it('applies strict logger policy to mock complete, stream, speech, and transcription', async () => {
+    const log = vi.fn(async () => {
+      throw new Error('text logger rejected');
+    });
+    const logSpeech = vi.fn(async () => {
+      throw new Error('speech logger rejected');
+    });
+    const client = LLMClient.mock({
+      responses: [mockCompletionResponse('mock complete')],
+      speeches: [mockSpeechResponse('mock speech')],
+      streams: [
+        [
+          { delta: 'mock stream', type: 'text-delta' },
+          {
+            finishReason: 'stop',
+            type: 'done',
+            usage: {
+              cachedTokens: 0,
+              cost: '$0.00',
+              costUSD: 0,
+              inputTokens: 1,
+              outputTokens: 1,
+            },
+          },
+        ],
+      ],
+      transcriptions: [mockTranscriptionResponse('mock transcript')],
+      usageLogger: { log, logSpeech },
+      usageLoggerFailureMode: 'strict',
+    });
+
+    await expect(
+      client.complete({ messages: [{ content: 'x', role: 'user' }] }),
+    ).rejects.toBeInstanceOf(UsageLoggerError);
+    await expect(
+      collectClientStream(
+        client.stream({ messages: [{ content: 'x', role: 'user' }] }),
+      ),
+    ).rejects.toBeInstanceOf(UsageLoggerError);
+    await expect(client.speak({ input: 'x' })).rejects.toBeInstanceOf(
+      UsageLoggerError,
+    );
+    await expect(
+      client.transcribe({
+        input: { file: new Uint8Array([1]), mediaType: 'audio/wav' },
+      }),
+    ).rejects.toBeInstanceOf(UsageLoggerError);
+    expect(log).toHaveBeenCalledTimes(2);
+    expect(logSpeech).toHaveBeenCalledTimes(2);
   });
 
   it('enforces per-call budget guards before dispatching requests', async () => {

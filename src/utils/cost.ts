@@ -89,13 +89,20 @@ export function calcCostUSD(
   registry: ModelRegistry = new ModelRegistry(),
 ): number {
   if (!registry.isSupported(input.model)) {
-    return 0;
+    throw new ProviderCapabilityError(
+      'Pricing is unavailable for the requested model.',
+      {
+        details: { code: 'unknown_model_pricing' },
+        retryable: false,
+        statusCode: 400,
+      },
+    );
   }
 
   const model = registry.get(input.model);
   const billedInputTokens = input.billedInputTokens ?? input.inputTokens;
 
-  return roundUsd(
+  const costUSD = roundUsd(
     costForTokens(billedInputTokens, model.inputPrice) +
       costForTokens(input.outputTokens, model.outputPrice) +
       costForTokens(input.billableReasoningTokens ?? 0, model.outputPrice) +
@@ -108,6 +115,14 @@ export function calcCostUSD(
         model.cacheWritePrice ?? model.inputPrice * 1.25,
       ),
   );
+  if (!Number.isFinite(costUSD) || costUSD < 0) {
+    throw new ProviderCapabilityError('Calculated request cost is invalid.', {
+      details: { code: 'invalid_calculated_cost' },
+      retryable: false,
+      statusCode: 400,
+    });
+  }
+  return costUSD;
 }
 
 export function calcSpeechCostUSD(
@@ -436,12 +451,24 @@ function toRegistryEntry(model: ModelInfo): Omit<ModelInfo, 'id'> {
     entry.kind = model.kind;
   }
 
+  if (model.embeddingDimensions !== undefined) {
+    entry.embeddingDimensions = model.embeddingDimensions;
+  }
+
+  if (model.maxInputTokens !== undefined) {
+    entry.maxInputTokens = model.maxInputTokens;
+  }
+
   if (model.speechPrices !== undefined) {
     entry.speechPrices = model.speechPrices;
   }
 
   if (model.supportedOutputModalities !== undefined) {
     entry.supportedOutputModalities = model.supportedOutputModalities;
+  }
+
+  if (model.supportedInputModalities !== undefined) {
+    entry.supportedInputModalities = model.supportedInputModalities;
   }
 
   return entry;

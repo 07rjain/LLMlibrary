@@ -108,6 +108,12 @@ Use:
 - `usage.cost` only for display.
 - `usage.costBreakdown` when you need to show which units were estimated.
 
+When the selected model or applicable billing unit has no known price,
+`usage.costUSD` remains `undefined`. `PostgresUsageLogger` persists that value
+as SQL `NULL`, never as zero. Speech aggregates expose `costComplete` and
+`unknownCostCount`; `totalCostUSD` is omitted whenever any matching event has
+unknown cost. CSV exports leave the affected cost cell blank.
+
 For budget preflight, duration-priced calls need enough information before the request is sent:
 
 - `client.speak()` uses `estimatedOutputSeconds` first and
@@ -158,6 +164,10 @@ const csv = await client.exportSpeechUsage('csv', {
 ```
 
 This avoids mixing seconds, characters, and token counts into the normal `client.getUsage()` totals.
+
+Each new speech event receives a stable `eventId`. Postgres inserts are
+idempotent on that identity, so retrying an ambiguously committed batch does
+not duplicate request counts or cost totals.
 
 ## Mocking
 

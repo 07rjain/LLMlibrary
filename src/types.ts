@@ -348,7 +348,10 @@ export interface EmbeddingResponse {
   usage?: EmbeddingUsageMetrics;
 }
 
-export type SpeechProvider = Extract<CanonicalProvider, 'google' | 'mock' | 'openai'>;
+export type SpeechProvider = Extract<
+  CanonicalProvider,
+  'google' | 'mock' | 'openai'
+>;
 
 export interface AudioInput {
   data?: string;
@@ -373,7 +376,13 @@ export interface TranscriptionUrlPolicy {
   resolveHostname?: TranscriptionHostnameResolver;
 }
 
-export type SpeechOutputFormat = 'aac' | 'flac' | 'mp3' | 'opus' | 'pcm' | 'wav';
+export type SpeechOutputFormat =
+  | 'aac'
+  | 'flac'
+  | 'mp3'
+  | 'opus'
+  | 'pcm'
+  | 'wav';
 
 export interface OpenAISpeechOptions {
   chunkingStrategy?: 'auto' | JsonObject;
@@ -548,7 +557,11 @@ export interface StreamEventBase {
 export type StreamChunk =
   | (StreamEventBase & { delta: string; type: 'text-delta' })
   | (StreamEventBase & { id: string; name: string; type: 'tool-call-start' })
-  | (StreamEventBase & { argsDelta: string; id: string; type: 'tool-call-delta' })
+  | (StreamEventBase & {
+      argsDelta: string;
+      id: string;
+      type: 'tool-call-delta';
+    })
   | (StreamEventBase & {
       args: JsonObject;
       id: string;
@@ -590,6 +603,7 @@ export type StreamChunk =
 export interface UsageEvent extends UsageMetrics {
   botId?: string;
   durationMs: number;
+  eventId?: string;
   finishReason: CanonicalFinishReason;
   metadata?: Record<string, JsonValue>;
   model: string;
@@ -619,7 +633,9 @@ export interface ModelInfo {
   outputPrice: number;
   provider: CanonicalProvider;
   supportedReasoningEfforts?: readonly AnthropicThinkingEffort[];
-  supportedInputModalities?: Array<'audio' | 'document' | 'image' | 'text' | 'video'>;
+  supportedInputModalities?: Array<
+    'audio' | 'document' | 'image' | 'text' | 'video'
+  >;
   speechPrices?: SpeechPriceBook;
   supportedOutputModalities?: Array<'audio' | 'text'>;
   supportsJsonObjectOutput?: boolean;

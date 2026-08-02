@@ -433,6 +433,39 @@ describe('ModelRegistry', () => {
     expect(registry.get(validCompletion.id)).toMatchObject(validCompletion);
   });
 
+  it('validates every constructor seed before exposing registry state', () => {
+    for (const invalid of [
+      { ...validCompletion, inputPrice: undefined },
+      { ...validCompletion, outputPrice: Number.NaN },
+      { ...validCompletion, inputPrice: Number.POSITIVE_INFINITY },
+      { ...validCompletion, outputPrice: -1 },
+      { ...validCompletion, contextWindow: 0 },
+      { ...validCompletion, supportsStreaming: undefined },
+    ]) {
+      const { id, ...seed } = invalid;
+      expect(
+        () =>
+          new ModelRegistry(
+            { [id]: seed as never },
+            { emitStalenessWarning: false },
+          ),
+      ).toThrow(ProviderCapabilityError);
+    }
+
+    const { id, ...freeSeed } = {
+      ...validCompletion,
+      id: 'registered-free-model',
+      inputPrice: 0,
+      outputPrice: 0,
+    };
+    expect(
+      new ModelRegistry(
+        { [id]: freeSeed },
+        { emitStalenessWarning: false },
+      ).get(id),
+    ).toMatchObject({ inputPrice: 0, outputPrice: 0 });
+  });
+
   it('accepts kind-relevant custom metadata and zero prices', () => {
     const registry = new ModelRegistry(undefined, {
       emitStalenessWarning: false,
@@ -459,7 +492,7 @@ describe('ModelRegistry', () => {
       },
       {
         ...validCompletion,
-        contextWindow: 0,
+        contextWindow: 224,
         id: 'custom-transcription',
         kind: 'transcription' as const,
         supportedInputModalities: ['audio'] as Array<'audio'>,
@@ -551,27 +584,30 @@ describe('ModelRegistry', () => {
     expect(warning).toHaveBeenCalledTimes(1);
   });
 
-  it('ignores invalid lastUpdated values when checking staleness', () => {
+  it('rejects invalid constructor seed metadata before staleness checks', () => {
     const warning = vi.fn();
-    new ModelRegistry(
-      {
-        invalid: {
-          contextWindow: 1000,
-          inputPrice: 1,
-          lastUpdated: 'not-a-date',
-          outputPrice: 2,
-          provider: 'mock',
-          supportsStreaming: true,
-          supportsTools: true,
-          supportsVision: false,
-        },
-      },
-      {
-        emitStalenessWarning: true,
-        now: () => new Date('2026-04-15T00:00:00Z'),
-        onWarning: warning,
-      },
-    );
+    expect(
+      () =>
+        new ModelRegistry(
+          {
+            invalid: {
+              contextWindow: 1000,
+              inputPrice: 1,
+              lastUpdated: 'not-a-date',
+              outputPrice: 2,
+              provider: 'mock',
+              supportsStreaming: true,
+              supportsTools: true,
+              supportsVision: false,
+            },
+          },
+          {
+            emitStalenessWarning: true,
+            now: () => new Date('2026-04-15T00:00:00Z'),
+            onWarning: warning,
+          },
+        ),
+    ).toThrow(ProviderCapabilityError);
 
     expect(warning).not.toHaveBeenCalled();
   });

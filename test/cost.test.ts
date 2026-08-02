@@ -72,13 +72,44 @@ describe('cost utilities', () => {
     }
   });
 
-  it('returns zero for unknown models', () => {
-    expect(
+  it('rejects unknown model pricing without conflating it with free pricing', () => {
+    expect(() =>
       calcCostUSD({
         inputTokens: 1000,
-        model: 'unknown-model',
+        model: 'unknown-model-secret-canary',
         outputTokens: 500,
       }),
+    ).toThrowError(
+      expect.objectContaining({
+        details: { code: 'unknown_model_pricing' },
+        retryable: false,
+      }),
+    );
+    expect(() =>
+      calcCostUSD({
+        inputTokens: 1000,
+        model: 'unknown-model-secret-canary',
+        outputTokens: 500,
+      }),
+    ).toThrow('Pricing is unavailable for the requested model.');
+
+    const freeRegistry = new ModelRegistry({
+      free: {
+        contextWindow: 1_000,
+        inputPrice: 0,
+        lastUpdated: '2026-08-01',
+        outputPrice: 0,
+        provider: 'mock',
+        supportsStreaming: true,
+        supportsTools: false,
+        supportsVision: false,
+      },
+    });
+    expect(
+      calcCostUSD(
+        { inputTokens: 1_000, model: 'free', outputTokens: 500 },
+        freeRegistry,
+      ),
     ).toBe(0);
   });
 
@@ -380,6 +411,8 @@ describe('cost utilities', () => {
       lastUpdated: '2026-05-19',
       outputPrice: 0,
       provider: 'openai' as const,
+      supportedInputModalities: ['audio'] as Array<'audio'>,
+      supportedOutputModalities: ['audio'] as Array<'audio'>,
       supportsStreaming: false,
       supportsTools: false,
       supportsVision: false,
@@ -414,6 +447,8 @@ describe('cost utilities', () => {
         lastUpdated: '2026-05-19',
         outputPrice: 0,
         provider: 'openai',
+        supportedInputModalities: ['audio'],
+        supportedOutputModalities: ['audio'],
         supportsStreaming: false,
         supportsTools: false,
         supportsVision: false,
@@ -449,6 +484,8 @@ describe('cost utilities', () => {
         outputPrice: 0,
         provider: 'openai',
         speechPrices: { textInputTokenPrice: 1 },
+        supportedInputModalities: ['text'],
+        supportedOutputModalities: ['audio'],
         supportsStreaming: false,
         supportsTools: false,
         supportsVision: false,
@@ -486,6 +523,8 @@ describe('cost utilities', () => {
           textInputTokenPrice: 5,
           textOutputTokenPrice: 6,
         },
+        supportedInputModalities: ['audio', 'text'],
+        supportedOutputModalities: ['audio'],
         supportsStreaming: false,
         supportsTools: false,
         supportsVision: false,
