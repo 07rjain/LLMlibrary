@@ -443,7 +443,7 @@ export const defaultModelPrices = {
     supportsVision: false,
   },
   'whisper-1': {
-    contextWindow: 0,
+    contextWindow: 224,
     inputPrice: 0,
     kind: 'transcription',
     lastUpdated: '2026-07-13',

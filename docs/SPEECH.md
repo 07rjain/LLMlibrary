@@ -81,6 +81,10 @@ console.log(transcript.usage?.costUSD);
 
 `input` accepts `data` as base64 or `file` as `Blob`, `ArrayBuffer`, or `Uint8Array`.
 
+The seeded `whisper-1` model records a 224-token context window for its optional
+transcription prompt. This is a prompt-token limit, not an audio-duration limit;
+audio capacity and billing remain duration based.
+
 Exactly one non-empty source is required: `data`, `file`, or `url`.
 `mediaType` must identify a supported audio/container format. Base64 is parsed
 strictly, binary values must not be empty, filenames must be non-empty when

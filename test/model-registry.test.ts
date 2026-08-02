@@ -22,7 +22,9 @@ describe('ModelRegistry', () => {
   it('keeps the typed and JSON seeds identical with kind-aware metadata', () => {
     expect(defaultModelPrices).toEqual(pricesJson);
 
-    const registry = new ModelRegistry(undefined, { emitStalenessWarning: false });
+    const registry = new ModelRegistry(undefined, {
+      emitStalenessWarning: false,
+    });
     expect(registry.get('gpt-5.5').contextWindow).toBe(1_050_000);
     expect(registry.get('gpt-5.4').contextWindow).toBe(1_050_000);
     expect(registry.get('gpt-5.4-mini')).toMatchObject({
@@ -49,19 +51,78 @@ describe('ModelRegistry', () => {
       });
     }
     expect(registry.get('whisper-1')).toMatchObject({
-      contextWindow: 0,
+      contextWindow: 224,
       kind: 'transcription',
     });
-    expect(
-      registry
-        .list()
-        .filter((model) => model.kind !== 'transcription')
-        .every((model) => model.contextWindow > 0),
-    ).toBe(true);
+    expect(registry.list().every((model) => model.contextWindow > 0)).toBe(
+      true,
+    );
+  });
+
+  it('keeps every seeded model complete for its declared kind', () => {
+    const registry = new ModelRegistry(undefined, {
+      emitStalenessWarning: false,
+    });
+    const allowedKinds = ['completion', 'embedding', 'speech', 'transcription'];
+    const allowedProviders = [
+      'anthropic',
+      'azure-openai',
+      'bedrock',
+      'cohere',
+      'google',
+      'groq',
+      'mistral',
+      'mock',
+      'ollama',
+      'openai',
+    ];
+
+    for (const model of registry.list()) {
+      expect(model.id.trim().length).toBeGreaterThan(0);
+      expect(allowedProviders).toContain(model.provider);
+      expect(allowedKinds).toContain(model.kind);
+      expect(Number.isSafeInteger(model.contextWindow)).toBe(true);
+      expect(model.contextWindow).toBeGreaterThan(0);
+      expect(Number.isFinite(model.inputPrice)).toBe(true);
+      expect(model.inputPrice).toBeGreaterThanOrEqual(0);
+      expect(Number.isFinite(model.outputPrice)).toBe(true);
+      expect(model.outputPrice).toBeGreaterThanOrEqual(0);
+      expect(model.lastUpdated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(Number.isNaN(Date.parse(`${model.lastUpdated}T00:00:00Z`))).toBe(
+        false,
+      );
+      expect(typeof model.supportsStreaming).toBe('boolean');
+      expect(typeof model.supportsTools).toBe('boolean');
+      expect(typeof model.supportsVision).toBe('boolean');
+
+      for (const price of [model.cacheReadPrice, model.cacheWritePrice]) {
+        if (price !== undefined) {
+          expect(Number.isFinite(price)).toBe(true);
+          expect(price).toBeGreaterThanOrEqual(0);
+        }
+      }
+
+      if (model.kind === 'embedding') {
+        expect(model.embeddingDimensions?.default).toBeGreaterThan(0);
+        expect(model.supportedInputModalities?.length).toBeGreaterThan(0);
+      }
+
+      if (model.kind === 'speech' || model.kind === 'transcription') {
+        expect(model.supportedInputModalities?.length).toBeGreaterThan(0);
+        expect(model.supportedOutputModalities?.length).toBeGreaterThan(0);
+        expect(Object.keys(model.speechPrices ?? {}).length).toBeGreaterThan(0);
+        for (const price of Object.values(model.speechPrices ?? {})) {
+          expect(Number.isFinite(price)).toBe(true);
+          expect(price).toBeGreaterThanOrEqual(0);
+        }
+      }
+    }
   });
 
   it('clones nested metadata on get and list return paths', () => {
-    const registry = new ModelRegistry(undefined, { emitStalenessWarning: false });
+    const registry = new ModelRegistry(undefined, {
+      emitStalenessWarning: false,
+    });
     const retrievedEmbedding = registry.get('gemini-embedding-2');
     retrievedEmbedding.embeddingDimensions!.recommended!.push(512);
     retrievedEmbedding.supportedInputModalities!.push('video');
@@ -78,17 +139,16 @@ describe('ModelRegistry', () => {
       min: 128,
       recommended: [768, 1536, 3072],
     });
-    expect(registry.get('gemini-embedding-2').supportedInputModalities).toEqual([
-      'audio',
-      'document',
-      'image',
-      'text',
-    ]);
+    expect(registry.get('gemini-embedding-2').supportedInputModalities).toEqual(
+      ['audio', 'document', 'image', 'text'],
+    );
     expect(registry.get('gpt-4o-mini-tts').speechPrices).toEqual({
       outputAudioSecondPrice: 0.00025,
       textInputTokenPrice: 0.6,
     });
-    expect(registry.get('gpt-4o-mini-tts').supportedOutputModalities).toEqual(['audio']);
+    expect(registry.get('gpt-4o-mini-tts').supportedOutputModalities).toEqual([
+      'audio',
+    ]);
   });
 
   it('lists seeded models', () => {
@@ -238,7 +298,9 @@ describe('ModelRegistry', () => {
       supportsTools: false,
       supportsVision: false,
     });
-    expect(registry.get('custom-anthropic').supportedReasoningEfforts).toBeUndefined();
+    expect(
+      registry.get('custom-anthropic').supportedReasoningEfforts,
+    ).toBeUndefined();
   });
 
   it('returns a model and validates capabilities', () => {
@@ -251,9 +313,9 @@ describe('ModelRegistry', () => {
     expect(() =>
       registry.assertCapability('gpt-4o-mini-tts', 'supportsVision', 'vision'),
     ).toThrow(ProviderCapabilityError);
-    expect(registry.assertModelKind('gemini-embedding-2', 'embedding').kind).toBe(
-      'embedding',
-    );
+    expect(
+      registry.assertModelKind('gemini-embedding-2', 'embedding').kind,
+    ).toBe('embedding');
     expect(registry.get('gemini-embedding-2').embeddingDimensions).toEqual({
       default: 3072,
       max: 3072,
@@ -288,8 +350,12 @@ describe('ModelRegistry', () => {
       supportsJsonSchemaOutput: true,
       supportsStructuredOutputStreaming: true,
     });
-    expect(registry.get('claude-sonnet-4-6').supportsJsonObjectOutput).toBeUndefined();
-    expect(registry.get('gemini-embedding-2').supportsJsonSchemaOutput).toBeUndefined();
+    expect(
+      registry.get('claude-sonnet-4-6').supportsJsonObjectOutput,
+    ).toBeUndefined();
+    expect(
+      registry.get('gemini-embedding-2').supportsJsonSchemaOutput,
+    ).toBeUndefined();
 
     registry.register({
       contextWindow: 64000,
@@ -304,13 +370,17 @@ describe('ModelRegistry', () => {
       supportsVision: false,
     });
 
-    expect(registry.get('custom-openai').supportsJsonSchemaOutput).toBeUndefined();
+    expect(
+      registry.get('custom-openai').supportsJsonSchemaOutput,
+    ).toBeUndefined();
   });
 
   it('throws for unknown models', () => {
     const registry = new ModelRegistry();
 
-    expect(() => registry.get('missing-model')).toThrow(ProviderCapabilityError);
+    expect(() => registry.get('missing-model')).toThrow(
+      ProviderCapabilityError,
+    );
   });
 
   it('registers custom models and updates prices', () => {
@@ -338,7 +408,9 @@ describe('ModelRegistry', () => {
   });
 
   it('rejects incomplete registrations before replacing an existing record', () => {
-    const registry = new ModelRegistry(undefined, { emitStalenessWarning: false });
+    const registry = new ModelRegistry(undefined, {
+      emitStalenessWarning: false,
+    });
     registry.register(validCompletion);
 
     const invalidModels = [
@@ -354,13 +426,17 @@ describe('ModelRegistry', () => {
     ];
 
     for (const invalid of invalidModels) {
-      expect(() => registry.register(invalid as never)).toThrow(ProviderCapabilityError);
+      expect(() => registry.register(invalid as never)).toThrow(
+        ProviderCapabilityError,
+      );
     }
     expect(registry.get(validCompletion.id)).toMatchObject(validCompletion);
   });
 
   it('accepts kind-relevant custom metadata and zero prices', () => {
-    const registry = new ModelRegistry(undefined, { emitStalenessWarning: false });
+    const registry = new ModelRegistry(undefined, {
+      emitStalenessWarning: false,
+    });
     for (const model of [
       validCompletion,
       {
@@ -395,7 +471,9 @@ describe('ModelRegistry', () => {
   });
 
   it('validates price overrides atomically, including nested units', () => {
-    const registry = new ModelRegistry(undefined, { emitStalenessWarning: false });
+    const registry = new ModelRegistry(undefined, {
+      emitStalenessWarning: false,
+    });
     const beforeGpt = registry.get('gpt-4o');
     const beforeSpeech = registry.get('gpt-4o-mini-tts');
 

@@ -439,7 +439,7 @@
   "whisper-1": {
     "provider": "openai",
     "kind": "transcription",
-    "contextWindow": 0,
+    "contextWindow": 224,
     "supportsVision": false,
     "supportsTools": false,
     "supportsStreaming": false,
