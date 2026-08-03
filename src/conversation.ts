@@ -299,6 +299,9 @@ export class Conversation {
 
   constructor(client: ConversationClient, options: ConversationOptions = {}) {
     validateBudgetUsd((options as { budgetUsd?: unknown }).budgetUsd);
+    const toolCallDispatcher = validateToolCallDispatcher(
+      options.toolCallDispatcher,
+    );
     this.budgetExceededAction = options.budgetExceededAction ?? 'throw';
     this.client = client;
     this.contextManager = options.contextManager;
@@ -331,7 +334,7 @@ export class Conversation {
     this.tools = options.tools
       ? validateAndCloneTools(options.tools, options.provider, options.model)
       : undefined;
-    this.toolCallDispatcher = options.toolCallDispatcher;
+    this.toolCallDispatcher = toolCallDispatcher;
     this.onWarning = options.onWarning ?? ((message) => console.warn(message));
     this.onCompaction = options.onCompaction;
     this.updatedAt = this.createdAt;
@@ -702,6 +705,12 @@ export class Conversation {
         : restoredSnapshot.tools !== undefined
           ? { tools: restoredSnapshot.tools }
           : {}),
+      ...(options.toolCallDispatcher !== undefined
+        ? { toolCallDispatcher: options.toolCallDispatcher }
+        : {}),
+      ...(options.toolCallDispatcherMetadata !== undefined
+        ? { toolCallDispatcherMetadata: options.toolCallDispatcherMetadata }
+        : {}),
     });
 
     conversation.createdAt = restoredSnapshot.createdAt;
@@ -1813,11 +1822,55 @@ export class Conversation {
 
   private warnSafely(message: string): void {
     try {
-      this.onWarning(message);
+      const result = (
+        this.onWarning as unknown as (warning: string) => unknown
+      )(message);
+      if (
+        result !== null &&
+        (typeof result === 'object' || typeof result === 'function')
+      ) {
+        void Promise.resolve(result).catch(() => undefined);
+      }
     } catch {
       // Warning observers are best-effort and must not affect a turn.
     }
   }
+}
+
+function validateToolCallDispatcher(
+  value: unknown,
+): ToolCallDispatcher | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const context = {
+    code: 'invalid_tool_call_dispatcher',
+    message: 'Invalid tool call dispatcher.',
+    option: 'toolCallDispatcher',
+  } as const;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    invalid(context, 'object_with_own_execute_function', {
+      path: 'toolCallDispatcher',
+    });
+  }
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(value, 'execute');
+  } catch {
+    invalid(context, 'object_with_own_execute_function', {
+      path: 'toolCallDispatcher.execute',
+    });
+  }
+  if (
+    !descriptor ||
+    !('value' in descriptor) ||
+    typeof descriptor.value !== 'function'
+  ) {
+    invalid(context, 'object_with_own_execute_function', {
+      path: 'toolCallDispatcher.execute',
+    });
+  }
+  return value as ToolCallDispatcher;
 }
 
 function buildUserMessage(

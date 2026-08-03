@@ -795,6 +795,67 @@ describe('SessionApi', () => {
     );
   });
 
+  it('logs metadata and requestId for non-stream session messages', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const usageLogger = { log: vi.fn(async () => undefined) };
+    const client = LLMClient.mock({
+      defaultModel: 'mock-model',
+      defaultProvider: 'mock',
+      responses: [mockResponse('Non-stream response', 0.02)],
+      sessionStore: store,
+      streams: [],
+      usageLogger,
+    });
+    const completeSpy = vi.spyOn(client, 'complete');
+    const streamSpy = vi.spyOn(client, 'stream');
+    const api = createSessionApi({
+      client,
+      sessionStore: store,
+    });
+
+    await api.handle(
+      jsonRequest('https://example.test/sessions', 'POST', {
+        sessionId: 'non-stream-correlation-session',
+      }),
+    );
+    const response = await api.handle(
+      jsonRequest(
+        'https://example.test/sessions/non-stream-correlation-session/message',
+        'POST',
+        {
+          content: 'Non-stream this',
+          metadata: { feature: 'session-api', nested: { attempt: 1 } },
+          requestId: 'session-request-non-stream',
+        },
+      ),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).not.toContain(
+      'text/event-stream',
+    );
+    expect(body).toMatchObject({
+      response: { text: 'Non-stream response' },
+    });
+    expect(completeSpy).toHaveBeenCalledOnce();
+    expect(streamSpy).not.toHaveBeenCalled();
+    expect(usageLogger.log).toHaveBeenCalledOnce();
+    expect(usageLogger.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        costUSD: 0.02,
+        finishReason: 'stop',
+        metadata: { feature: 'session-api', nested: { attempt: 1 } },
+        model: 'mock-model',
+        provider: 'mock',
+        requestId: 'session-request-non-stream',
+        sessionId: 'non-stream-correlation-session',
+        inputTokens: 4,
+        outputTokens: 2,
+      }),
+    );
+  });
+
   it('aborts streamed session work when the request signal is aborted', async () => {
     const store = new InMemorySessionStore<ConversationSnapshot>();
     let observedSignal: AbortSignal | undefined;

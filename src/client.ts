@@ -1315,7 +1315,15 @@ export class LLMClient {
 
   private warnSafely(message: string): void {
     try {
-      this.onWarning(message);
+      const result = (
+        this.onWarning as unknown as (warning: string) => unknown
+      )(message);
+      if (
+        result !== null &&
+        (typeof result === 'object' || typeof result === 'function')
+      ) {
+        void Promise.resolve(result).catch(() => undefined);
+      }
     } catch {
       // Warning observers are best-effort and must not affect dispatch.
     }
@@ -1456,7 +1464,7 @@ export class LLMClient {
 
     const action = options.budgetExceededAction ?? this.budgetExceededAction;
     if (action === 'warn') {
-      this.onWarning(error.message);
+      this.warnSafely(error.message);
       return { action: 'continue' };
     }
 

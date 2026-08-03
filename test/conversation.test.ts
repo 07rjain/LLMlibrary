@@ -43,6 +43,168 @@ import type {
 } from '../src/types.js';
 
 describe('Conversation', () => {
+  it('validates dispatcher shape before any effects and preserves valid identity', () => {
+    const client: ConversationClient = {
+      complete: vi.fn(),
+      stream: vi.fn(),
+    };
+    const dispatcher = { execute: vi.fn(async () => ({ ok: true })) };
+    const valid = new Conversation(client, {
+      toolCallDispatcher: dispatcher,
+    });
+    expect(valid).toBeInstanceOf(Conversation);
+    expect(
+      (valid as unknown as { toolCallDispatcher?: unknown })
+        .toolCallDispatcher,
+    ).toBe(dispatcher);
+
+    const invalidValues: unknown[] = [
+      null,
+      async () => undefined,
+      [],
+      'dispatcher',
+      42,
+      true,
+      { execute: undefined },
+      { execute: 'not-a-function' },
+    ];
+    for (const value of invalidValues) {
+      expect(
+        () => new Conversation(client, { toolCallDispatcher: value as never }),
+      ).toThrowError(
+        expect.objectContaining({
+          details: expect.objectContaining({
+            code: 'invalid_tool_call_dispatcher',
+            option: 'toolCallDispatcher',
+          }),
+          name: 'ProviderCapabilityError',
+          statusCode: 400,
+        }),
+      );
+    }
+
+    const inherited = Object.create({ execute: dispatcher.execute });
+    expect(
+      () =>
+        new Conversation(client, {
+          toolCallDispatcher: inherited as never,
+        }),
+    ).toThrowError(ProviderCapabilityError);
+
+    let getterCalls = 0;
+    const accessor = {};
+    Object.defineProperty(accessor, 'execute', {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        getterCalls += 1;
+        return dispatcher.execute;
+      },
+    });
+    expect(
+      () =>
+        new Conversation(client, {
+          toolCallDispatcher: accessor as never,
+        }),
+    ).toThrowError(ProviderCapabilityError);
+    expect(getterCalls).toBe(0);
+    expect(client.complete).not.toHaveBeenCalled();
+    expect(client.stream).not.toHaveBeenCalled();
+  });
+
+  it('restores dispatcher options and metadata without invoking them during restore', async () => {
+    const dispatcher = { execute: vi.fn(async () => ({ ok: true })) };
+    const complete = vi
+      .fn<ConversationClient['complete']>()
+      .mockResolvedValueOnce(toolCallResponse('lookup'))
+      .mockResolvedValueOnce(response('done'));
+    const client: ConversationClient = {
+      complete,
+      stream: vi.fn(),
+    };
+    const original = new Conversation(client, {
+      sessionId: 'restore-dispatcher',
+      toolCallDispatcher: dispatcher,
+      toolCallDispatcherMetadata: { source: 'restore-test' },
+      tools: [buildTool('lookup', vi.fn(async () => ({ fallback: true })))],
+    });
+    const restored = Conversation.restore(client, original.serialise(), {
+      toolCallDispatcher: dispatcher,
+      toolCallDispatcherMetadata: { source: 'restore-test' },
+      tools: [buildTool('lookup', vi.fn(async () => ({ fallback: true })))],
+    });
+    expect(restored).toBeInstanceOf(Conversation);
+    expect(
+      (restored as unknown as { toolCallDispatcher?: unknown })
+        .toolCallDispatcher,
+    ).toBe(dispatcher);
+    expect(
+      (restored as unknown as { toolCallDispatcherMetadata?: unknown })
+        .toolCallDispatcherMetadata,
+    ).toEqual({ source: 'restore-test' });
+    await expect(restored.send('lookup')).resolves.toMatchObject({
+      text: 'done',
+    });
+    expect(dispatcher.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: { source: 'restore-test' },
+        sessionId: 'restore-dispatcher',
+      }),
+    );
+  });
+
+  it('rejects invalid restored dispatchers before restore-side effects', () => {
+    const complete = vi.fn();
+    const stream = vi.fn();
+    const store = { set: vi.fn(), get: vi.fn() };
+    const tool = vi.fn();
+    const snapshot = {
+      createdAt: '2026-04-15T10:00:00.000Z',
+      messages: [{ content: 'Persisted', role: 'user' }],
+      model: 'gpt-4o',
+      provider: 'openai',
+      sessionId: 'invalid-restore-dispatcher',
+      totalCachedTokens: 0,
+      totalCostUSD: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      updatedAt: '2026-04-15T10:00:00.000Z',
+    };
+
+    expect(() =>
+      Conversation.restore(
+        { complete, stream },
+        snapshot,
+        {
+          store: store as never,
+          toolCallDispatcher: { execute: 'not-a-function' } as never,
+          tools: [
+            {
+              description: 'lookup',
+              execute: tool,
+              name: 'lookup',
+              parameters: { properties: {}, type: 'object' },
+            },
+          ],
+        },
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          code: 'invalid_tool_call_dispatcher',
+          option: 'toolCallDispatcher',
+        }),
+        name: 'ProviderCapabilityError',
+        statusCode: 400,
+      }),
+    );
+    expect(complete).not.toHaveBeenCalled();
+    expect(stream).not.toHaveBeenCalled();
+    expect(store.set).not.toHaveBeenCalled();
+    expect(store.get).not.toHaveBeenCalled();
+    expect(tool).not.toHaveBeenCalled();
+  });
+
   it('routes tool calls through an external dispatcher', async () => {
     const dispatcher = vi.fn(async () => ({ answer: 42 }));
     const responses: CanonicalResponse[] = [

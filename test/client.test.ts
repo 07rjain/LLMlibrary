@@ -1364,6 +1364,99 @@ describe('LLMClient', () => {
     });
   });
 
+  it('does not leak synchronous or async speech warning observer failures', async () => {
+    const speech = vi.fn(() => mockSpeechResponse('warn-sync'));
+    const transcription = vi.fn(() => mockTranscriptionResponse('warn-sync'));
+    const syncWarning = vi.fn(() => {
+      throw new Error('SECRET_WARNING_OBSERVER_FAILURE');
+    });
+    const syncClient = LLMClient.mock({
+      defaultModel: 'paid-mock',
+      modelRegistry: paidMockRegistry(),
+      onWarning: syncWarning,
+      speeches: [speech],
+      transcriptions: [transcription],
+    });
+
+    await expect(
+      syncClient.speak({
+        budgetExceededAction: 'warn',
+        budgetUsd: 0,
+        estimatedOutputSeconds: 10,
+        input: 'sync warning',
+      }),
+    ).resolves.toMatchObject({ provider: 'mock' });
+    await expect(
+      syncClient.transcribe({
+        budgetExceededAction: 'warn',
+        budgetUsd: 0,
+        input: { file: new Uint8Array([1]), mediaType: 'audio/mpeg' },
+        inputAudioSeconds: 10,
+      }),
+    ).resolves.toMatchObject({ provider: 'mock' });
+    expect(syncWarning).toHaveBeenCalledTimes(2);
+    expect(syncWarning).toHaveBeenCalledWith(expect.any(String));
+    expect(speech).toHaveBeenCalledOnce();
+    expect(transcription).toHaveBeenCalledOnce();
+
+    const asyncSpeech = vi.fn(() => mockSpeechResponse('warn-async'));
+    const asyncWarning = vi.fn(() =>
+      Promise.reject(new Error('SECRET_ASYNC_WARNING_FAILURE')),
+    );
+    const asyncClient = LLMClient.mock({
+      defaultModel: 'paid-mock',
+      modelRegistry: paidMockRegistry(),
+      onWarning: asyncWarning as unknown as (message: string) => void,
+      speeches: [asyncSpeech],
+    });
+    await expect(
+      asyncClient.speak({
+        budgetExceededAction: 'warn',
+        budgetUsd: 0,
+        estimatedOutputSeconds: 10,
+        input: 'async warning',
+      }),
+    ).resolves.toMatchObject({ provider: 'mock' });
+    await Promise.resolve();
+    expect(asyncWarning).toHaveBeenCalledOnce();
+    expect(asyncSpeech).toHaveBeenCalledOnce();
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const asyncTranscription = vi.fn(() =>
+        mockTranscriptionResponse('warn-transcribe-async'),
+      );
+      const transcribeWarning = vi.fn(() => ({
+        then: (_resolve: () => void, reject: (reason: Error) => void) => {
+          queueMicrotask(() => reject(new Error('SECRET_TRANSCRIBE_WARNING')));
+        },
+      }));
+      const transcribeClient = LLMClient.mock({
+        defaultModel: 'paid-mock',
+        modelRegistry: paidMockRegistry(),
+        onWarning: transcribeWarning as unknown as (message: string) => void,
+        transcriptions: [asyncTranscription],
+      });
+      await expect(
+        transcribeClient.transcribe({
+          budgetExceededAction: 'warn',
+          budgetUsd: 0,
+          input: { file: new Uint8Array([1]), mediaType: 'audio/mpeg' },
+          inputAudioSeconds: 10,
+        }),
+      ).resolves.toMatchObject({ text: 'warn-transcribe-async' });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(transcribeWarning).toHaveBeenCalledOnce();
+      expect(asyncTranscription).toHaveBeenCalledOnce();
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('enforces speech budgets and logging without consuming mock queues on skip', async () => {
     const modelRegistry = new ModelRegistry({
       'paid-mock': {
@@ -2539,6 +2632,86 @@ describe('LLMClient', () => {
     expect(pgMockState.poolConstructor).toHaveBeenCalledWith({
       connectionString: 'postgresql://example.test/default-store',
     });
+  });
+
+  it('resumes an existing session with the exact dispatcher and metadata identity', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    await store.set(
+      'resume-dispatcher-session',
+      {
+        createdAt: '2026-04-15T09:00:00.000Z',
+        messages: [{ content: 'Persisted request', role: 'user' }],
+        model: 'paid-mock',
+        provider: 'mock',
+        sessionId: 'resume-dispatcher-session',
+        totalCachedTokens: 0,
+        totalCostUSD: 0,
+        totalInputTokens: 1,
+        totalOutputTokens: 1,
+        updatedAt: '2026-04-15T10:00:00.000Z',
+      },
+      { model: 'paid-mock', provider: 'mock' },
+    );
+    const dispatcher = {
+      execute: vi.fn(async () => ({ answer: 'from-dispatcher' })),
+    };
+    const metadata = { source: 'session-resume' };
+    const client = LLMClient.mock({
+      defaultModel: 'paid-mock',
+      modelRegistry: paidMockRegistry(),
+      responses: [
+        {
+          content: [],
+          finishReason: 'tool_call',
+          model: 'paid-mock',
+          provider: 'mock',
+          raw: {},
+          text: '',
+          toolCalls: [{ args: { id: 7 }, id: 'call-1', name: 'lookup' }],
+          usage: {
+            cachedTokens: 0,
+            cost: '$0.00',
+            costUSD: 0,
+            inputTokens: 1,
+            outputTokens: 1,
+          },
+        },
+        mockCompletionResponse('resumed'),
+      ],
+      sessionStore: store,
+    });
+
+    const conversation = await client.conversation({
+      sessionId: 'resume-dispatcher-session',
+      toolValidation: 'permissive',
+      tools: [
+        {
+          description: 'Lookup persisted data',
+          name: 'lookup',
+          parameters: { properties: {}, type: 'object' },
+        },
+      ],
+      toolCallDispatcher: dispatcher,
+      toolCallDispatcherMetadata: metadata,
+    });
+    expect(
+      (conversation as unknown as { toolCallDispatcher?: unknown })
+        .toolCallDispatcher,
+    ).toBe(dispatcher);
+    expect(
+      (conversation as unknown as { toolCallDispatcherMetadata?: unknown })
+        .toolCallDispatcherMetadata,
+    ).toEqual(metadata);
+
+    await expect(conversation.send('Continue')).resolves.toMatchObject({
+      text: 'resumed',
+    });
+    expect(dispatcher.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata,
+        sessionId: 'resume-dispatcher-session',
+      }),
+    );
   });
 
   it('prefers an explicit session store over the DATABASE_URL default', async () => {
