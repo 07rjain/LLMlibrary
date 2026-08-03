@@ -8,6 +8,7 @@ import {
   RateLimitError,
 } from '../src/errors.js';
 import { ModelRegistry } from '../src/models/registry.js';
+import { copyGoogleReplayState } from '../src/internal/provider-replay-state.js';
 import {
   GeminiAdapter,
   translateGeminiEmbeddingRequest,
@@ -1023,6 +1024,124 @@ describe('Gemini adapter', () => {
     );
   });
 
+  it('privately replays exact signed Gemini content and native function ids', () => {
+    const payload = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                text: 'PRIVATE_THOUGHT',
+                thought: true,
+                thoughtSignature: 'cHJpdmF0ZS10aG91Z2h0',
+              },
+              {
+                functionCall: {
+                  args: { city: 'Paris' },
+                  id: 'native-call-1',
+                  name: 'weather_lookup',
+                },
+                thoughtSignature: 'ZnVuY3Rpb24tY2FsbA==',
+              },
+            ],
+          },
+          finishReason: 'STOP' as const,
+          index: 0,
+        },
+      ],
+    };
+    const response = translateGeminiResponse(payload, 'gemini-2.5-flash');
+    const assistant = {
+      content: response.content,
+      role: 'assistant' as const,
+    };
+    copyGoogleReplayState(response, assistant);
+    const request = translateGeminiRequest({
+      maxTokens: 32,
+      messages: [
+        { content: 'weather?', role: 'user' },
+        assistant,
+        {
+          content: [
+            {
+              name: 'weather_lookup',
+              result: { temperature: 18 },
+              toolCallId: response.toolCalls[0]!.id,
+              type: 'tool_result' as const,
+            },
+          ],
+          role: 'user',
+        },
+      ],
+      model: 'gemini-2.5-flash',
+    });
+
+    expect((request.contents as Array<{ parts: unknown[] }>)[1]!.parts).toEqual(
+      payload.candidates[0]!.content.parts,
+    );
+    expect((request.contents as Array<{ parts: unknown[] }>)[2]!.parts).toEqual(
+      [
+        {
+          functionResponse: {
+            id: 'native-call-1',
+            name: 'weather_lookup',
+            response: { temperature: 18 },
+          },
+        },
+      ],
+    );
+    expect(JSON.stringify(response.content)).not.toContain('PRIVATE_THOUGHT');
+    expect(JSON.stringify(response.content)).not.toContain('thoughtSignature');
+    const crossModelRequest = translateGeminiRequest({
+      messages: [{ content: 'weather?', role: 'user' }, assistant],
+      model: 'gemini-3.1-flash-lite',
+    });
+    expect(JSON.stringify(crossModelRequest)).not.toContain(
+      'cHJpdmF0ZS10aG91Z2h0',
+    );
+    expect(JSON.stringify(crossModelRequest)).not.toContain(
+      'ZnVuY3Rpb24tY2FsbA==',
+    );
+  });
+
+  it('preserves ordered parallel calls without copying the first signature', () => {
+    const payload = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                functionCall: { args: { value: 1 }, name: 'same_tool' },
+                thoughtSignature: 'Zmlyc3Qtb25seQ==',
+              },
+              { functionCall: { args: { value: 1 }, name: 'same_tool' } },
+            ],
+          },
+          finishReason: 'STOP' as const,
+          index: 0,
+        },
+      ],
+    };
+    const response = translateGeminiResponse(payload, 'gemini-2.5-flash');
+    const assistant = {
+      content: response.content,
+      role: 'assistant' as const,
+    };
+    copyGoogleReplayState(response, assistant);
+    const request = translateGeminiRequest({
+      messages: [{ content: 'go', role: 'user' }, assistant],
+      model: 'gemini-2.5-flash',
+    });
+
+    expect(response.toolCalls.map((call) => call.id)).toEqual([
+      'gemini_tool_0_0_same_tool',
+      'gemini_tool_0_1_same_tool',
+    ]);
+    expect((request.contents as Array<{ parts: unknown[] }>)[1]!.parts).toEqual(
+      payload.candidates[0]!.content.parts,
+    );
+  });
+
   it('returns content_filter for blocked responses without candidates', () => {
     const response = translateGeminiResponse(
       {
@@ -1203,6 +1322,51 @@ describe('Gemini adapter', () => {
       errorDetails: [{ retryDelay: '2s' }],
     });
   });
+
+  it('does not misclassify signature, generic, or unrelated token errors as context limits', async () => {
+    const errors = await Promise.all(
+      [
+        'Function call is missing thought_signature value ABCDEFGHIJKLMNOPQRSTUVWXYZ123456',
+        'Request contained an unsupported field',
+        'The token parameter has an invalid type',
+      ].map((message) =>
+        mapGeminiError(
+          new Response(
+            JSON.stringify({ error: { message, status: 'INVALID_ARGUMENT' } }),
+            { status: 400 },
+          ),
+          'gemini-3.1-flash-lite',
+        ),
+      ),
+    );
+
+    for (const error of errors) {
+      expect(error).toBeInstanceOf(ProviderError);
+      expect(error).not.toBeInstanceOf(ContextLimitError);
+      expect(error.retryable).toBe(false);
+    }
+    expect(errors[0]!.message).toContain('[REDACTED]');
+    expect(errors[0]!.message).not.toContain('ABCDEFGHIJKLMNOPQRSTUVWXYZ');
+  });
+
+  it.each([
+    'Token count exceeds the maximum number of tokens allowed.',
+    'The input token count exceeds the maximum number of tokens allowed.',
+  ])(
+    'maps Gemini context-limit form %j to ContextLimitError',
+    async (message) => {
+      const error = await mapGeminiError(
+        new Response(
+          JSON.stringify({ error: { message, status: 'INVALID_ARGUMENT' } }),
+          { status: 400 },
+        ),
+        'gemini-3.1-flash-lite',
+      );
+
+      expect(error).toBeInstanceOf(ContextLimitError);
+      expect(error.retryable).toBe(false);
+    },
+  );
 
   it('maps generic provider errors on invalid JSON bodies', async () => {
     const providerError = await mapGeminiError(
@@ -1659,6 +1823,103 @@ describe('Gemini adapter', () => {
     expect(JSON.stringify(chunks)).not.toContain(
       'stream-tool-secret-signature',
     );
+  });
+
+  it('merges a late streamed signature without duplicating the visible call', async () => {
+    const adapter = new GeminiAdapter({
+      apiKey: 'gemini-key',
+      fetchImplementation: vi.fn(
+        async () =>
+          new Response(
+            makeSSEStream([
+              {
+                candidates: [
+                  {
+                    content: {
+                      parts: [
+                        {
+                          functionCall: {
+                            args: { city: 'Berlin' },
+                            name: 'weather_lookup',
+                          },
+                        },
+                      ],
+                    },
+                    finishReason: null,
+                    index: 0,
+                  },
+                ],
+              },
+              {
+                candidates: [
+                  {
+                    content: {
+                      parts: [
+                        {
+                          functionCall: {
+                            args: { city: 'Berlin' },
+                            name: 'weather_lookup',
+                          },
+                          thoughtSignature: 'bGF0ZS1zaWduYXR1cmU=',
+                        },
+                      ],
+                    },
+                    finishReason: null,
+                    index: 0,
+                  },
+                ],
+              },
+              {
+                candidates: [
+                  {
+                    content: { parts: [] },
+                    finishReason: 'STOP',
+                    index: 0,
+                  },
+                ],
+                usageMetadata: { candidatesTokenCount: 2, promptTokenCount: 3 },
+              },
+            ]),
+            { headers: { 'content-type': 'text/event-stream' }, status: 200 },
+          ),
+      ),
+    });
+    const chunks = [];
+    for await (const chunk of adapter.stream({
+      messages: [{ content: 'weather?', role: 'user' }],
+      model: 'gemini-2.5-flash',
+    })) {
+      chunks.push(chunk);
+    }
+    expect(
+      chunks.filter((chunk) => chunk.type === 'tool-call-start'),
+    ).toHaveLength(1);
+    const done = chunks.find((chunk) => chunk.type === 'done')!;
+    const assistant = {
+      content: [
+        {
+          args: { city: 'Berlin' },
+          id: 'gemini_tool_0_0_weather_lookup',
+          name: 'weather_lookup',
+          type: 'tool_call' as const,
+        },
+      ],
+      role: 'assistant' as const,
+    };
+    copyGoogleReplayState(done, assistant);
+    const request = translateGeminiRequest({
+      messages: [{ content: 'weather?', role: 'user' }, assistant],
+      model: 'gemini-2.5-flash',
+    });
+    expect((request.contents as Array<{ parts: unknown[] }>)[1]!.parts).toEqual(
+      [
+        {
+          functionCall: { args: { city: 'Berlin' }, name: 'weather_lookup' },
+          thoughtSignature: 'bGF0ZS1zaWduYXR1cmU=',
+        },
+      ],
+    );
+    expect(JSON.stringify(chunks)).not.toContain('bGF0ZS1zaWduYXR1cmU=');
   });
 
   it('deduplicates repeated streamed functionCall chunks and preserves blocked finish state', async () => {

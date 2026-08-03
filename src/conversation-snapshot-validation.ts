@@ -1,8 +1,10 @@
 import { InvalidConversationSnapshotError } from 'unified-llm-client/errors';
 import { validateAndCloneCanonicalMessages } from './message-validation.js';
+import { validateAndCloneGoogleReplaySnapshot } from './internal/provider-replay-state.js';
 import { validateAndCloneTools } from './tool-validation.js';
 import {
   cloneJsonOmittingUndefinedProperties,
+  cloneJson,
   hasValue,
   inspectRecord,
   invalid,
@@ -88,6 +90,17 @@ function validateSnapshot(value: unknown): ConversationSnapshot {
     SNAPSHOT_CONTEXT,
     'snapshot.messages',
   );
+  const rawProviderReplayState = readValue(fields, 'providerReplayState');
+  const providerReplayState = validateAndCloneGoogleReplaySnapshot(
+    rawProviderReplayState === undefined
+      ? undefined
+      : cloneJson(
+          rawProviderReplayState,
+          SNAPSHOT_CONTEXT,
+          'snapshot.providerReplayState',
+        ),
+    messages,
+  );
   const totalCachedTokens = requiredTokenTotal(fields, 'totalCachedTokens');
   const totalCostUSD = requiredFiniteNonNegative(fields, 'totalCostUSD', false);
   const totalInputTokens = requiredTokenTotal(fields, 'totalInputTokens');
@@ -151,6 +164,7 @@ function validateSnapshot(value: unknown): ConversationSnapshot {
     ...(model !== undefined ? { model } : {}),
     ...(provider !== undefined ? { provider } : {}),
     ...(providerOptions !== undefined ? { providerOptions } : {}),
+    ...(providerReplayState !== undefined ? { providerReplayState } : {}),
     ...(responseFormat !== undefined ? { responseFormat } : {}),
     sessionId,
     ...(optionalString(fields, 'system') !== undefined

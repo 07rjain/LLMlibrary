@@ -5,6 +5,7 @@ import {
 import { LLMError, ProviderCapabilityError } from 'unified-llm-client/errors';
 import { validateAndCloneMetadata } from './json-metadata.js';
 import { validateAndCloneCanonicalMessages } from './message-validation.js';
+import { reindexGoogleReplaySnapshot } from './internal/provider-replay-state.js';
 import { sanitizeForLogging } from './redaction.js';
 
 import type { LLMClient } from './client.js';
@@ -584,11 +585,22 @@ export class SessionApi {
         { ...trimContext },
       ),
     );
+    const compactedReplayState = reindexGoogleReplaySnapshot(
+      record.snapshot.providerReplayState,
+      record.snapshot.messages,
+      trimmedMessages,
+    );
     const updatedSnapshot: ConversationSnapshot = {
       ...cloneSnapshot(record.snapshot),
       messages: trimmedMessages,
+      ...(compactedReplayState !== undefined
+        ? { providerReplayState: compactedReplayState }
+        : {}),
       updatedAt: new Date().toISOString(),
     };
+    if (compactedReplayState === undefined) {
+      delete updatedSnapshot.providerReplayState;
+    }
     const updatedRecord = await this.sessionStore.set(
       sessionId,
       updatedSnapshot,
@@ -654,10 +666,18 @@ export class SessionApi {
       );
     }
     const resetUsage = body.resetUsage ?? true;
+    const forkedReplayState = reindexGoogleReplaySnapshot(
+      record.snapshot.providerReplayState,
+      record.snapshot.messages,
+      forkedParts.messages,
+    );
     const forkedSnapshotBase: ConversationSnapshot = {
       ...cloneSnapshot(record.snapshot),
       createdAt: timestamp,
       messages: forkedParts.messages,
+      ...(forkedReplayState !== undefined
+        ? { providerReplayState: forkedReplayState }
+        : {}),
       sessionId: newSessionId,
       updatedAt: timestamp,
       ...(resetUsage
@@ -670,6 +690,9 @@ export class SessionApi {
           }
         : {}),
     };
+    if (forkedReplayState === undefined) {
+      delete forkedSnapshotBase.providerReplayState;
+    }
     const forkedSnapshot =
       forkedParts.system !== undefined
         ? {

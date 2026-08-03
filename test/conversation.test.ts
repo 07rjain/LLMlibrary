@@ -17,6 +17,14 @@ import {
 import { ModelRegistry } from '../src/models/registry.js';
 import { ModelRouter } from '../src/router.js';
 import { InMemorySessionStore } from '../src/session-store.js';
+import {
+  attachGoogleReplayState,
+  PROVIDER_REPLAY_STATE_VERSION,
+} from '../src/internal/provider-replay-state.js';
+import {
+  translateGeminiRequest,
+  translateGeminiResponse,
+} from '../src/providers/gemini.js';
 
 import type {
   ConversationClient,
@@ -620,6 +628,189 @@ describe('Conversation', () => {
       { content: 'Sunny in Berlin.', role: 'assistant' },
     ]);
     expect(conversation.totals.costUSD).toBe(0.03);
+  });
+
+  it('preserves private Gemini replay state through the complete tool loop and snapshot restore', async () => {
+    const first = translateGeminiResponse(
+      {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  functionCall: {
+                    args: { value: 7 },
+                    id: 'native-add-1',
+                    name: 'add_one',
+                  },
+                  thoughtSignature: 'YXV0by10b29sLXNpZw==',
+                },
+              ],
+            },
+            finishReason: 'STOP',
+            index: 0,
+          },
+        ],
+      },
+      'gemini-3.1-flash-lite',
+    );
+    let followupRequest: Record<string, unknown> | undefined;
+    const complete = vi.fn<ConversationClient['complete']>(async (options) => {
+      if (complete.mock.calls.length === 1) {
+        return first;
+      }
+      followupRequest = translateGeminiRequest({
+        ...options,
+        model: options.model!,
+      });
+      return {
+        content: [{ text: '8', type: 'text' }],
+        finishReason: 'stop',
+        model: 'gemini-3.1-flash-lite',
+        provider: 'google',
+        raw: {},
+        text: '8',
+        toolCalls: [],
+        usage: usage(2, 1, 0.00001),
+      };
+    });
+    const conversation = new Conversation(
+      { complete, stream: vi.fn() },
+      {
+        model: 'gemini-3.1-flash-lite',
+        provider: 'google',
+        sessionId: 'gemini-replay-complete',
+        tools: [buildTool('add_one', async () => ({ value: 8 }))],
+      },
+    );
+
+    await conversation.send('add one');
+    const contents = followupRequest!.contents as Array<{ parts: unknown[] }>;
+    expect(contents[1]!.parts).toEqual([
+      {
+        functionCall: {
+          args: { value: 7 },
+          id: 'native-add-1',
+          name: 'add_one',
+        },
+        thoughtSignature: 'YXV0by10b29sLXNpZw==',
+      },
+    ]);
+    expect(contents[2]!.parts).toEqual([
+      expect.objectContaining({
+        functionResponse: expect.objectContaining({ id: 'native-add-1' }),
+      }),
+    ]);
+    expect(JSON.stringify(conversation.history)).not.toContain(
+      'YXV0by10b29sLXNpZw==',
+    );
+
+    const snapshot = conversation.serialise();
+    expect(snapshot.providerReplayState).toBeDefined();
+    const restoredComplete = vi.fn<ConversationClient['complete']>(
+      async (options) => {
+        const request = translateGeminiRequest({
+          ...options,
+          model: options.model!,
+        });
+        expect(JSON.stringify(request)).toContain('YXV0by10b29sLXNpZw==');
+        return {
+          content: [{ text: 'restored', type: 'text' }],
+          finishReason: 'stop',
+          model: 'gemini-3.1-flash-lite',
+          provider: 'google',
+          raw: {},
+          text: 'restored',
+          toolCalls: [],
+          usage: usage(1, 1, 0),
+        };
+      },
+    );
+    const restored = Conversation.restore(
+      { complete: restoredComplete, stream: vi.fn() },
+      JSON.parse(JSON.stringify(snapshot)),
+    );
+    await restored.send('continue');
+    expect(restoredComplete).toHaveBeenCalledOnce();
+  });
+
+  it('preserves private Gemini replay state through streamed tool chunks and decorators', async () => {
+    let round = 0;
+    let replayedRequest: Record<string, unknown> | undefined;
+    const stream = vi.fn<ConversationClient['stream']>((options) => {
+      round += 1;
+      if (round === 2) {
+        replayedRequest = translateGeminiRequest({
+          ...options,
+          model: options.model!,
+        });
+      }
+      return (async function* (): AsyncGenerator<StreamChunk, void, void> {
+        if (round === 1) {
+          yield {
+            id: 'gemini_tool_0_0_add_one',
+            name: 'add_one',
+            type: 'tool-call-start',
+          };
+          yield {
+            args: { value: 7 },
+            id: 'gemini_tool_0_0_add_one',
+            name: 'add_one',
+            type: 'tool-call-arguments',
+          };
+          const done: StreamChunk = {
+            finishReason: 'tool_call',
+            type: 'done',
+            usage: usage(2, 1, 0.00001),
+          };
+          attachGoogleReplayState(done, {
+            calls: [
+              {
+                args: { value: 7 },
+                canonicalId: 'gemini_tool_0_0_add_one',
+                name: 'add_one',
+                partIndex: 0,
+              },
+            ],
+            model: 'gemini-3.1-flash-lite',
+            parts: [
+              {
+                functionCall: { args: { value: 7 }, name: 'add_one' },
+                thoughtSignature: 'c3RyZWFtLXNpZw==',
+              },
+            ],
+            provider: 'google',
+            version: PROVIDER_REPLAY_STATE_VERSION,
+          });
+          yield done;
+          return;
+        }
+        yield { delta: '8', type: 'text-delta' };
+        yield {
+          finishReason: 'stop',
+          type: 'done',
+          usage: usage(2, 1, 0.00001),
+        };
+      })();
+    });
+    const conversation = new Conversation(
+      { complete: vi.fn(), stream },
+      {
+        model: 'gemini-3.1-flash-lite',
+        provider: 'google',
+        tools: [buildTool('add_one', async () => ({ value: 8 }))],
+      },
+    );
+    const publicChunks: StreamChunk[] = [];
+    for await (const chunk of conversation.sendStream('add one')) {
+      publicChunks.push(chunk);
+    }
+
+    expect(JSON.stringify(replayedRequest)).toContain('c3RyZWFtLXNpZw==');
+    expect(JSON.stringify(publicChunks)).not.toContain('c3RyZWFtLXNpZw==');
+    expect(JSON.stringify(conversation.history)).not.toContain(
+      'c3RyZWFtLXNpZw==',
+    );
   });
 
   it('relaxes forced tool choice to auto after the first tool round', async () => {
@@ -2830,6 +3021,115 @@ describe('Conversation', () => {
         }),
       ).toThrow(InvalidConversationSnapshotError);
     }
+  });
+
+  it('validates bounded, assistant-owned Gemini replay snapshot state', () => {
+    const client: ConversationClient = {
+      complete: vi.fn(),
+      stream: vi.fn(),
+    };
+    const messages: CanonicalMessage[] = [
+      {
+        content: [
+          {
+            args: { value: 7 },
+            id: 'gemini_tool_0_0_add_one',
+            name: 'add_one',
+            type: 'tool_call',
+          },
+        ],
+        role: 'assistant',
+      },
+    ];
+    const entry = {
+      calls: [
+        {
+          args: { value: 7 },
+          canonicalId: 'gemini_tool_0_0_add_one',
+          name: 'add_one',
+          partIndex: 0,
+        },
+      ],
+      messageIndex: 0,
+      model: 'gemini-3.1-flash-lite',
+      parts: [
+        {
+          functionCall: { args: { value: 7 }, name: 'add_one' },
+          thoughtSignature: 'dmFsaWQtc2lnbmF0dXJl',
+        },
+      ],
+      provider: 'google',
+      version: 1,
+    };
+    const snapshot = {
+      ...validSnapshot(),
+      messages,
+      providerReplayState: { entries: [entry], version: 1 },
+    };
+
+    expect(
+      Conversation.restore(client, snapshot).serialise().providerReplayState,
+    ).toEqual(snapshot.providerReplayState);
+
+    for (const thoughtSignature of ['+/8=', '-_8']) {
+      const signatureEntry = {
+        ...entry,
+        parts: [{ ...entry.parts[0], thoughtSignature }],
+      };
+      expect(
+        Conversation.restore(client, {
+          ...snapshot,
+          providerReplayState: {
+            entries: [signatureEntry],
+            version: 1,
+          },
+        }).serialise().providerReplayState,
+      ).toEqual({ entries: [signatureEntry], version: 1 });
+    }
+
+    const corruptions = [
+      { ...entry, messageIndex: 1 },
+      { ...entry, model: '' },
+      {
+        ...entry,
+        calls: [{ ...entry.calls[0], args: { value: 8 } }],
+      },
+      {
+        ...entry,
+        parts: [
+          {
+            ...entry.parts[0],
+            thoughtSignature: 'not.base64',
+          },
+        ],
+      },
+      {
+        ...entry,
+        parts: [
+          {
+            ...entry.parts[0],
+            thoughtSignature: 'a'.repeat(8 * 1024 + 1),
+          },
+        ],
+      },
+    ];
+    for (const corrupted of corruptions) {
+      expect(() =>
+        Conversation.restore(client, {
+          ...snapshot,
+          providerReplayState: { entries: [corrupted], version: 1 },
+        }),
+      ).toThrow(InvalidConversationSnapshotError);
+    }
+    expect(() =>
+      Conversation.restore(client, {
+        ...snapshot,
+        providerReplayState: {
+          entries: Array.from({ length: 65 }, () => entry),
+          version: 1,
+        },
+      }),
+    ).toThrow(InvalidConversationSnapshotError);
   });
 
   it('does not let trusted overrides bypass stored corruption', () => {

@@ -39,6 +39,10 @@ import {
   buildGeminiResponseFormat,
   usesGeminiResponseFormatEnvelope,
 } from '../structured-output.js';
+import {
+  attachGoogleReplayState,
+  getGoogleReplayStateForMessage,
+} from '../internal/provider-replay-state.js';
 
 import type {
   CanonicalFinishReason,
@@ -77,6 +81,7 @@ interface GeminiTextPart {
   text: string;
   thought?: boolean;
   thoughtSignature?: string;
+  thought_signature?: string;
 }
 
 interface GeminiInlineDataPart {
@@ -96,14 +101,17 @@ interface GeminiFileDataPart {
 interface GeminiFunctionCallPart {
   functionCall: {
     args: JsonObject;
+    id?: string;
     name: string;
   };
   thought?: boolean;
   thoughtSignature?: string;
+  thought_signature?: string;
 }
 
 interface GeminiFunctionResponsePart {
   functionResponse: {
+    id?: string;
     name: string;
     response: JsonObject;
   };
@@ -738,7 +746,7 @@ export function translateGeminiRequest(
   const cachedContent = googleOptions?.promptCaching?.cachedContent;
 
   const body: Record<string, unknown> = {
-    contents: nonSystemMessages.map(translateGeminiMessage),
+    contents: translateGeminiMessages(nonSystemMessages, options.model),
   };
 
   const systemInstruction = translateGeminiSystemInstruction(
@@ -869,7 +877,9 @@ export function translateGeminiCacheCreateRequest(
   };
 
   if (nonSystemMessages.length > 0) {
-    body.contents = nonSystemMessages.map(translateGeminiMessage);
+    body.contents = nonSystemMessages.map((message) =>
+      translateGeminiMessage(message),
+    );
   }
 
   const systemInstruction = translateGeminiSystemInstruction(
@@ -1072,7 +1082,7 @@ export function translateGeminiResponse(
     }
   }
 
-  return {
+  const response: CanonicalResponse = {
     content,
     finishReason,
     model: requestedModel,
@@ -1082,6 +1092,36 @@ export function translateGeminiResponse(
     toolCalls,
     usage,
   };
+  if (toolCalls.length > 0 && parts.some(hasGeminiThoughtSignature)) {
+    attachGoogleReplayState(response, {
+      calls: parts.flatMap((part, partIndex) => {
+        if (!('functionCall' in part)) {
+          return [];
+        }
+        const canonicalId = buildGeminiToolCallId(
+          candidate.index,
+          partIndex,
+          part.functionCall.name,
+        );
+        return [
+          {
+            args: part.functionCall.args,
+            canonicalId,
+            name: part.functionCall.name,
+            ...(part.functionCall.id !== undefined
+              ? { nativeId: part.functionCall.id }
+              : {}),
+            partIndex,
+          },
+        ];
+      }),
+      model: requestedModel,
+      parts: cloneGeminiParts(parts),
+      provider: 'google',
+      version: 1,
+    });
+  }
+  return response;
 }
 
 export function translateGeminiEmbeddingResponse(
@@ -1139,15 +1179,19 @@ export async function mapGeminiError(
     body = undefined;
   }
 
-  const message =
+  const rawMessage =
     body?.error?.message ?? `Gemini request failed with ${response.status}.`;
+  const thoughtSignatureError = /thought[_ ]signature/i.test(rawMessage);
+  const message = thoughtSignatureError
+    ? rawMessage.replace(/[A-Za-z0-9+/=]{24,}/g, '[REDACTED]')
+    : rawMessage;
   const status = body?.error?.status;
   const details = body?.error?.details;
   const baseOptions = buildGeminiErrorOptions(
     response.status,
     model,
     requestId,
-    details,
+    thoughtSignatureError ? undefined : details,
     response.status === 429 || response.status >= 500,
   );
 
@@ -1164,10 +1208,7 @@ export async function mapGeminiError(
     return new RateLimitError(message, baseOptions);
   }
 
-  if (
-    response.status === 400 &&
-    (status === 'INVALID_ARGUMENT' || /context|token/i.test(message))
-  ) {
+  if (response.status === 400 && isGeminiContextLimitMessage(message)) {
     return new ContextLimitError(message, {
       ...baseOptions,
       retryable: false,
@@ -1186,6 +1227,17 @@ class GeminiStreamAssembler {
   private readonly modelRegistry: ModelRegistry;
   private reasoningOpen = false;
   private outputObserved = false;
+  private readonly replayCalls = new Map<
+    string,
+    {
+      args: JsonObject;
+      canonicalId: string;
+      name: string;
+      nativeId?: string;
+      partIndex: number;
+    }
+  >();
+  private readonly replayParts: GeminiPart[] = [];
   private terminal = false;
   private usage: GeminiUsageMetadata | undefined;
 
@@ -1218,6 +1270,7 @@ class GeminiStreamAssembler {
     const parts = candidate.content?.parts ?? [];
     for (const [partIndex, part] of parts.entries()) {
       if ('text' in part) {
+        this.replayParts.push(cloneGeminiPart(part));
         if (part.thought === true) {
           if (this.includeThoughts && part.text.length > 0) {
             this.outputObserved = true;
@@ -1250,6 +1303,25 @@ class GeminiStreamAssembler {
           partIndex,
           part.functionCall.name,
         );
+        const existingReplayCall = this.replayCalls.get(id);
+        if (existingReplayCall) {
+          this.replayParts[existingReplayCall.partIndex] = mergeGeminiPart(
+            this.replayParts[existingReplayCall.partIndex]!,
+            part,
+          );
+        } else {
+          const replayPartIndex = this.replayParts.length;
+          this.replayParts.push(cloneGeminiPart(part));
+          this.replayCalls.set(id, {
+            args: part.functionCall.args,
+            canonicalId: id,
+            name: part.functionCall.name,
+            ...(part.functionCall.id !== undefined
+              ? { nativeId: part.functionCall.id }
+              : {}),
+            partIndex: replayPartIndex,
+          });
+        }
         if (this.emittedToolCalls.has(id)) {
           continue;
         }
@@ -1273,10 +1345,10 @@ class GeminiStreamAssembler {
       candidate.finishReason !== undefined &&
       candidate.finishReason !== null
     ) {
-      this.finishReason = normalizeGeminiFinishReason(
-        candidate.finishReason,
-        parts,
-      );
+      this.finishReason =
+        candidate.finishReason === 'STOP' && this.replayCalls.size > 0
+          ? 'tool_call'
+          : normalizeGeminiFinishReason(candidate.finishReason, parts);
       this.terminal = true;
     }
   }
@@ -1297,11 +1369,24 @@ class GeminiStreamAssembler {
       });
     }
     const model = this.modelRegistry.get(this.model);
-    yield {
+    const done: StreamChunk = {
       finishReason: this.finishReason,
       type: 'done',
       usage: usageWithCost(model, geminiUsageToCanonical(this.usage)),
     };
+    if (
+      this.replayCalls.size > 0 &&
+      this.replayParts.some(hasGeminiThoughtSignature)
+    ) {
+      attachGoogleReplayState(done, {
+        calls: [...this.replayCalls.values()],
+        model: this.model,
+        parts: cloneGeminiParts(this.replayParts),
+        provider: 'google',
+        version: 1,
+      });
+    }
+    yield done;
   }
 
   private *closeReasoning(): Generator<StreamChunk> {
@@ -1393,12 +1478,26 @@ function validateGeminiResponsePayload(
               `candidates[${index}].content.parts[${partIndex}].thoughtSignature`,
             );
           }
+          if (part.thought_signature !== undefined) {
+            assertProviderString(
+              part.thought_signature,
+              context,
+              `candidates[${index}].content.parts[${partIndex}].thought_signature`,
+            );
+          }
           if (part.functionCall !== undefined) {
             assertProviderObject(
               part.functionCall,
               context,
               `candidates[${index}].content.parts[${partIndex}].functionCall`,
             );
+            if (part.functionCall.id !== undefined) {
+              assertProviderString(
+                part.functionCall.id,
+                context,
+                `candidates[${index}].content.parts[${partIndex}].functionCall.id`,
+              );
+            }
             assertProviderString(
               part.functionCall.name,
               context,
@@ -1547,7 +1646,32 @@ function assertNonNegativeProviderInteger(
   }
 }
 
-function translateGeminiMessage(message: CanonicalMessage): GeminiContent {
+function translateGeminiMessages(
+  messages: CanonicalMessage[],
+  model: string,
+): GeminiContent[] {
+  const nativeIds = new Map<string, string>();
+  return messages.map((message) => {
+    const state = getGoogleReplayStateForMessage(message, model);
+    if (state) {
+      for (const call of state.calls) {
+        if (call.nativeId !== undefined) {
+          nativeIds.set(call.canonicalId, call.nativeId);
+        }
+      }
+      return {
+        parts: state.parts as unknown as GeminiPart[],
+        role: 'model',
+      };
+    }
+    return translateGeminiMessage(message, nativeIds);
+  });
+}
+
+function translateGeminiMessage(
+  message: CanonicalMessage,
+  nativeIds: ReadonlyMap<string, string> = new Map(),
+): GeminiContent {
   if (message.role === 'system') {
     throw new ProviderCapabilityError(
       'System messages must be lifted into Gemini systemInstruction.',
@@ -1567,6 +1691,7 @@ function translateGeminiMessage(message: CanonicalMessage): GeminiContent {
             translateGeminiPart(
               message.role === 'assistant' ? 'assistant' : 'user',
               part,
+              nativeIds,
             ),
           ),
     role,
@@ -1597,6 +1722,7 @@ function translateGeminiEmbeddingContent(
 function translateGeminiPart(
   role: Exclude<CanonicalMessage['role'], 'system'>,
   part: CanonicalPart,
+  nativeIds: ReadonlyMap<string, string> = new Map(),
 ): GeminiPart {
   switch (part.type) {
     case 'audio':
@@ -1660,11 +1786,46 @@ function translateGeminiPart(
 
       return {
         functionResponse: {
+          ...(nativeIds.get(part.toolCallId) !== undefined
+            ? { id: nativeIds.get(part.toolCallId)! }
+            : {}),
           name: part.name ?? part.toolCallId,
           response: normalizeGeminiToolResult(part.result, part.isError),
         },
       };
   }
+}
+
+function isGeminiContextLimitMessage(message: string): boolean {
+  return /(?:context\s+(?:window|length)|maximum\s+(?:input\s+)?tokens?|max(?:imum)?\s+token\s+(?:count|limit)|token count exceeds .*maximum number of tokens allowed|token\s+(?:count|limit)\s+(?:is\s+)?(?:exceeded|over)|exceeds?\s+(?:the\s+)?(?:context|token))/i.test(
+    message,
+  );
+}
+
+function cloneGeminiParts(parts: readonly GeminiPart[]): JsonObject[] {
+  return JSON.parse(JSON.stringify(parts)) as JsonObject[];
+}
+
+function hasGeminiThoughtSignature(part: GeminiPart): boolean {
+  return 'thoughtSignature' in part || 'thought_signature' in part;
+}
+
+function cloneGeminiPart(part: GeminiPart): GeminiPart {
+  return JSON.parse(JSON.stringify(part)) as GeminiPart;
+}
+
+function mergeGeminiPart(current: GeminiPart, next: GeminiPart): GeminiPart {
+  if ('functionCall' in current && 'functionCall' in next) {
+    return {
+      ...current,
+      ...next,
+      functionCall: {
+        ...current.functionCall,
+        ...next.functionCall,
+      },
+    };
+  }
+  return cloneGeminiPart(next);
 }
 
 function translateGeminiEmbeddingPart(part: CanonicalPart): GeminiPart {

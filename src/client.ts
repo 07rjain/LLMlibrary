@@ -13,6 +13,7 @@ import { validateBudgetUsd } from './budget-validation.js';
 import { validateCompletionCacheOptions } from './cache-validation.js';
 import { validateEmbeddingRequest } from './embedding-validation.js';
 import { validateAndCloneMetadata } from './json-metadata.js';
+import { copyGoogleReplayState } from './internal/provider-replay-state.js';
 import {
   validateSpeechRequest,
   validateTranscriptionRequest,
@@ -435,10 +436,12 @@ export class LLMClient {
           );
           return response;
         }
+        const providerResponse = await this.dispatchComplete(attempt.request);
         const response = parseStructuredOutput(
-          await this.dispatchComplete(attempt.request),
+          providerResponse,
           attempt.request.responseFormat,
         );
+        copyGoogleReplayState(providerResponse, response);
         throwIfAborted(requestOptions.signal);
         await this.logUsageEvent(
           buildUsageEvent({
@@ -1566,15 +1569,19 @@ export class LLMClient {
     let sequence = 0;
     let budgetWarningIssued = false;
 
-    const decorate = (chunk: StreamChunk): StreamChunk => ({
-      ...chunk,
-      ...(options.requestId !== undefined
-        ? { requestId: options.requestId }
-        : {}),
-      sequence: ++sequence,
-      timestamp: new Date().toISOString(),
-      version: chunk.version ?? STREAM_EVENT_VERSION,
-    });
+    const decorate = (chunk: StreamChunk): StreamChunk => {
+      const decorated = {
+        ...chunk,
+        ...(options.requestId !== undefined
+          ? { requestId: options.requestId }
+          : {}),
+        sequence: ++sequence,
+        timestamp: new Date().toISOString(),
+        version: chunk.version ?? STREAM_EVENT_VERSION,
+      } as StreamChunk;
+      copyGoogleReplayState(chunk, decorated);
+      return decorated;
+    };
 
     for (const [index, attempt] of plan.attempts.entries()) {
       throwIfAborted(options.signal);
@@ -1918,15 +1925,19 @@ class MockLLMClient extends LLMClient {
           signal,
         });
         let sequence = 0;
-        const decorate = (chunk: StreamChunk): StreamChunk => ({
-          ...chunk,
-          ...(requestOptions.requestId !== undefined
-            ? { requestId: requestOptions.requestId }
-            : {}),
-          sequence: ++sequence,
-          timestamp: new Date().toISOString(),
-          version: chunk.version ?? STREAM_EVENT_VERSION,
-        });
+        const decorate = (chunk: StreamChunk): StreamChunk => {
+          const decorated = {
+            ...chunk,
+            ...(requestOptions.requestId !== undefined
+              ? { requestId: requestOptions.requestId }
+              : {}),
+            sequence: ++sequence,
+            timestamp: new Date().toISOString(),
+            version: chunk.version ?? STREAM_EVENT_VERSION,
+          } as StreamChunk;
+          copyGoogleReplayState(chunk, decorated);
+          return decorated;
+        };
 
         const budgetDecision = this.handleBudgetExceededAction(resolved);
         if (budgetDecision.action === 'skip') {

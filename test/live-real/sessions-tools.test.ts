@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { LLMClient } from '../../src/client.js';
-import { Conversation, type ConversationSnapshot } from '../../src/conversation.js';
+import {
+  Conversation,
+  type ConversationSnapshot,
+} from '../../src/conversation.js';
 import {
   SlidingWindowStrategy,
   SummarisationStrategy,
@@ -23,6 +26,96 @@ import {
 const liveDescribe = liveRealEnabled ? describe : describe.skip;
 
 liveDescribe('live-real sessions, tools, and context', () => {
+  it.each(['complete', 'stream'] as const)(
+    'replays private Gemini thought signatures in an automatic %s tool loop',
+    async (mode) => {
+      requireLiveEnv('GEMINI_API_KEY');
+      const evidence = {
+        firstResponseSigned: false,
+        providerCalls: 0,
+        replaySigned: false,
+        toolExecutions: 0,
+      };
+      const client = LLMClient.fromEnv({
+        fetchImplementation: createRedactedGeminiFetchProbe(evidence),
+        retryOptions: { maxAttempts: 1 },
+      });
+      const conversation = await client.conversation({
+        maxTokens: 64,
+        model:
+          process.env.GEMINI_TOOL_LOOP_TEST_MODEL ?? 'gemini-3.1-flash-lite',
+        provider: 'google',
+        system:
+          'Use add_numbers once. After the tool result, reply with GEMINI_LOOP_OK.',
+        toolChoice: { name: 'add_numbers', type: 'tool' },
+        tools: [
+          {
+            description: 'Add two integers.',
+            execute: async (args) => {
+              evidence.toolExecutions += 1;
+              return {
+                result: Number(args.a) + Number(args.b),
+              };
+            },
+            name: 'add_numbers',
+            parameters: {
+              properties: {
+                a: { type: 'integer' },
+                b: { type: 'integer' },
+              },
+              required: ['a', 'b'],
+              type: 'object',
+            },
+          },
+        ],
+      });
+
+      let visible = '';
+      let publicStreamJson = '';
+      if (mode === 'complete') {
+        visible = (await conversation.send('Add 3 and 4.')).text;
+      } else {
+        const chunks = [];
+        for await (const chunk of conversation.sendStream('Add 3 and 4.')) {
+          chunks.push(chunk);
+          if (chunk.type === 'text-delta') {
+            visible += chunk.delta;
+          }
+        }
+        publicStreamJson = JSON.stringify(chunks);
+      }
+
+      expect(visible).toContain('GEMINI_LOOP_OK');
+      expect(evidence).toEqual({
+        firstResponseSigned: true,
+        providerCalls: 2,
+        replaySigned: true,
+        toolExecutions: 1,
+      });
+      expect(conversation.totals.costUSD).toBeGreaterThan(0);
+      expect(conversation.totals.costUSD).toBeLessThan(0.0002);
+      console.info(
+        JSON.stringify({
+          costUSD: conversation.totals.costUSD,
+          firstResponseSigned: evidence.firstResponseSigned,
+          mode,
+          model:
+            process.env.GEMINI_TOOL_LOOP_TEST_MODEL ??
+            'gemini-3.1-flash-lite',
+          provider: 'google',
+          providerCalls: evidence.providerCalls,
+          replaySigned: evidence.replaySigned,
+          toolExecutions: evidence.toolExecutions,
+        }),
+      );
+      expect(publicStreamJson).not.toMatch(/thought_?signature/i);
+      expect(JSON.stringify(conversation.history)).not.toMatch(
+        /thought_?signature/i,
+      );
+    },
+    180_000,
+  );
+
   it('auto-executes tools inside Conversation and preserves history', async () => {
     requireLiveEnv('OPENAI_API_KEY');
     const store = new InMemorySessionStore<ConversationSnapshot>();
@@ -229,11 +322,15 @@ liveDescribe('live-real sessions, tools, and context', () => {
 
     const listA = await apiA.handle(jsonRequest('GET', '/sessions'));
     const listABody = await listA.json();
-    expect(listABody.sessions.items.some((item: { sessionId: string }) => item.sessionId === sessionId)).toBe(
-      true,
-    );
+    expect(
+      listABody.sessions.items.some(
+        (item: { sessionId: string }) => item.sessionId === sessionId,
+      ),
+    ).toBe(true);
 
-    const getB = await apiB.handle(jsonRequest('GET', `/sessions/${sessionId}`));
+    const getB = await apiB.handle(
+      jsonRequest('GET', `/sessions/${sessionId}`),
+    );
     expect(getB.status).toBe(404);
 
     const messages = await apiA.handle(
@@ -313,9 +410,9 @@ liveDescribe('live-real sessions, tools, and context', () => {
       },
     });
     const summarized = await summarising.trim(messages, {});
-    expect(summarized.some((message) => message.metadata?.summary === true)).toBe(
-      true,
-    );
+    expect(
+      summarized.some((message) => message.metadata?.summary === true),
+    ).toBe(true);
     expect(summarized.some((message) => message.pinned)).toBe(true);
 
     const failing = new SummarisationStrategy({
@@ -325,7 +422,9 @@ liveDescribe('live-real sessions, tools, and context', () => {
         throw new Error('summarizer failed');
       },
     });
-    await expect(failing.trim(messages, {})).rejects.toThrow('summarizer failed');
+    await expect(failing.trim(messages, {})).rejects.toThrow(
+      'summarizer failed',
+    );
   }, 180_000);
 
   it('loads older snapshots that are missing reasoning totals safely', () => {
@@ -354,6 +453,78 @@ function messageHasToolResult(message: CanonicalMessage): boolean {
     Array.isArray(message.content) &&
     message.content.some((part) => part.type === 'tool_result')
   );
+}
+
+function createRedactedGeminiFetchProbe(evidence: {
+  firstResponseSigned: boolean;
+  providerCalls: number;
+  replaySigned: boolean;
+}): typeof fetch {
+  return async (input, init) => {
+    evidence.providerCalls += 1;
+    if (typeof init?.body === 'string' && evidence.providerCalls > 1) {
+      const request = JSON.parse(init.body) as {
+        contents?: Array<{ parts?: Array<Record<string, unknown>> }>;
+      };
+      evidence.replaySigned =
+        request.contents?.some((content) =>
+          content.parts?.some(
+            (part) =>
+              'functionCall' in part &&
+              ('thoughtSignature' in part || 'thought_signature' in part),
+          ),
+        ) ?? false;
+    }
+
+    const response = await fetch(input, init);
+    if (evidence.providerCalls === 1 && response.ok) {
+      const clone = response.clone();
+      const contentType = clone.headers.get('content-type') ?? '';
+      const payloads: unknown[] = [];
+      if (contentType.includes('text/event-stream')) {
+        const text = await clone.text();
+        for (const line of text.split('\n')) {
+          if (!line.startsWith('data:')) {
+            continue;
+          }
+          const data = line.slice(5).trim();
+          if (data && data !== '[DONE]') {
+            payloads.push(JSON.parse(data));
+          }
+        }
+      } else {
+        payloads.push(await clone.json());
+      }
+      evidence.firstResponseSigned = payloads.some((payload) =>
+        responseHasSignedToolPart(payload),
+      );
+    }
+    return response;
+  };
+}
+
+function responseHasSignedToolPart(value: unknown): boolean {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const candidates = (value as { candidates?: unknown }).candidates;
+  if (!Array.isArray(candidates)) {
+    return false;
+  }
+  return candidates.some((candidate) => {
+    const parts = (candidate as { content?: { parts?: unknown } }).content
+      ?.parts;
+    return (
+      Array.isArray(parts) &&
+      parts.some(
+        (part) =>
+          part !== null &&
+          typeof part === 'object' &&
+          ('functionCall' in part || (part as { thought?: boolean }).thought) &&
+          ('thoughtSignature' in part || 'thought_signature' in part),
+      )
+    );
+  });
 }
 
 function jsonRequest(method: string, path: string, body?: unknown): Request {

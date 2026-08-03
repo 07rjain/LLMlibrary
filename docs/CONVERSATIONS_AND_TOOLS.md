@@ -174,6 +174,13 @@ When the model returns a tool call:
 4. It sends the updated history back to the model.
 5. It repeats until the model stops or `maxToolRounds` is reached.
 
+Gemini models may require opaque thought signatures from assistant tool-call
+content to be replayed with the tool result. `Conversation` handles this for
+both `send()` and `sendStream()` without adding signatures or hidden thought
+text to canonical history, public tool arguments, or stream events. Replay
+state is provider- and exact-model-bound, so another provider or model never
+receives it.
+
 If the loop exceeds `maxToolRounds`, the library throws `MaxToolRoundsError`.
 
 ## Control Tool Behavior

@@ -108,6 +108,114 @@ describe('SessionApi', () => {
     expect(persisted?.snapshot.version).toBe(2);
   });
 
+  it('reindexes private Gemini replay state across compact and fork without exposing it', async () => {
+    const store = new InMemorySessionStore<ConversationSnapshot>();
+    const signature = 'c2Vzc2lvbi1zaWduYXR1cmU=';
+    const snapshot: ConversationSnapshot = {
+      createdAt: '2026-08-03T00:00:00.000Z',
+      messages: [
+        { content: 'old', role: 'user' },
+        {
+          content: [
+            {
+              args: { value: 7 },
+              id: 'gemini_tool_0_0_add_one',
+              name: 'add_one',
+              type: 'tool_call',
+            },
+          ],
+          role: 'assistant',
+        },
+        {
+          content: [
+            {
+              name: 'add_one',
+              result: { value: 8 },
+              toolCallId: 'gemini_tool_0_0_add_one',
+              type: 'tool_result',
+            },
+          ],
+          role: 'user',
+        },
+      ],
+      model: 'gemini-3.1-flash-lite',
+      provider: 'google',
+      providerReplayState: {
+        entries: [
+          {
+            calls: [
+              {
+                args: { value: 7 },
+                canonicalId: 'gemini_tool_0_0_add_one',
+                name: 'add_one',
+                partIndex: 0,
+              },
+            ],
+            messageIndex: 1,
+            model: 'gemini-3.1-flash-lite',
+            parts: [
+              {
+                functionCall: { args: { value: 7 }, name: 'add_one' },
+                thoughtSignature: signature,
+              },
+            ],
+            provider: 'google',
+            version: 1,
+          },
+        ],
+        version: 1,
+      },
+      sessionId: 'gemini-sidecar-session',
+      totalCachedTokens: 0,
+      totalCostUSD: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      updatedAt: '2026-08-03T00:00:00.000Z',
+      version: 0,
+    };
+    await store.set(snapshot.sessionId, snapshot, { expectedVersion: 0 });
+    const api = createSessionApi({
+      client: LLMClient.mock(),
+      sessionStore: store,
+    });
+
+    const compact = await api.handle(
+      jsonRequest(
+        `https://example.test/sessions/${snapshot.sessionId}/compact`,
+        'POST',
+        { maxMessages: 2 },
+      ),
+    );
+    expect(compact.status).toBe(200);
+    expect(JSON.stringify(await compact.json())).not.toContain(signature);
+    const compacted = await store.get(snapshot.sessionId);
+    expect(
+      (
+        compacted?.snapshot.providerReplayState as {
+          entries: Array<{ messageIndex: number }>;
+        }
+      ).entries[0]!.messageIndex,
+    ).toBe(0);
+
+    const fork = await api.handle(
+      jsonRequest(
+        `https://example.test/sessions/${snapshot.sessionId}/fork`,
+        'POST',
+        { fromMessageIndex: 0, newSessionId: 'gemini-sidecar-fork' },
+      ),
+    );
+    expect(fork.status).toBe(201);
+    expect(JSON.stringify(await fork.json())).not.toContain(signature);
+    const forked = await store.get('gemini-sidecar-fork');
+    expect(
+      (
+        forked?.snapshot.providerReplayState as {
+          entries: Array<{ messageIndex: number }>;
+        }
+      ).entries[0]!.messageIndex,
+    ).toBe(0);
+  });
+
   it('maps stale guarded mutations to a sanitized HTTP 409', async () => {
     const store = new InMemorySessionStore<ConversationSnapshot>();
     const conversation = await LLMClient.mock().conversation({

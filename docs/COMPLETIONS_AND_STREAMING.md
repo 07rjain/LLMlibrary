@@ -232,7 +232,7 @@ await client.complete({
 });
 ```
 
-Reasoning and thinking tokens can increase latency and cost, and they may consume part of the provider's output budget. The library exposes provider-reported counts as `usage.reasoningTokens` when the upstream response includes them. Gemini reports thought tokens separately from candidate output tokens, so they are included in `usage.costUSD` at the model output-token rate. OpenAI reports reasoning tokens inside output usage, so they are not billed a second time by the library. Explicit Gemini `thinking.budgetTokens` values are also included in `budgetUsd` preflight estimates. Reasoning summaries, Anthropic thinking blocks, and Gemini thoughts are not merged into `response.text` by default. Raw Gemini provider payloads may retain thought parts and signatures, but normalized visible content, conversation history, and session output never expose them.
+Reasoning and thinking tokens can increase latency and cost, and they may consume part of the provider's output budget. The library exposes provider-reported counts as `usage.reasoningTokens` when the upstream response includes them. Gemini reports thought tokens separately from candidate output tokens, so they are included in `usage.costUSD` at the model output-token rate. OpenAI reports reasoning tokens inside output usage, so they are not billed a second time by the library. Explicit Gemini `thinking.budgetTokens` values are also included in `budgetUsd` preflight estimates. Reasoning summaries, Anthropic thinking blocks, and Gemini thoughts are not merged into `response.text` by default. Raw Gemini provider payloads may retain thought parts and signatures, but normalized visible content, conversation history, stream events, and session output never expose them. For Gemini automatic tool loops, the client privately preserves the selected model content and its opaque thought signatures and returns it only to the same Google model on the next tool round. Applications should not extract, log, copy, or synthesize these provider values.
 
 ## Message Shapes
 
@@ -349,7 +349,9 @@ import {
   openaiCountTokens,
 } from 'unified-llm-client/utils';
 
-const messages = [{ role: 'user', content: 'Estimate token count for this request.' }];
+const messages = [
+  { role: 'user', content: 'Estimate token count for this request.' },
+];
 
 console.log(estimateMessageTokens(messages));
 console.log(formatCost(0.0132));

@@ -112,6 +112,14 @@ client-influenced snapshot fields. Applications should pass current trusted
 policy when restoring conversations and should avoid importing snapshots from
 untrusted sources without validation.
 
+Snapshots may include opaque `providerReplayState` used to continue provider
+tool loops. Treat it as sensitive provider state: preserve it in trusted stores,
+exclude it from logs and client-facing APIs, and never construct or modify it.
+The library validates its size and binding on restore, but only the originating
+provider can authenticate an otherwise well-formed opaque signature. Invalid
+Gemini signatures fail as non-retryable provider requests and are not forwarded
+to fallback providers or different models.
+
 Snapshot stores should be protected with normal data-store controls:
 
 - Tenant scoping in keys or composite database constraints

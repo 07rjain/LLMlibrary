@@ -13,9 +13,12 @@ compatibility retained is an explicitly versioned (`version: 2`)
 unversioned results use v3 semantics and are rejected before tool execution.
 The legacy alias is never forwarded to consumers.
 
-Raw Gemini provider payloads may retain thought parts and thought signatures
-for diagnostics and future replay support. Normalized visible text, content,
-conversation history, and session output never expose those thought parts.
+Raw Gemini provider payloads may retain thought parts and thought signatures.
+Normalized visible text, content, conversation history, stream events, and
+session output never expose them. When a streamed Gemini tool call requires
+that state, it is assembled privately through the terminal `done` event and
+replayed only inside the same-model Google conversation tool loop. No public v3
+event field carries a thought signature.
 
 ```ts
 for await (const chunk of client.stream({

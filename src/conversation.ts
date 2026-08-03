@@ -13,6 +13,13 @@ import {
   throwIfAborted,
 } from './stream-control.js';
 import { validateAndCloneMetadata } from './json-metadata.js';
+import {
+  cloneMessagesWithGoogleReplayState,
+  copyGoogleReplayState,
+  copyGoogleReplayStatesByMessage,
+  restoreGoogleReplayState,
+  serializeGoogleReplayState,
+} from './internal/provider-replay-state.js';
 import { validateAndCloneCanonicalMessages } from './message-validation.js';
 import { validateAndCloneTools } from './tool-validation.js';
 import { formatCost } from './utils/cost.js';
@@ -184,6 +191,8 @@ export interface ConversationSnapshot {
   model?: string;
   provider?: CanonicalProvider;
   providerOptions?: ProviderOptions;
+  /** @internal Opaque provider continuity state persisted by trusted stores. */
+  providerReplayState?: JsonObject;
   responseFormat?: ResponseFormat;
   sessionId: string;
   system?: string;
@@ -508,6 +517,7 @@ export class Conversation {
       totalReasoningTokens: this.totalReasoningTokens,
       updatedAt: this.updatedAt,
     };
+    const providerReplayState = serializeGoogleReplayState(current.messages);
     return {
       ...(this.budgetUsd !== undefined ? { budgetUsd: this.budgetUsd } : {}),
       createdAt: this.createdAt,
@@ -524,6 +534,7 @@ export class Conversation {
       ...(this.providerOptions !== undefined
         ? { providerOptions: cloneValue(this.providerOptions) }
         : {}),
+      ...(providerReplayState !== undefined ? { providerReplayState } : {}),
       ...(this.responseFormat !== undefined
         ? { responseFormat: cloneValue(this.responseFormat) }
         : {}),
@@ -702,6 +713,10 @@ export class Conversation {
       restoredSnapshot.totalReasoningTokens ?? 0;
     conversation.updatedAt = restoredSnapshot.updatedAt;
     conversation.version = restoredSnapshot.version ?? 0;
+    restoreGoogleReplayState(
+      conversation.messages,
+      restoredSnapshot.providerReplayState,
+    );
     return conversation;
   }
 
@@ -762,6 +777,7 @@ export class Conversation {
     const trimmed = validateAndCloneCanonicalMessages(
       await this.contextManager.trim(trimMessages, { ...context }),
     );
+    copyGoogleReplayStatesByMessage(messages, trimmed);
     if (trimmed.length !== messages.length) {
       this.onCompaction?.({
         afterCount: trimmed.length,
@@ -934,13 +950,17 @@ export class Conversation {
     let sequence = 0;
     let budgetWarningIssued = false;
 
-    const decorate = (chunk: StreamChunk): StreamChunk => ({
-      ...chunk,
-      ...(requestId !== undefined ? { requestId } : {}),
-      sequence: ++sequence,
-      timestamp: new Date().toISOString(),
-      version: chunk.version ?? STREAM_EVENT_VERSION,
-    });
+    const decorate = (chunk: StreamChunk): StreamChunk => {
+      const decorated = {
+        ...chunk,
+        ...(requestId !== undefined ? { requestId } : {}),
+        sequence: ++sequence,
+        timestamp: new Date().toISOString(),
+        version: chunk.version ?? STREAM_EVENT_VERSION,
+      } as StreamChunk;
+      copyGoogleReplayState(chunk, decorated);
+      return decorated;
+    };
 
     while (true) {
       throwIfAborted(signal);
@@ -1006,6 +1026,7 @@ export class Conversation {
       let text = '';
       let finishReason: CanonicalResponse['finishReason'] | undefined;
       let usage: UsageMetrics | undefined;
+      let replayDoneChunk: StreamChunk | undefined;
       let budgetSkipped = false;
 
       try {
@@ -1123,6 +1144,7 @@ export class Conversation {
 
           finishReason = chunk.finishReason;
           usage = chunk.usage;
+          replayDoneChunk = chunk;
         }
       } catch (error) {
         if (error instanceof UsageLoggerError && error.receipt.usage) {
@@ -1157,10 +1179,14 @@ export class Conversation {
 
       aggregateUsage = accumulateUsage(aggregateUsage, usage);
       if (!budgetSkipped) {
-        workingMessages = [
-          ...workingMessages,
-          buildAssistantStreamMessage(text, pendingToolCalls),
-        ];
+        const assistantMessage = buildAssistantStreamMessage(
+          text,
+          pendingToolCalls,
+        );
+        if (replayDoneChunk) {
+          copyGoogleReplayState(replayDoneChunk, assistantMessage);
+        }
+        workingMessages = [...workingMessages, assistantMessage];
       }
 
       const toolCalls = buildToolCallsFromPendingToolCalls(pendingToolCalls);
@@ -1363,7 +1389,7 @@ export class Conversation {
     usage: UsageMetrics;
   }): Promise<void> {
     const state: ConversationState = {
-      messages: cloneValue(result.messages),
+      messages: cloneMessagesWithGoogleReplayState(result.messages),
       model: result.model ?? this.model,
       provider: result.provider ?? this.provider,
       totalCachedTokens: this.totalCachedTokens + result.usage.cachedTokens,
@@ -1823,28 +1849,29 @@ function resolveToolChoiceForRound(
 }
 
 function buildAssistantMessage(response: CanonicalResponse): CanonicalMessage {
+  let message: CanonicalMessage;
   if (response.content.length === 0) {
-    return {
+    message = {
       content: response.text,
       role: 'assistant',
     };
-  }
-
-  if (
+  } else if (
     response.content.length === 1 &&
     response.content[0]?.type === 'text' &&
     response.toolCalls.length === 0
   ) {
-    return {
+    message = {
       content: response.text,
       role: 'assistant',
     };
+  } else {
+    message = {
+      content: cloneValue(response.content),
+      role: 'assistant',
+    };
   }
-
-  return {
-    content: cloneValue(response.content),
-    role: 'assistant',
-  };
+  copyGoogleReplayState(response, message);
+  return message;
 }
 
 function buildAssistantStreamMessage(
