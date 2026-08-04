@@ -71,7 +71,7 @@
     "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
     "inputPrice": 10,
     "outputPrice": 50,
-    "lastUpdated": "2026-06-12"
+    "lastUpdated": "2026-08-04"
   },
   "gpt-5.5": {
     "provider": "openai",
@@ -82,7 +82,7 @@
     "inputPrice": 5,
     "outputPrice": 30,
     "cacheReadPrice": 0.5,
-    "lastUpdated": "2026-06-12"
+    "lastUpdated": "2026-08-04"
   },
   "gpt-5.6-luna": {
     "provider": "openai",
@@ -239,7 +239,7 @@
     "inputPrice": 1.5,
     "outputPrice": 9,
     "cacheReadPrice": 0.15,
-    "lastUpdated": "2026-06-12"
+    "lastUpdated": "2026-08-04"
   },
   "gemini-3.6-flash": {
     "provider": "google",
@@ -272,7 +272,7 @@
     "inputPrice": 2,
     "outputPrice": 12,
     "cacheReadPrice": 0.2,
-    "lastUpdated": "2026-06-15"
+    "lastUpdated": "2026-08-04"
   },
   "gemini-3.1-flash-lite": {
     "provider": "google",
@@ -302,7 +302,7 @@
       "recommended": [768, 1536, 3072]
     },
     "supportedInputModalities": ["audio", "document", "image", "text"],
-    "lastUpdated": "2026-06-15"
+    "lastUpdated": "2026-08-04"
   },
   "gpt-4o-mini-tts": {
     "provider": "openai",
