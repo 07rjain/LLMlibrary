@@ -418,7 +418,10 @@ describe('PostgresSessionStore', () => {
       version: 1,
     };
     pool.queueRows([row]);
-    const store = new PostgresSessionStore<TestSnapshot>({ pool });
+    const store = new PostgresSessionStore<TestSnapshot>({
+      now: () => new Date('2026-04-15T10:00:00.000Z'),
+      pool,
+    });
 
     const created = await store.set('cas-session', snapshot('created'), {
       expectedVersion: 0,
@@ -433,7 +436,24 @@ describe('PostgresSessionStore', () => {
       expectedVersion: 1,
     });
     expect(updated.meta.version).toBe(2);
-    expect(pool.queries.at(-1)?.text).toContain('AND version = $10');
+    expect(pool.queries.at(-1)?.text).toContain('updated_at = $8');
+    expect(pool.queries.at(-1)?.text).toContain('AND version = $9');
+    expect(pool.queries.at(-1)?.values).toEqual([
+      '',
+      'cas-session',
+      JSON.stringify({
+        marker: 'updated',
+        messages: [{ content: 'updated', role: 'user' }],
+        totalCostUSD: 0,
+        version: 2,
+      }),
+      1,
+      null,
+      null,
+      0,
+      '2026-04-15T10:00:00.000Z',
+      1,
+    ]);
 
     await expect(
       store.set('cas-session', snapshot('stale'), { expectedVersion: 1 }),

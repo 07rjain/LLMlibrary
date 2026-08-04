@@ -598,7 +598,17 @@ export class PostgresSessionStore<
         values,
       );
     } else if (options.expectedVersion !== undefined) {
-      values.push(options.expectedVersion);
+      const updateValues = [
+        tenantId,
+        sessionId,
+        JSON.stringify(withSnapshotVersion(snapshot, nextVersion)),
+        snapshot.messages.length,
+        options.model ?? null,
+        options.provider ?? null,
+        snapshot.totalCostUSD,
+        timestamp,
+        options.expectedVersion,
+      ];
       result = await pool.query<PostgresSessionStoreRow<TSnapshot>>(
         `UPDATE ${this.qualifiedTableName()}
          SET snapshot = $3::jsonb,
@@ -606,11 +616,11 @@ export class PostgresSessionStore<
              model = COALESCE(model, $5),
              provider = COALESCE(provider, $6),
              total_cost_usd = $7,
-             updated_at = $9,
+             updated_at = $8,
              version = version + 1
-         WHERE tenant_id = $1 AND session_id = $2 AND version = $10
+         WHERE tenant_id = $1 AND session_id = $2 AND version = $9
          RETURNING session_id, tenant_id, snapshot, message_count, model, provider, total_cost_usd, created_at, updated_at, version`,
-        values,
+        updateValues,
       );
     } else {
       result = await pool.query<PostgresSessionStoreRow<TSnapshot>>(
