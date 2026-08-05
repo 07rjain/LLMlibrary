@@ -8,6 +8,7 @@ import {
   expectNoSecretLeak,
   hasEnv,
   liveClient,
+  liveTemperature,
   liveRealEnabled,
   providerModels,
   requireLiveEnv,
@@ -59,7 +60,7 @@ liveDescribe('live-real provider adapters', () => {
       messages: [{ content: 'Reply with exactly: OPENAI_REAL_OK', role: 'user' }],
       model,
       provider: 'openai',
-      temperature: 0,
+      ...liveTemperature('openai', model),
     });
     assertCanonicalResponse(completion, 'openai');
     expect(completion.text).toContain('OPENAI_REAL_OK');
@@ -70,7 +71,7 @@ liveDescribe('live-real provider adapters', () => {
         messages: [{ content: 'Reply with exactly: OPENAI_STREAM_OK', role: 'user' }],
         model,
         provider: 'openai',
-        temperature: 0,
+        ...liveTemperature('openai', model),
       }),
     );
     expect(stream.done).toBeDefined();
@@ -88,7 +89,7 @@ liveDescribe('live-real provider adapters', () => {
       ],
       model,
       provider: 'openai',
-      temperature: 0,
+      ...liveTemperature('openai', model),
       toolChoice: { name: 'get_weather', type: 'tool' },
       tools: [weatherTool()],
     });
@@ -114,7 +115,7 @@ liveDescribe('live-real provider adapters', () => {
       ],
       model,
       provider: 'openai',
-      temperature: 0,
+      ...liveTemperature('openai', model),
     });
     assertCanonicalResponse(vision, 'openai');
     expect(vision.text.length).toBeGreaterThan(0);
@@ -329,7 +330,7 @@ liveDescribe('live-real provider adapters', () => {
       ],
       model: providerModels.openai,
       provider: 'openai',
-      temperature: 0,
+      ...liveTemperature('openai', providerModels.openai),
     });
     stream.cancel('live-real cancellation assertion');
     expect(stream.signal.aborted).toBe(true);

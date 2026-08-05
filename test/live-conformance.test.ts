@@ -6,6 +6,7 @@ import {
   collectStream,
   hasEnv,
   liveClient,
+  liveTemperature,
   providerModels,
   requireLiveEnv,
   weatherTool,
@@ -34,7 +35,7 @@ conformanceDescribe('live provider conformance', () => {
         messages: [{ content: `Reply with ${provider.name.toUpperCase()}_CONFORMANCE_OK.`, role: 'user' }],
         model: provider.model,
         provider: provider.name,
-        temperature: 0,
+        ...liveTemperature(provider.name, provider.model),
       });
       assertCanonicalResponse(completion, provider.name);
       assertBillableUsage(completion.usage);
@@ -46,7 +47,7 @@ conformanceDescribe('live provider conformance', () => {
           messages: [{ content: `Reply with ${provider.name.toUpperCase()}_STREAM_OK.`, role: 'user' }],
           model: provider.model,
           provider: provider.name,
-          temperature: 0,
+          ...liveTemperature(provider.name, provider.model),
         }),
       );
       expect(stream.done).toBeDefined();
@@ -67,7 +68,7 @@ conformanceDescribe('live provider conformance', () => {
         messages: [{ content: 'Use get_weather for Paris. Do not answer from memory.', role: 'user' }],
         model: provider.model,
         provider: provider.name,
-        temperature: 0,
+        ...liveTemperature(provider.name, provider.model),
         toolChoice: { name: 'get_weather', type: 'tool' },
         tools: [weatherTool()],
       });

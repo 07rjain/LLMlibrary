@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { expect } from 'vitest';
 
 import { LLMClient } from '../../src/client.js';
+import { getLiveModelMatrix, liveTemperature } from '../live-models.js';
 import type {
   CanonicalProvider,
   CanonicalResponse,
@@ -17,13 +18,17 @@ const ENV_PATH = resolve(process.cwd(), '.env');
 
 export const liveRealEnabled = process.env.LIVE_REAL_TESTS === '1';
 
+const liveModels = getLiveModelMatrix();
+
 export const providerModels = {
-  anthropic: process.env.LIVE_REAL_ANTHROPIC_MODEL ?? 'claude-haiku-4-5',
-  gemini: process.env.LIVE_REAL_GEMINI_MODEL ?? 'gemini-2.5-flash',
+  anthropic: liveModels.anthropic,
+  gemini: liveModels.gemini,
   geminiThinking:
     process.env.LIVE_REAL_GEMINI_THINKING_MODEL ?? 'gemini-2.5-flash',
-  openai: process.env.LIVE_REAL_OPENAI_MODEL ?? 'gpt-4o-mini',
+  openai: liveModels.openai,
 } as const;
+
+export { liveTemperature };
 
 export const tinyPngBase64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC';

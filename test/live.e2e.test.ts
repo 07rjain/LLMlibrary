@@ -1,9 +1,11 @@
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { LLMClient } from '../src/client.js';
+import { getLiveModelMatrix, liveTemperature } from './live-models.js';
 
 const liveEnabled = process.env.LIVE_TESTS === '1';
 const liveDescribe = liveEnabled ? describe : describe.skip;
+const liveModels = getLiveModelMatrix();
 
 function liveIt(enabled: boolean) {
   return enabled ? it : it.skip;
@@ -25,9 +27,9 @@ liveDescribe('live smoke', () => {
       const response = await client.complete({
         maxTokens: 32,
         messages: [{ content: 'Reply with a short greeting.', role: 'user' }],
-        model: 'gpt-4o-mini',
+        model: liveModels.openai,
         provider: 'openai',
-        temperature: 0,
+        ...liveTemperature('openai', liveModels.openai),
       });
 
       expect(response.provider).toBe('openai');
@@ -43,9 +45,9 @@ liveDescribe('live smoke', () => {
       const response = await client.complete({
         maxTokens: 32,
         messages: [{ content: 'Reply with a short greeting.', role: 'user' }],
-        model: 'claude-haiku-4-5',
+        model: liveModels.anthropic,
         provider: 'anthropic',
-        temperature: 0,
+        ...liveTemperature('anthropic', liveModels.anthropic),
       });
 
       expect(response.provider).toBe('anthropic');
@@ -61,9 +63,9 @@ liveDescribe('live smoke', () => {
       const response = await client.complete({
         maxTokens: 32,
         messages: [{ content: 'Reply with a short greeting.', role: 'user' }],
-        model: 'gemini-2.5-flash',
+        model: liveModels.gemini,
         provider: 'google',
-        temperature: 0,
+        ...liveTemperature('google', liveModels.gemini),
       });
 
       expect(response.provider).toBe('google');

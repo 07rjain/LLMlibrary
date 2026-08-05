@@ -16,6 +16,7 @@ import {
   assertCanonicalResponse,
   collectStream,
   liveClient,
+  liveTemperature,
   liveRealEnabled,
   providerModels,
   requireLiveEnv,
@@ -404,7 +405,7 @@ liveDescribe('live-real sessions, tools, and context', () => {
           ],
           model: providerModels.openai,
           provider: 'openai',
-          temperature: 0,
+          ...liveTemperature('openai', providerModels.openai),
         });
         return response.text;
       },

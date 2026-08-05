@@ -44,7 +44,7 @@ liveDescribe('live-real budgets, usage, retrieval, stores, and security', () => 
       model: providerModels.openai,
       provider: 'openai',
       sessionId: runId('usage_session'),
-      temperature: 0,
+      ...liveTemperature('openai', providerModels.openai),
       tenantId: runId('tenant'),
     });
 
