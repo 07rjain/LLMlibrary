@@ -78,7 +78,7 @@ liveDescribe('live smoke', () => {
     async () => {
       const sessionId = `live_session_${Date.now()}`;
       const client = LLMClient.fromEnv({
-        defaultModel: 'gpt-4o',
+        defaultModel: liveModels.openai,
       });
       const store = client.getSessionStore();
       if (!store) {

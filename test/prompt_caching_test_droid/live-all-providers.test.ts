@@ -13,9 +13,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { LLMClient } from '../../src/client.js';
+import { getLiveModelMatrix, liveTemperature } from '../live-models.js';
 import { buildLargePrefix, loadEnv, log, summarize } from './helpers.js';
 
 loadEnv();
+const liveModels = getLiveModelMatrix();
 
 const liveEnabled = process.env.LIVE_TESTS === '1';
 const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
@@ -43,9 +45,9 @@ describe('Part 1 — Basic completions (no caching)', () => {
     const res = await client.complete({
       maxTokens: 32,
       messages: [{ content: 'Reply with exactly: OPENAI_OK', role: 'user' }],
-      model: 'gpt-4o-mini',
+      model: liveModels.openai,
       provider: 'openai',
-      temperature: 0,
+      ...liveTemperature('openai', liveModels.openai),
     });
 
     log('openai-basic-complete', summarize(res));
@@ -65,9 +67,9 @@ describe('Part 1 — Basic completions (no caching)', () => {
     for await (const chunk of client.stream({
       maxTokens: 32,
       messages: [{ content: 'Count to three.', role: 'user' }],
-      model: 'gpt-4o-mini',
+      model: liveModels.openai,
       provider: 'openai',
-      temperature: 0,
+      ...liveTemperature('openai', liveModels.openai),
     })) {
       if (chunk.type === 'text-delta') chunks.push(chunk.delta);
       if (chunk.type === 'done') doneChunk = chunk;
@@ -84,9 +86,9 @@ describe('Part 1 — Basic completions (no caching)', () => {
     const res = await client.complete({
       maxTokens: 64,
       messages: [{ content: 'What is the weather in Berlin?', role: 'user' }],
-      model: 'gpt-4o-mini',
+      model: liveModels.openai,
       provider: 'openai',
-      temperature: 0,
+      ...liveTemperature('openai', liveModels.openai),
       toolChoice: { type: 'any' },
       tools: [
         {
@@ -117,7 +119,7 @@ describe('Part 1 — Basic completions (no caching)', () => {
       res = await client.complete({
         maxTokens: 32,
         messages: [{ content: 'Reply with exactly: ANTHROPIC_OK', role: 'user' }],
-        model: 'claude-haiku-4-5',
+        model: liveModels.anthropic,
         provider: 'anthropic',
         temperature: 0,
       });
@@ -147,7 +149,7 @@ describe('Part 1 — Basic completions (no caching)', () => {
       for await (const chunk of client.stream({
         maxTokens: 32,
         messages: [{ content: 'Count to three.', role: 'user' }],
-        model: 'claude-haiku-4-5',
+        model: liveModels.anthropic,
         provider: 'anthropic',
         temperature: 0,
       })) {
@@ -175,7 +177,7 @@ describe('Part 1 — Basic completions (no caching)', () => {
       res = await client.complete({
         maxTokens: 64,
         messages: [{ content: 'What is the weather in London?', role: 'user' }],
-        model: 'claude-haiku-4-5',
+        model: liveModels.anthropic,
         provider: 'anthropic',
         temperature: 0,
         toolChoice: { type: 'any' },
@@ -213,9 +215,9 @@ describe('Part 1 — Basic completions (no caching)', () => {
     const res = await client.complete({
       maxTokens: 32,
       messages: [{ content: 'Reply with exactly: GEMINI_OK', role: 'user' }],
-      model: 'gemini-2.5-flash',
+      model: liveModels.gemini,
       provider: 'google',
-      temperature: 0,
+      ...liveTemperature('google', liveModels.gemini),
     });
 
     log('gemini-basic-complete', summarize(res));
@@ -233,9 +235,9 @@ describe('Part 1 — Basic completions (no caching)', () => {
     for await (const chunk of client.stream({
       maxTokens: 32,
       messages: [{ content: 'Count to three.', role: 'user' }],
-      model: 'gemini-2.5-flash',
+      model: liveModels.gemini,
       provider: 'google',
-      temperature: 0,
+      ...liveTemperature('google', liveModels.gemini),
     })) {
       if (chunk.type === 'text-delta') chunks.push(chunk.delta);
       if (chunk.type === 'done') doneChunk = chunk;

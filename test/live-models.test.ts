@@ -27,6 +27,13 @@ describe('live model matrix', () => {
       getLiveModelMatrix({ LIVE_REAL_OPENAI_MODEL: 'legacy-openai' }).openai,
     ).toBe('legacy-openai');
     expect(
+      getLiveModelMatrix({ LIVE_REAL_ANTHROPIC_MODEL: 'legacy-anthropic' })
+        .anthropic,
+    ).toBe('legacy-anthropic');
+    expect(
+      getLiveModelMatrix({ LIVE_REAL_GEMINI_MODEL: 'legacy-gemini' }).gemini,
+    ).toBe('legacy-gemini');
+    expect(
       getLiveModelMatrix({
         LIVE_REAL_OPENAI_MODEL: 'legacy-openai',
         LIVE_OPENAI_MODEL: 'explicit-openai',

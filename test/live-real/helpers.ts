@@ -18,6 +18,8 @@ const ENV_PATH = resolve(process.cwd(), '.env');
 
 export const liveRealEnabled = process.env.LIVE_REAL_TESTS === '1';
 
+loadDotEnvSafely();
+
 const liveModels = getLiveModelMatrix();
 
 export const providerModels = {
@@ -32,8 +34,6 @@ export { liveTemperature };
 
 export const tinyPngBase64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
-
-loadDotEnvSafely();
 
 export function hasEnv(name: string): boolean {
   return typeof process.env[name] === 'string' && process.env[name]!.length > 0;

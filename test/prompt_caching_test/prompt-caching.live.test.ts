@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { LLMClient } from '../../src/client.js';
+import { getLiveModelMatrix, liveTemperature } from '../live-models.js';
 
 import {
   buildCachedPrefix,
@@ -10,6 +11,7 @@ import {
 } from './helpers.js';
 
 loadPromptCachingEnv();
+const liveModels = getLiveModelMatrix();
 
 const liveEnabled = process.env.LIVE_TESTS === '1';
 const liveDescribe = liveEnabled ? describe : describe.skip;
@@ -44,7 +46,7 @@ liveDescribe('prompt caching live', () => {
               role: 'user',
             },
           ],
-          model: 'gpt-4o-mini',
+          model: liveModels.openai,
           provider: 'openai',
           providerOptions: {
             openai: {
@@ -54,7 +56,7 @@ liveDescribe('prompt caching live', () => {
               },
             },
           },
-          temperature: 0,
+          ...liveTemperature('openai', liveModels.openai),
         });
 
         attempts.push(summarizeResponse(response));
@@ -99,14 +101,14 @@ liveDescribe('prompt caching live', () => {
               role: 'user',
             },
           ],
-          model: 'claude-haiku-4-5',
+          model: liveModels.anthropic,
           provider: 'anthropic',
           providerOptions: {
             anthropic: {
               cacheControl: { type: 'ephemeral' },
             },
           },
-          temperature: 0,
+          ...liveTemperature('anthropic', liveModels.anthropic),
         });
 
       const first = summarizeResponse(await request());
