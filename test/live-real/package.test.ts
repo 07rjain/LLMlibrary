@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -16,20 +17,16 @@ import { liveRealEnabled } from './helpers.js';
 
 const liveDescribe = liveRealEnabled ? describe : describe.skip;
 
-const subpaths = [
-  'unified-llm-client',
-  'unified-llm-client/agent-files',
-  'unified-llm-client/client',
-  'unified-llm-client/chunking',
-  'unified-llm-client/errors',
-  'unified-llm-client/models',
-  'unified-llm-client/providers/openai',
-  'unified-llm-client/providers/anthropic',
-  'unified-llm-client/providers/gemini',
-  'unified-llm-client/retrieval',
-  'unified-llm-client/session-api',
-  'unified-llm-client/utils',
-] as const;
+const packageJson = JSON.parse(
+  readFileSync(join(process.cwd(), 'package.json'), 'utf8'),
+) as { exports?: Record<string, unknown> };
+const subpaths = Object.keys(packageJson.exports ?? {}).map((key) =>
+  key === '.' ? 'unified-llm-client' : `unified-llm-client${key.slice(1)}`,
+);
+
+if (subpaths.includes('#provider-runtime')) {
+  throw new Error('The private provider runtime must not be a package export.');
+}
 
 liveDescribe('live-real package exports', () => {
   const tempDirs: string[] = [];
@@ -114,22 +111,42 @@ ${subpaths.map((_path, index) => `if (!mod${index}) throw new Error('missing ${i
     writeFileSync(
       join(temp, 'consumer.ts'),
       `import { LLMClient, InMemorySessionStore, type ConversationSnapshot } from 'unified-llm-client';
-import { createSessionApi } from 'unified-llm-client/session-api';
-import { ModelRegistry } from 'unified-llm-client/models';
-import { OpenAIAdapter } from 'unified-llm-client/providers/openai';
+import { AgentFilesError, type AgentInstructions } from 'unified-llm-client/agent-files';
+import { LLMClient as ClientEntry } from 'unified-llm-client/client';
+import { retrieveAndComplete, type RetrieveAndCompleteResult } from 'unified-llm-client/chatbot';
+import { chunkText, type TextChunk } from 'unified-llm-client/chunking';
+import { LLMError } from 'unified-llm-client/errors';
+import { ModelRegistry, type ModelRegistryOptions } from 'unified-llm-client/models';
+import { redactPII, type PIIRedactionResult } from 'unified-llm-client/pii';
 import { AnthropicAdapter } from 'unified-llm-client/providers/anthropic';
 import { GeminiAdapter } from 'unified-llm-client/providers/gemini';
-import { LLMError } from 'unified-llm-client/errors';
+import { OpenAIAdapter } from 'unified-llm-client/providers/openai';
+import { createDenseRetriever, type RetrievalResult } from 'unified-llm-client/retrieval';
+import { createSessionApi } from 'unified-llm-client/session-api';
+import { RedisSessionStore, type SessionMeta } from 'unified-llm-client/session-store';
 import { formatCost } from 'unified-llm-client/utils';
 
 const client = LLMClient.mock();
 const store = new InMemorySessionStore<ConversationSnapshot>();
 createSessionApi({ client, sessionStore: store });
-new ModelRegistry();
-LLMError;
-OpenAIAdapter;
-AnthropicAdapter;
-GeminiAdapter;
+const registryOptions: ModelRegistryOptions = {};
+new ModelRegistry(undefined, registryOptions);
+const agentError = new AgentFilesError('consumer');
+const agentInstructions: AgentInstructions | undefined = undefined;
+const clientEntry: ClientEntry = client;
+const chunks: TextChunk[] = chunkText('consumer');
+const grounded: RetrieveAndCompleteResult | undefined = undefined;
+const modelError = new LLMError('consumer');
+const pii: PIIRedactionResult = redactPII('consumer@example.com');
+const retrieval: RetrievalResult | undefined = undefined;
+const sessionMeta: SessionMeta | undefined = undefined;
+void [agentError, agentInstructions, clientEntry, chunks, grounded, modelError, pii, retrieval, sessionMeta];
+void AnthropicAdapter;
+void GeminiAdapter;
+void OpenAIAdapter;
+void RedisSessionStore;
+void createDenseRetriever;
+void retrieveAndComplete;
 const cost: string = formatCost(0);
 if (!cost) throw new Error('missing cost');
 `,
