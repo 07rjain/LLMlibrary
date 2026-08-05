@@ -132,6 +132,7 @@
     "test:real:sessions": "LIVE_REAL_TESTS=1 vitest run test/live-real/sessions-tools.test.ts",
     "test:real:tools": "LIVE_REAL_TESTS=1 vitest run test/live-real/sessions-tools.test.ts -t \"tools|tool\"",
     "test:real:budgets": "LIVE_REAL_TESTS=1 vitest run test/live-real/budgets-retrieval-security.test.ts",
+    "test:real:speech": "LIVE_REAL_TESTS=1 LIVE_REAL_SPEECH=1 vitest run test/live-real/speech.test.ts",
     "test:real:package": "pnpm build && LIVE_REAL_TESTS=1 vitest run test/live-real/package.test.ts",
     "test:real:health": "node ./scripts/live-real/package-health.mjs",
     "test:prompt-caching:live": "node ./test/prompt_caching_test/run-live.mjs",

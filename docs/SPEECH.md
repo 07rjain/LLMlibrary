@@ -20,6 +20,26 @@ The first implementation supports OpenAI batch speech endpoints.
 
 Unsupported providers throw `ProviderCapabilityError` instead of silently falling back.
 
+## Live OpenAI smoke test
+
+The TTS/STT round-trip is opt-in because it makes two billable OpenAI requests.
+It keeps the generated WAV bytes in memory and feeds them directly from TTS to
+STT; no audio files or binary fixtures are written.
+
+```bash
+LIVE_REAL_TESTS=1 LIVE_REAL_SPEECH=1 OPENAI_API_KEY=... \
+  pnpm vitest run test/live-real/speech.test.ts
+# or:
+pnpm test:real:speech
+```
+
+The defaults are `gpt-4o-mini-tts` and `gpt-4o-mini-transcribe`. Override them
+with `LIVE_REAL_OPENAI_TTS_MODEL` and `LIVE_REAL_OPENAI_STT_MODEL`. The test
+uses bounded duration and budget estimates, requires non-empty normalized TTS
+audio and STT text, and fails visibly on provider, billing, or rate-limit
+errors when explicitly enabled. Usage logs contain only normalized metadata;
+the API key, prompt, transcript, and raw audio are never logged.
+
 ## Text To Speech
 
 ```ts
