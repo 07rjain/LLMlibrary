@@ -431,6 +431,11 @@ liveDescribe('live-real Postgres retrieval lifecycle', () => {
       expect(hybridResults[0]?.lexicalScore).toBeDefined();
     } finally {
       await pool.query(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`);
+      const cleanupCheck = await pool.query<{ dropped: boolean }>(
+        'SELECT to_regnamespace($1) IS NULL AS dropped',
+        [schemaName],
+      );
+      expect(cleanupCheck.rows[0]?.dropped).toBe(true);
       await pool.end();
     }
   }, 120_000);
