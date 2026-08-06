@@ -129,6 +129,7 @@
     "test:conformance:live": "LIVE_CONFORMANCE=1 vitest run test/live-conformance.test.ts",
     "test:real": "LIVE_REAL_TESTS=1 vitest run test/live-real",
     "test:real:providers": "LIVE_REAL_TESTS=1 vitest run test/live-real/providers.test.ts",
+    "test:real:anthropic": "LIVE_REAL_TESTS=1 LIVE_REAL_ANTHROPIC_SMOKE=1 vitest run test/live-real/providers.test.ts -t \"Anthropic\"",
     "test:real:sessions": "LIVE_REAL_TESTS=1 vitest run test/live-real/sessions-tools.test.ts",
     "test:real:tools": "LIVE_REAL_TESTS=1 vitest run test/live-real/sessions-tools.test.ts -t \"tools|tool\"",
     "test:real:budgets": "LIVE_REAL_TESTS=1 vitest run test/live-real/budgets-retrieval-security.test.ts",
