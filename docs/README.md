@@ -194,6 +194,17 @@ const knowledgeStore = createInMemoryKnowledgeStore();
 
 `InMemoryKnowledgeStore` keeps chunks and vectors in process memory and mirrors the main retrieval helper methods, so you can prototype without a database. It is not durable, so production retrieval should still use `PostgresKnowledgeStore`.
 
+The opt-in Postgres retrieval lifecycle smoke uses fixed vectors and a typed
+stub embedder, so it makes no provider calls or paid requests. It requires
+`LIVE_REAL_TESTS=1` and `DATABASE_URL` and uses a unique temporary schema with
+exact cleanup:
+
+```bash
+LIVE_REAL_TESTS=1 DATABASE_URL=... pnpm vitest run test/live-real/retrieval-lifecycle.test.ts
+# or:
+pnpm test:real:retrieval
+```
+
 `formatRetrievedContext()` wraps each used result in explicit untrusted-content
 delimiters, accounts for every omission, and supports uncalibrated score-display
 modes:
