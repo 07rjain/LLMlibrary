@@ -12,15 +12,14 @@ const speechLiveEnabled =
 const liveDescribe = speechLiveEnabled ? describe : describe.skip;
 
 function assertSpeechUsage(usage: SpeechUsageMetrics | undefined): void {
+  expect(usage).toBeDefined();
   if (!usage) return;
 
-  if (usage.costUSD !== undefined) {
-    expect(Number.isFinite(usage.costUSD)).toBe(true);
-    expect(usage.costUSD).toBeGreaterThanOrEqual(0);
-  }
-  if (usage.cost !== undefined) {
-    expect(usage.cost).toMatch(/^\$/);
-  }
+  expect(usage.costUSD).toBeDefined();
+  expect(Number.isFinite(usage.costUSD)).toBe(true);
+  expect(usage.costUSD).toBeGreaterThanOrEqual(0);
+  expect(usage.cost).toBeDefined();
+  expect(usage.cost).toMatch(/^\$/);
 }
 
 liveDescribe('live-real OpenAI speech', () => {
@@ -78,6 +77,13 @@ liveDescribe('live-real OpenAI speech', () => {
     expect(typeof transcription.text).toBe('string');
     expect(transcription.text.trim().length).toBeGreaterThan(0);
     assertSpeechUsage(transcription.usage);
+
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.kind)).toEqual([
+      'speech',
+      'transcription',
+    ]);
+    expect(events.every((event) => event.provider === 'openai')).toBe(true);
 
     const logged = JSON.stringify(events);
     expectNoSecretLeak(events);
