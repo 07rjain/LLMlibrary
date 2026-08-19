@@ -1,5 +1,6 @@
 import {
   hasValue,
+  inspectArray,
   inspectRecord,
   invalid,
   readValue,
@@ -24,9 +25,14 @@ export function validateOpenAIPromptCaching(
     provider: 'openai',
     ...(model ? { model } : {}),
   };
-  const d = inspectRecord(value, context, context.option, ['key', 'retention']);
+  const d = inspectRecord(value, context, context.option, [
+    'key',
+    'retention',
+    'options',
+  ]);
   const key = readValue(d, 'key');
   const retention = readValue(d, 'retention');
+  const optionsValue = readValue(d, 'options');
   if (hasValue(d, 'key') && (typeof key !== 'string' || !key.trim())) {
     invalid(context, 'non_empty_string', { path: `${context.option}.key` });
   }
@@ -39,11 +45,43 @@ export function validateOpenAIPromptCaching(
       path: `${context.option}.retention`,
     });
   }
+  let options: OpenAIPromptCachingOptions['options'];
+  if (hasValue(d, 'options')) {
+    const nested = inspectRecord(
+      optionsValue,
+      context,
+      `${context.option}.options`,
+      ['mode', 'ttl'],
+    );
+    const mode = readValue(nested, 'mode');
+    const ttl = readValue(nested, 'ttl');
+    if (
+      hasValue(nested, 'mode') &&
+      mode !== 'implicit' &&
+      mode !== 'explicit'
+    ) {
+      invalid(context, 'supported_mode', {
+        path: `${context.option}.options.mode`,
+      });
+    }
+    if (hasValue(nested, 'ttl') && ttl !== '30m') {
+      invalid(context, 'supported_ttl', {
+        path: `${context.option}.options.ttl`,
+      });
+    }
+    options = {
+      ...(hasValue(nested, 'mode')
+        ? { mode: mode as 'implicit' | 'explicit' }
+        : {}),
+      ...(hasValue(nested, 'ttl') ? { ttl: '30m' as const } : {}),
+    };
+  }
   return {
     ...(hasValue(d, 'key') ? { key: key as string } : {}),
     ...(hasValue(d, 'retention')
       ? { retention: retention as '24h' | 'in_memory' }
       : {}),
+    ...(options ? { options } : {}),
   };
 }
 
@@ -53,7 +91,61 @@ export function validateCompletionCacheOptions(options: {
   providerOptions?: unknown;
 }): void {
   validateOpenAIProviderPromptCaching(options.providerOptions, options.model);
+  validateOpenAIPromptCacheBreakpoints(options.messages, options.model);
   validateAnthropicCacheControls(options);
+}
+
+function validateOpenAIPromptCacheBreakpoints(
+  messages: CanonicalMessage[],
+  model?: string,
+): void {
+  const context: ValidationContext = {
+    code: 'invalid_prompt_caching',
+    message: 'Invalid OpenAI prompt cache breakpoint.',
+    option: 'messages',
+    provider: 'openai',
+    ...(model ? { model } : {}),
+  };
+  messages.forEach((message, messageIndex) => {
+    const messageFields = inspectRecord(
+      message,
+      context,
+      `messages[${messageIndex}]`,
+    );
+    const content = readValue(messageFields, 'content');
+    if (typeof content === 'string') return;
+    const parts = inspectArray(
+      content,
+      context,
+      `messages[${messageIndex}].content`,
+    );
+    parts.forEach((partDescriptor, partIndex) => {
+      const part = inspectRecord(
+        partDescriptor.value,
+        context,
+        `messages[${messageIndex}].content[${partIndex}]`,
+      );
+      if (!hasValue(part, 'promptCacheBreakpoint')) return;
+      const path = `messages[${messageIndex}].content[${partIndex}].promptCacheBreakpoint`;
+      const type = readValue(part, 'type');
+      if (
+        readValue(messageFields, 'role') === 'user' &&
+        (type === 'text' || type === 'image_url' || type === 'image_base64')
+      ) {
+        const breakpoint = inspectRecord(
+          readValue(part, 'promptCacheBreakpoint'),
+          context,
+          path,
+          ['mode'],
+        );
+        if (readValue(breakpoint, 'mode') !== 'explicit') {
+          invalid(context, 'allowed_value', { path: `${path}.mode` });
+        }
+      } else {
+        invalid(context, 'unsupported_part', { path });
+      }
+    });
+  });
 }
 
 function validateOpenAIProviderPromptCaching(

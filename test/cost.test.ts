@@ -182,6 +182,7 @@ describe('cost utilities', () => {
       billedInputTokens: 75,
       cachedReadTokens: 25,
       cachedTokens: 25,
+      cachedWriteTokens: 0,
       inputTokens: 100,
       outputTokens: 50,
     });
@@ -196,8 +197,24 @@ describe('cost utilities', () => {
       billedInputTokens: 70,
       cachedReadTokens: 10,
       cachedTokens: 10,
+      cachedWriteTokens: 0,
       inputTokens: 80,
       outputTokens: 20,
+    });
+    expect(
+      openaiUsageToCanonical({
+        input_tokens: 2600,
+        input_tokens_details: {
+          cached_tokens: 2000,
+          cache_write_tokens: 400,
+        },
+        output_tokens: 6,
+      }),
+    ).toMatchObject({
+      billedInputTokens: 200,
+      cachedReadTokens: 2000,
+      cachedTokens: 2000,
+      cachedWriteTokens: 400,
     });
 
     expect(
@@ -228,6 +245,7 @@ describe('cost utilities', () => {
       billedInputTokens: 0,
       cachedReadTokens: 0,
       cachedTokens: 0,
+      cachedWriteTokens: 0,
       inputTokens: 0,
       outputTokens: 0,
     });

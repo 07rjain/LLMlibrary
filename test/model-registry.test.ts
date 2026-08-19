@@ -194,11 +194,11 @@ describe('ModelRegistry', () => {
 
     expect(registry.get('gpt-5.6-luna')).toMatchObject({
       contextWindow: 1050000,
-      inputPrice: 1,
-      outputPrice: 6,
+      inputPrice: 0.2,
+      outputPrice: 1.2,
       provider: 'openai',
-      cacheReadPrice: 0.1,
-      cacheWritePrice: 1.25,
+      cacheReadPrice: 0.02,
+      cacheWritePrice: 0.25,
     });
     expect(registry.get('gpt-5.6-sol')).toMatchObject({
       contextWindow: 1050000,
@@ -216,11 +216,11 @@ describe('ModelRegistry', () => {
     });
     expect(registry.get('gpt-5.6-terra')).toMatchObject({
       contextWindow: 1050000,
-      inputPrice: 2.5,
-      outputPrice: 15,
+      inputPrice: 2,
+      outputPrice: 12,
       provider: 'openai',
-      cacheReadPrice: 0.25,
-      cacheWritePrice: 3.125,
+      cacheReadPrice: 0.2,
+      cacheWritePrice: 2.5,
     });
     expect(registry.get('claude-haiku-4-5-20251001')).toMatchObject({
       contextWindow: 200000,

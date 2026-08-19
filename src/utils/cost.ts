@@ -59,6 +59,7 @@ export interface OpenAIUsagePayload {
   input_tokens?: number;
   input_tokens_details?: {
     cached_tokens?: number;
+    cache_write_tokens?: number;
   };
   output_tokens?: number;
   output_tokens_details?: {
@@ -67,6 +68,7 @@ export interface OpenAIUsagePayload {
   prompt_tokens?: number;
   prompt_tokens_details?: {
     cached_tokens?: number;
+    cache_write_tokens?: number;
   };
 }
 
@@ -334,13 +336,21 @@ export function openaiUsageToCanonical(
     usage?.input_tokens_details?.cached_tokens ??
     usage?.prompt_tokens_details?.cached_tokens ??
     0;
+  const cachedWriteTokens =
+    usage?.input_tokens_details?.cache_write_tokens ??
+    usage?.prompt_tokens_details?.cache_write_tokens ??
+    0;
   const reasoningTokens =
     usage?.output_tokens_details?.reasoning_tokens ??
     usage?.completion_tokens_details?.reasoning_tokens;
   const counts: CanonicalUsageCounts = {
-    billedInputTokens: Math.max(inputTokens - cachedReadTokens, 0),
+    billedInputTokens: Math.max(
+      inputTokens - cachedReadTokens - cachedWriteTokens,
+      0,
+    ),
     cachedReadTokens,
     cachedTokens: cachedReadTokens,
+    cachedWriteTokens,
     inputTokens,
     outputTokens: usage?.output_tokens ?? usage?.completion_tokens ?? 0,
   };

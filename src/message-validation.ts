@@ -15,9 +15,21 @@ const MESSAGE_FIELDS = ['content', 'metadata', 'pinned', 'role'] as const;
 const PART_FIELDS: Record<string, readonly string[]> = {
   audio: ['data', 'mediaType', 'type', 'url'],
   document: ['cacheControl', 'data', 'mediaType', 'title', 'type', 'url'],
-  image_base64: ['cacheControl', 'data', 'mediaType', 'type'],
-  image_url: ['cacheControl', 'mediaType', 'type', 'url'],
-  text: ['cacheControl', 'text', 'type'],
+  image_base64: [
+    'cacheControl',
+    'data',
+    'mediaType',
+    'promptCacheBreakpoint',
+    'type',
+  ],
+  image_url: [
+    'cacheControl',
+    'mediaType',
+    'promptCacheBreakpoint',
+    'type',
+    'url',
+  ],
+  text: ['cacheControl', 'promptCacheBreakpoint', 'text', 'type'],
   tool_call: ['args', 'cacheControl', 'id', 'name', 'type'],
   tool_result: [
     'cacheControl',
@@ -142,17 +154,38 @@ function clonePart(
           `${path}.cacheControl`,
         )
       : undefined;
+  const breakpoint =
+    hasValue(descriptors, 'promptCacheBreakpoint') &&
+    readValue(descriptors, 'promptCacheBreakpoint') !== undefined
+      ? inspectRecord(
+          readValue(descriptors, 'promptCacheBreakpoint'),
+          context,
+          `${path}.promptCacheBreakpoint`,
+          ['mode'],
+        )
+      : undefined;
+  if (breakpoint && readValue(breakpoint, 'mode') !== 'explicit') {
+    invalid(context, 'allowed_value', {
+      path: `${path}.promptCacheBreakpoint.mode`,
+    });
+  }
 
   switch (type) {
     case 'text':
       return {
         ...(cacheControl ? { cacheControl } : {}),
+        ...(breakpoint
+          ? { promptCacheBreakpoint: { mode: 'explicit' as const } }
+          : {}),
         text: string('text')!,
         type,
       };
     case 'image_url':
       return {
         ...(cacheControl ? { cacheControl } : {}),
+        ...(breakpoint
+          ? { promptCacheBreakpoint: { mode: 'explicit' as const } }
+          : {}),
         ...(string('mediaType', true) !== undefined
           ? { mediaType: string('mediaType', true)! }
           : {}),
@@ -162,6 +195,9 @@ function clonePart(
     case 'image_base64':
       return {
         ...(cacheControl ? { cacheControl } : {}),
+        ...(breakpoint
+          ? { promptCacheBreakpoint: { mode: 'explicit' as const } }
+          : {}),
         data: string('data')!,
         mediaType: string('mediaType')!,
         type,

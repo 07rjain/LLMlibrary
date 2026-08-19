@@ -13,7 +13,10 @@ import {
   readOptionalString,
   readRequiredModelId,
 } from '../model-discovery.js';
-import { validateOpenAIPromptCaching } from '../cache-validation.js';
+import {
+  validateCompletionCacheOptions,
+  validateOpenAIPromptCaching,
+} from '../cache-validation.js';
 import {
   validateSpeechRequest,
   validateTranscriptionRequest,
@@ -82,6 +85,7 @@ type OpenAIInputItem =
   | OpenAIMessageInput;
 
 interface OpenAIInputTextPart {
+  prompt_cache_breakpoint?: { mode: 'explicit' };
   text: string;
   type: 'input_text';
 }
@@ -94,6 +98,7 @@ interface OpenAIOutputTextInputPart {
 interface OpenAIInputImagePart {
   detail?: 'auto' | 'high' | 'low';
   image_url: string;
+  prompt_cache_breakpoint?: { mode: 'explicit' };
   type: 'input_image';
 }
 
@@ -1180,6 +1185,7 @@ function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 export function translateOpenAIRequest(
   options: OpenAICompletionOptions,
 ): Record<string, unknown> {
+  validateCompletionCacheOptions(options);
   const input: OpenAIInputItem[] = [];
   const instructions: string[] = [];
   const openaiOptions = options.providerOptions?.openai;
@@ -1266,6 +1272,9 @@ export function translateOpenAIRequest(
 
   if (promptCaching?.retention !== undefined) {
     body.prompt_cache_retention = promptCaching.retention;
+  }
+  if (promptCaching?.options && Object.keys(promptCaching.options).length > 0) {
+    body.prompt_cache_options = promptCaching.options;
   }
 
   return body;
@@ -1582,9 +1591,15 @@ function validateOpenAIResponsePayload(
   if (isPlainObject(value.usage)) {
     assertProviderUsage(
       value.usage.input_tokens_details,
-      ['cached_tokens'],
+      ['cached_tokens', 'cache_write_tokens'],
       context,
       'response.usage.input_tokens_details',
+    );
+    assertProviderUsage(
+      value.usage.prompt_tokens_details,
+      ['cached_tokens', 'cache_write_tokens'],
+      context,
+      'response.usage.prompt_tokens_details',
     );
     assertProviderUsage(
       value.usage.output_tokens_details,
@@ -1634,11 +1649,7 @@ function validateOpenAIStreamEvent(
       assertProviderString(event.item.type, context, 'event.item.type');
       if (event.item.type === 'function_call') {
         for (const key of ['arguments', 'call_id', 'id', 'name'] as const) {
-          assertProviderString(
-            event.item[key],
-            context,
-            `event.item.${key}`,
-          );
+          assertProviderString(event.item[key], context, `event.item.${key}`);
         }
       }
       return;
@@ -1651,8 +1662,7 @@ function validateOpenAIStreamEvent(
           event.response.status !== 'completed') ||
         (event.type === 'response.incomplete' &&
           event.response.status !== 'incomplete') ||
-        (event.type === 'response.failed' &&
-          event.response.status !== 'failed')
+        (event.type === 'response.failed' && event.response.status !== 'failed')
       ) {
         throw invalidProviderResponse(context, {
           expected: event.type.slice('response.'.length),
@@ -1911,6 +1921,16 @@ function translateOpenAISystemMessage(message: CanonicalMessage): string {
       },
     );
   }
+  if (
+    message.content.some(
+      (part) => part.type === 'text' && part.promptCacheBreakpoint,
+    )
+  ) {
+    throw new ProviderCapabilityError(
+      'OpenAI prompt cache breakpoints are only supported on user input parts.',
+      { provider: 'openai' },
+    );
+  }
 
   const textParts = message.content.filter(
     (part): part is Extract<CanonicalPart, { type: 'text' }> =>
@@ -1965,17 +1985,26 @@ function translateOpenAIUserMessage(
       case 'image_base64':
         userParts.push({
           image_url: `data:${part.mediaType};base64,${part.data}`,
+          ...(part.promptCacheBreakpoint
+            ? { prompt_cache_breakpoint: { mode: 'explicit' as const } }
+            : {}),
           type: 'input_image',
         });
         break;
       case 'image_url':
         userParts.push({
           image_url: part.url,
+          ...(part.promptCacheBreakpoint
+            ? { prompt_cache_breakpoint: { mode: 'explicit' as const } }
+            : {}),
           type: 'input_image',
         });
         break;
       case 'text':
         userParts.push({
+          ...(part.promptCacheBreakpoint
+            ? { prompt_cache_breakpoint: { mode: 'explicit' as const } }
+            : {}),
           text: part.text,
           type: 'input_text',
         });
@@ -2043,6 +2072,12 @@ function translateOpenAIAssistantMessage(
           },
         );
       case 'text':
+        if (part.promptCacheBreakpoint) {
+          throw new ProviderCapabilityError(
+            'OpenAI prompt cache breakpoints are only supported on user input parts.',
+            { provider: 'openai' },
+          );
+        }
         textParts.push({
           text: part.text,
           type: 'output_text',

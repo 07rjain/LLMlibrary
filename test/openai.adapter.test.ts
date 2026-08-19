@@ -373,6 +373,155 @@ describe('OpenAI adapter', () => {
     });
   });
 
+  it('preserves GPT-5.6 max effort and prompt cache options', () => {
+    const request = translateOpenAIRequest({
+      messages: [{ content: 'Stable prefix', role: 'user' }],
+      model: 'gpt-5.6-luna',
+      providerOptions: {
+        openai: {
+          promptCaching: { options: { mode: 'explicit', ttl: '30m' } },
+          reasoning: { effort: 'max' },
+        },
+      },
+    });
+    expect(request).toMatchObject({
+      prompt_cache_options: { mode: 'explicit', ttl: '30m' },
+      reasoning: { effort: 'max' },
+    });
+  });
+
+  it('validates and canonicalizes OpenAI prompt cache breakpoints', () => {
+    const textBreakpoint = { mode: 'explicit' as const };
+    const imageBreakpoint = { mode: 'explicit' as const };
+    const request = translateOpenAIRequest({
+      messages: [
+        {
+          content: [
+            {
+              promptCacheBreakpoint: textBreakpoint,
+              text: 'Stable',
+              type: 'text',
+            },
+            {
+              promptCacheBreakpoint: imageBreakpoint,
+              type: 'image_url',
+              url: 'https://example.test/a.png',
+            },
+          ],
+          role: 'user',
+        },
+      ],
+      model: 'gpt-5.6-luna',
+    });
+    const input = request.input as Array<{
+      content: Array<{ prompt_cache_breakpoint?: unknown }>;
+    }>;
+    expect(input[0]?.content[0]?.prompt_cache_breakpoint).toEqual({
+      mode: 'explicit',
+    });
+    expect(input[0]?.content[0]?.prompt_cache_breakpoint).not.toBe(
+      textBreakpoint,
+    );
+    expect(input[0]?.content[1]?.prompt_cache_breakpoint).toEqual({
+      mode: 'explicit',
+    });
+    expect(input[0]?.content[1]?.prompt_cache_breakpoint).not.toBe(
+      imageBreakpoint,
+    );
+    expect(() =>
+      translateOpenAIRequest({
+        messages: [
+          {
+            content: [
+              {
+                promptCacheBreakpoint: { mode: 'explicit' },
+                args: {},
+                id: 'x',
+                name: 'tool',
+                type: 'tool_call',
+              } as never,
+            ],
+            role: 'assistant',
+          },
+        ],
+        model: 'gpt-5.6-luna',
+      }),
+    ).toThrow(ProviderCapabilityError);
+  });
+
+  it('rejects unsafe and unsupported OpenAI prompt cache breakpoints', () => {
+    const translate = (messages: unknown) =>
+      translateOpenAIRequest({
+        messages: messages as never,
+        model: 'gpt-5.6-luna',
+      });
+
+    for (const promptCacheBreakpoint of [
+      true,
+      { mode: 'explicit', extra: true },
+    ]) {
+      expect(() =>
+        translate([
+          {
+            content: [{ promptCacheBreakpoint, text: 'Stable', type: 'text' }],
+            role: 'user',
+          },
+        ]),
+      ).toThrow(ProviderCapabilityError);
+    }
+
+    const accessor = Object.defineProperty({}, 'mode', {
+      enumerable: true,
+      get: () => 'explicit',
+    });
+    expect(() =>
+      translate([
+        {
+          content: [
+            { promptCacheBreakpoint: accessor, text: 'Stable', type: 'text' },
+          ],
+          role: 'user',
+        },
+      ]),
+    ).toThrow(ProviderCapabilityError);
+
+    for (const message of [
+      {
+        content: [
+          {
+            promptCacheBreakpoint: { mode: 'explicit' },
+            text: 'System',
+            type: 'text',
+          },
+        ],
+        role: 'system',
+      },
+      {
+        content: [
+          {
+            promptCacheBreakpoint: { mode: 'explicit' },
+            text: 'Assistant',
+            type: 'text',
+          },
+        ],
+        role: 'assistant',
+      },
+      {
+        content: [
+          {
+            promptCacheBreakpoint: { mode: 'explicit' },
+            result: 'ok',
+            toolCallId: 'call_1',
+            type: 'tool_result',
+          },
+        ],
+        role: 'user',
+      },
+    ]) {
+      expect(() => translate([message])).toThrow(ProviderCapabilityError);
+    }
+  });
+
   it('omits OpenAI reasoning fields when no reasoning options are set', () => {
     const request = translateOpenAIRequest({
       messages: [{ content: 'Hello', role: 'user' }],
@@ -414,7 +563,7 @@ describe('OpenAI adapter', () => {
       status: 'completed',
       usage: {
         input_tokens: 40,
-        input_tokens_details: { cached_tokens: 10 },
+        input_tokens_details: { cached_tokens: 10, cache_write_tokens: 20 },
         output_tokens: 12,
         output_tokens_details: { reasoning_tokens: 7 },
       },
@@ -422,6 +571,10 @@ describe('OpenAI adapter', () => {
 
     expect(response).toMatchObject({
       finishReason: 'tool_call',
+      usage: expect.objectContaining({
+        billedInputTokens: 10,
+        cachedWriteTokens: 20,
+      }),
       model: 'gpt-4o',
       provider: 'openai',
       text: 'Checking.',
@@ -1378,6 +1531,10 @@ describe('OpenAI adapter', () => {
                   status: 'completed',
                   usage: {
                     input_tokens: 20,
+                    input_tokens_details: {
+                      cached_tokens: 5,
+                      cache_write_tokens: 10,
+                    },
                     output_tokens: 12,
                   },
                 },
@@ -1406,6 +1563,11 @@ describe('OpenAI adapter', () => {
       { delta: 'Hello ', type: 'text-delta' },
       { delta: 'world', type: 'text-delta' },
       expect.objectContaining({
+        usage: expect.objectContaining({
+          billedInputTokens: 5,
+          cachedReadTokens: 5,
+          cachedWriteTokens: 10,
+        }),
         finishReason: 'stop',
         type: 'done',
       }),

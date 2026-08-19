@@ -27,6 +27,7 @@ export interface CacheControl {
 export type OpenAIReasoningEffort =
   | 'high'
   | 'low'
+  | 'max'
   | 'medium'
   | 'minimal'
   | 'none'
@@ -60,6 +61,7 @@ export interface AnthropicProviderOptions {
 export interface OpenAIPromptCachingOptions {
   key?: string;
   retention?: '24h' | 'in_memory';
+  options?: { mode?: 'implicit' | 'explicit'; ttl?: '30m' };
 }
 
 export interface OpenAIProviderOptions {
@@ -100,17 +102,20 @@ export interface JsonObject {
 export type JsonArray = JsonValue[];
 
 export interface TextPart extends CacheablePartBase {
+  promptCacheBreakpoint?: { mode: 'explicit' };
   type: 'text';
   text: string;
 }
 
 export interface ImageUrlPart extends CacheablePartBase {
+  promptCacheBreakpoint?: { mode: 'explicit' };
   type: 'image_url';
   url: string;
   mediaType?: string;
 }
 
 export interface ImageBase64Part extends CacheablePartBase {
+  promptCacheBreakpoint?: { mode: 'explicit' };
   type: 'image_base64';
   data: string;
   mediaType: string;

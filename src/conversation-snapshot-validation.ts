@@ -495,7 +495,7 @@ function optionalProviderOptions(
       const caching = nestedRecord(
         readValue(openai, 'promptCaching'),
         'snapshot.providerOptions.openai.promptCaching',
-        ['key', 'retention'],
+        ['key', 'retention', 'options'],
       );
       stringField(
         caching,
@@ -508,6 +508,25 @@ function optionalProviderOptions(
         new Set(['24h', 'in_memory']),
         'snapshot.providerOptions.openai.promptCaching',
       );
+      if (hasValue(caching, 'options')) {
+        const options = nestedRecord(
+          readValue(caching, 'options'),
+          'snapshot.providerOptions.openai.promptCaching.options',
+          ['mode', 'ttl'],
+        );
+        enumField(
+          options,
+          'mode',
+          new Set(['implicit', 'explicit']),
+          'snapshot.providerOptions.openai.promptCaching.options',
+        );
+        enumField(
+          options,
+          'ttl',
+          new Set(['30m']),
+          'snapshot.providerOptions.openai.promptCaching.options',
+        );
+      }
     }
     if (hasValue(openai, 'reasoning')) {
       const reasoning = nestedRecord(
@@ -518,7 +537,7 @@ function optionalProviderOptions(
       enumField(
         reasoning,
         'effort',
-        new Set(['high', 'low', 'medium', 'minimal', 'none', 'xhigh']),
+        new Set(['high', 'low', 'max', 'medium', 'minimal', 'none', 'xhigh']),
         'snapshot.providerOptions.openai.reasoning',
       );
       booleanField(

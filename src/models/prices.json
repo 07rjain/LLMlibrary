@@ -90,11 +90,11 @@
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
-    "inputPrice": 1,
-    "outputPrice": 6,
-    "cacheReadPrice": 0.1,
-    "cacheWritePrice": 1.25,
-    "lastUpdated": "2026-07-27"
+    "inputPrice": 0.2,
+    "outputPrice": 1.2,
+    "cacheReadPrice": 0.02,
+    "cacheWritePrice": 0.25,
+    "lastUpdated": "2026-08-19"
   },
   "gpt-5.6-sol": {
     "provider": "openai",
@@ -126,11 +126,11 @@
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
-    "inputPrice": 2.5,
-    "outputPrice": 15,
-    "cacheReadPrice": 0.25,
-    "cacheWritePrice": 3.125,
-    "lastUpdated": "2026-07-28"
+    "inputPrice": 2,
+    "outputPrice": 12,
+    "cacheReadPrice": 0.2,
+    "cacheWritePrice": 2.5,
+    "lastUpdated": "2026-08-19"
   },
   "gpt-5.4": {
     "provider": "openai",
