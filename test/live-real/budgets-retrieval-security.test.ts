@@ -18,6 +18,7 @@ import {
   hasEnv,
   liveClient,
   liveRealEnabled,
+  liveTemperature,
   providerModels,
   requireLiveEnv,
   runId,

@@ -34,6 +34,7 @@ liveDescribe('live-real OpenAI speech', () => {
       budgetExceededAction: 'throw',
       retryOptions: { maxAttempts: 1 },
       usageLogger: {
+        log: () => {},
         logSpeech: (event) => {
           events.push(event);
         },
