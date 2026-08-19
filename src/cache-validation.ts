@@ -95,7 +95,7 @@ export function validateCompletionCacheOptions(options: {
   validateAnthropicCacheControls(options);
 }
 
-function validateOpenAIPromptCacheBreakpoints(
+export function validateOpenAIPromptCacheBreakpoints(
   messages: CanonicalMessage[],
   model?: string,
 ): void {

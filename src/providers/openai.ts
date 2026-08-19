@@ -14,7 +14,7 @@ import {
   readRequiredModelId,
 } from '../model-discovery.js';
 import {
-  validateCompletionCacheOptions,
+  validateOpenAIPromptCacheBreakpoints,
   validateOpenAIPromptCaching,
 } from '../cache-validation.js';
 import {
@@ -1185,7 +1185,7 @@ function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 export function translateOpenAIRequest(
   options: OpenAICompletionOptions,
 ): Record<string, unknown> {
-  validateCompletionCacheOptions(options);
+  validateOpenAIPromptCacheBreakpoints(options.messages, options.model);
   const input: OpenAIInputItem[] = [];
   const instructions: string[] = [];
   const openaiOptions = options.providerOptions?.openai;
