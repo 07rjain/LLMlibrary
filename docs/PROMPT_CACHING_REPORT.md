@@ -2,6 +2,8 @@
 
 Prepared: `2026-04-25`
 
+Updated: `2026-08-20` for `0.2.2`
+
 This report documents the prompt-caching surface that is currently shipped in `unified-llm-client`.
 
 ## Executive Summary
@@ -18,6 +20,8 @@ This report documents the prompt-caching surface that is currently shipped in `u
 The shipped public API is:
 
 - `providerOptions.openai.promptCaching`
+- `providerOptions.openai.promptCaching.options`
+- `promptCacheBreakpoint` on supported user text/image parts
 - `providerOptions.anthropic.cacheControl`
 - part-level `cacheControl` on Anthropic-compatible content blocks
 - tool-level `cacheControl` on Anthropic tool definitions
@@ -46,13 +50,21 @@ Current mapping:
   - sent as `prompt_cache_key`
 - `providerOptions.openai.promptCaching.retention`
   - sent as `prompt_cache_retention`
+- `providerOptions.openai.promptCaching.options`
+  - sent as `prompt_cache_options`
+- `promptCacheBreakpoint: { mode: 'explicit' }`
+  - sent as `prompt_cache_breakpoint` on supported user input parts
 
 Runtime validation:
 
-- `promptCaching` must be a plain accessor-free object containing only `key`
-  and `retention`
+- `promptCaching` must be a plain accessor-free object containing only `key`,
+  `retention`, and `options`
 - an explicitly supplied `key` must be a non-empty string
 - `retention` must be `in_memory` or `24h`
+- `options` may contain only `mode` and `ttl`; mode must be `implicit` or
+  `explicit`, and the supported TTL is `30m`
+- breakpoints must be plain accessor-free `{ mode: 'explicit' }` objects and
+  may appear only on user `text`, `image_url`, or `image_base64` parts
 - the legacy retention surface remains available for compatibility and is not
   model-gated locally
 
@@ -112,7 +124,9 @@ Current normalization behavior:
 
 - OpenAI:
   - maps `input_tokens_details.cached_tokens` and legacy `prompt_tokens_details.cached_tokens`
-  - computes `billedInputTokens = inputTokens - cachedReadTokens`
+  - maps `input_tokens_details.cache_write_tokens` and legacy
+    `prompt_tokens_details.cache_write_tokens` to `cachedWriteTokens`
+  - computes `billedInputTokens = inputTokens - cachedReadTokens - cachedWriteTokens`
 - Anthropic:
   - maps `cache_read_input_tokens` to `cachedReadTokens`
   - maps `cache_creation_input_tokens` to `cachedWriteTokens`
@@ -142,6 +156,7 @@ Prompt caching is covered at three levels:
 Relevant test areas include:
 
 - OpenAI request-side cache fields
+- OpenAI explicit cache options and user text/image breakpoints
 - Anthropic request-level, block-level, and tool-level cache control
 - Gemini `cachedContent` request mapping
 - Gemini cache lifecycle CRUD

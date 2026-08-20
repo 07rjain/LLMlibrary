@@ -142,6 +142,20 @@ const response = await client.complete({
 console.log(response.usage?.reasoningTokens);
 ```
 
+`OpenAIReasoningEffort` accepts `none`, `minimal`, `low`, `medium`, `high`,
+`xhigh`, and `max`. Support remains model-dependent; `max` is available for
+the GPT-5.6 family and is forwarded without being downgraded:
+
+```ts
+await client.complete({
+  model: 'gpt-5.6-luna',
+  messages: [{ role: 'user', content: 'Perform a deep architecture review.' }],
+  providerOptions: {
+    openai: { reasoning: { effort: 'max' } },
+  },
+});
+```
+
 Set `includeEncryptedContent: true` only when your application is ready to preserve OpenAI encrypted reasoning items for later continuation:
 
 ```ts

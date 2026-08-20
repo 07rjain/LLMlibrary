@@ -59,6 +59,30 @@ pnpm docs:api       # Regenerate TypeDoc API reference
 pnpm docs:build     # Build full docs site for deployment
 ```
 
+### Changelog policy
+
+`CHANGELOG.md` is the curated, user-facing release history. Keep it in reverse
+chronological order; do not copy the raw Git log into it.
+
+- Update the changelog in the same change as any user-visible feature, fix,
+  security hardening, deprecation, compatibility change, package-surface
+  change, seeded-model update, or pricing update.
+- Use `## Unreleased` while a target version is undecided. At release time,
+  rename that section to `## <version> - YYYY-MM-DD`, matching `package.json`
+  and the actual release date. If the version is already published, amend its
+  existing section only to correct or complete that release's notes.
+- Group entries under the existing categories such as `feat`, `fix`,
+  `security`, `docs`, and `test`. Describe consumer impact in concise present
+  tense; omit internal refactors unless they affect behavior, safety, bundle
+  boundaries, or maintainability relevant to consumers.
+- Verify every entry against the implementation and tests. Do not announce
+  planned work as shipped. Keep model IDs, provider behavior, prices, version
+  numbers, and dates consistent with `src/models/prices.json`, `package.json`,
+  and the published release.
+- Before release, review the complete range since the previous version so
+  commits from follow-up patches are not omitted. Run Prettier and
+  `pnpm docs:build` after changing release documentation.
+
 ### Benchmarks
 
 ```bash
@@ -155,17 +179,17 @@ The core surface — `LLMClient`, `Conversation`, routing, in-memory stores, `Se
 
 The package ships multiple named entry points (dual CJS + ESM via tsup):
 
-| Import path | Contents |
-|---|---|
-| `unified-llm-client` | Full public surface |
-| `unified-llm-client/client` | `LLMClient` only |
-| `unified-llm-client/errors` | Error classes |
-| `unified-llm-client/models` | `ModelRegistry`, `ModelInfo` |
-| `unified-llm-client/providers/anthropic` | `AnthropicAdapter` |
-| `unified-llm-client/providers/openai` | `OpenAIAdapter` |
-| `unified-llm-client/providers/gemini` | `GeminiAdapter` |
-| `unified-llm-client/session-api` | `createSessionApi` |
-| `unified-llm-client/utils` | Utility helpers |
+| Import path                              | Contents                     |
+| ---------------------------------------- | ---------------------------- |
+| `unified-llm-client`                     | Full public surface          |
+| `unified-llm-client/client`              | `LLMClient` only             |
+| `unified-llm-client/errors`              | Error classes                |
+| `unified-llm-client/models`              | `ModelRegistry`, `ModelInfo` |
+| `unified-llm-client/providers/anthropic` | `AnthropicAdapter`           |
+| `unified-llm-client/providers/openai`    | `OpenAIAdapter`              |
+| `unified-llm-client/providers/gemini`    | `GeminiAdapter`              |
+| `unified-llm-client/session-api`         | `createSessionApi`           |
+| `unified-llm-client/utils`               | Utility helpers              |
 
 ---
 
@@ -187,11 +211,13 @@ DATABASE_URL=           # auto-enables PostgresSessionStore for conversation()
 This library is the LLM engine for a multi-tenant SaaS platform (**[PRODUCT NAME]**) that lets website owners embed an AI chatbot with a single script tag. The chatbot can query the site owner's own live database (Postgres, MySQL, MongoDB, Shopify, etc.) in real-time, plus a RAG knowledge base from uploaded documents.
 
 **Three data layers the chatbot widget uses:**
+
 1. **Internal app DB** (Postgres + pgvector on Neon) — user accounts, widget configs, API keys, chat history, embeddings
 2. **User's live operational DB** (the core differentiator) — this library's tool-calling is how the chatbot executes read-only queries against it
 3. **Knowledge base / RAG** — Gemini Embedding 2 vectors in pgvector, fallback for unstructured questions
 
 **How this library fits in the widget backend:**
+
 - `LLMClient` with `Codex-sonnet-4-6` as default model
 - Tool calling (`defineTool`) for `query_user_database`, `search_knowledge_base`, `web_search`
 - `conversation()` with `PostgresSessionStore` for per-tenant session persistence (keyed by `tenantId` + `sessionId`)
@@ -215,16 +241,16 @@ Policy and integrator checklist: **`SECURITY.md`**.
 
 When auditing, verifying, or regressing security work, start here:
 
-| Artifact | Path / URL |
-|---|---|
-| Human findings report (Cursor, 2026-07-09) | `security_scan/cursor_security_scan_report.md` |
-| Codex-style projected report | `security_scan/codex_security_scan_20260709_report.md` |
-| Prior Codex report (2026-06-30) | `security_scan/codex_security_scan_20260630_report.md` |
-| Verification notes | `security_scan/security_audit_final_verification_20260707.md` |
-| Archive index | `security_scan/archives/README.md` |
-| Full scan evidence (GitHub Release) | https://github.com/07rjain/LLMlibrary/releases/tag/security-scan-20260709 |
-| Tarball download | https://github.com/07rjain/LLMlibrary/releases/download/security-scan-20260709/ee9e5c6_20260709T114052Z.tar.gz |
-| In-repo tarball + checksum | `security_scan/archives/ee9e5c6_20260709T114052Z.tar.gz` (+ `.sha256`) |
+| Artifact                                   | Path / URL                                                                                                     |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| Human findings report (Cursor, 2026-07-09) | `security_scan/cursor_security_scan_report.md`                                                                 |
+| Codex-style projected report               | `security_scan/codex_security_scan_20260709_report.md`                                                         |
+| Prior Codex report (2026-06-30)            | `security_scan/codex_security_scan_20260630_report.md`                                                         |
+| Verification notes                         | `security_scan/security_audit_final_verification_20260707.md`                                                  |
+| Archive index                              | `security_scan/archives/README.md`                                                                             |
+| Full scan evidence (GitHub Release)        | https://github.com/07rjain/LLMlibrary/releases/tag/security-scan-20260709                                      |
+| Tarball download                           | https://github.com/07rjain/LLMlibrary/releases/download/security-scan-20260709/ee9e5c6_20260709T114052Z.tar.gz |
+| In-repo tarball + checksum                 | `security_scan/archives/ee9e5c6_20260709T114052Z.tar.gz` (+ `.sha256`)                                         |
 
 **Scan ID:** `ee9e5c6_20260709T114052Z` · **SHA-256:** `9a3649f1f4be3751fde5ef3affa80248e0e02d97b31d897d2c4d275eac510233`
 

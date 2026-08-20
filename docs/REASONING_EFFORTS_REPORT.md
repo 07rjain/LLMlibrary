@@ -7,6 +7,7 @@ Date: 2026-07-29
 The first implementation slice from this report has now been applied:
 
 - `providerOptions.openai.reasoning` maps to OpenAI Responses `reasoning` and optional `include: ["reasoning.encrypted_content"]`.
+- `OpenAIReasoningEffort` includes `max`, allowing GPT-5.6 requests to preserve that effort value without narrowing or downgrading it.
 - `providerOptions.anthropic.thinking` maps to Anthropic Messages API `thinking`, with local validation of manual `budgetTokens`.
 - `providerOptions.anthropic.effort` maps to `output_config.effort`, merges with structured-output `format`, and is validated against per-model registry metadata before transport.
 - `providerOptions.google.thinking` maps to Gemini `generationConfig.thinkingConfig`.
@@ -98,6 +99,7 @@ OpenAI reasoning models use hidden reasoning tokens before and between visible o
 - `medium`
 - `high`
 - `xhigh`
+- `max`
 
 Lower effort favors speed and lower token usage; higher effort improves reasoning quality at higher latency and cost. Defaults are model-dependent, not universal.
 

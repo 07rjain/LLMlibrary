@@ -79,10 +79,12 @@ If you are opening the repository for the first time, read the pages below in or
 
 - OpenAI requests now use the Responses API in stateless mode with library-owned history replay.
 - Prompt caching is exposed through provider-specific options rather than one artificial cross-provider abstraction.
-- OpenAI uses `providerOptions.openai.promptCaching`.
+- OpenAI uses `providerOptions.openai.promptCaching`, including explicit
+  `options`, plus `promptCacheBreakpoint` on supported user text/image parts.
 - Anthropic uses part-level `cacheControl`, tool-level `cacheControl`, and request-level `providerOptions.anthropic.cacheControl`.
 - Gemini uses `providerOptions.google.promptCaching.cachedContent`, and explicit cache resources can be managed with `client.googleCaches`.
 - Reasoning and thinking controls are also provider-specific: `providerOptions.openai.reasoning`, `providerOptions.anthropic.thinking`, `providerOptions.anthropic.effort`, and `providerOptions.google.thinking`.
+- OpenAI reasoning accepts the model-dependent `max` effort used by GPT-5.6.
 - `client.models.listRemote({ provider })` fetches the provider's live model list without changing the local routing registry.
 - `client.embed()` is now available for Google Embedding 2.
 - OpenAI batch speech is available through `client.speak()` and `client.transcribe()`. Speech usage is tracked separately through `client.getSpeechUsage()` and `client.exportSpeechUsage()`.

@@ -2,6 +2,45 @@
 
 All notable changes to this project will be tracked here.
 
+## 0.2.2 - 2026-08-20
+
+### feat
+
+- support OpenAI GPT-5.6 `max` reasoning effort
+- add OpenAI explicit prompt-cache options and per-part user text/image cache breakpoints
+- normalize and price OpenAI cache-write token usage
+
+### fix
+
+- refresh GPT-5.6 Luna and Terra pricing metadata
+- keep provider-specific OpenAI validation out of unrelated provider bundles
+
+## 0.2.1 - 2026-08-04
+
+### fix
+
+- bind Postgres optimistic updates correctly
+- refresh verified model pricing dates
+
+### test
+
+- cover every published package export entry point
+
+## 0.2.0 - 2026-08-04
+
+### feat
+
+- add strict provider, request, metadata, registry, retrieval, session, budget,
+  reasoning, and conversation-snapshot validation
+- add atomic session concurrency controls and hardened Redis/Postgres store paths
+- preserve Gemini thought signatures privately across automatic tool loops
+
+### security
+
+- harden agent-skill path containment, logger and warning callbacks, PII
+  redaction, package export identity, and provider transport/stream boundaries
+- fail closed on unknown pricing and on invalid tool dispatchers or callbacks
+
 ## 0.1.11 - 2026-07-28
 
 ### feat

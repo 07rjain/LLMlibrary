@@ -4,23 +4,23 @@ This library currently ships first-party adapters for Anthropic, OpenAI, and Goo
 
 ## Capability Matrix
 
-| Provider | Selected seeded completion models | Streaming | Tool calling | Vision inputs | Session persistence | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| Anthropic | `claude-opus-5`, `claude-sonnet-4-6`, `claude-haiku-4-5`, `claude-haiku-4-5-20251001`, `claude-opus-4-6` | Yes | Yes | Yes | Via `Conversation` + session stores | Anthropic cache read/write pricing is modeled separately, including block-level and request-level `cache_control`. |
-| OpenAI | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-4o`, `gpt-4o-mini`, `o3` | Yes | Yes | Yes | Via `Conversation` + session stores | Uses the stateless Responses API with `store: false` and library-owned history replay. |
-| Google Gemini | `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-2.5-flash` | Yes | Yes | Yes | Via `Conversation` + session stores | Streaming uses the dedicated `streamGenerateContent` endpoint, and explicit caches are managed with `client.googleCaches`. |
+| Provider      | Selected seeded completion models                                                                                                   | Streaming | Tool calling | Vision inputs | Session persistence                 | Notes                                                                                                                                                 |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------- | ------------ | ------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Anthropic     | `claude-opus-5`, `claude-sonnet-4-6`, `claude-haiku-4-5`, `claude-haiku-4-5-20251001`, `claude-opus-4-6`                            | Yes       | Yes          | Yes           | Via `Conversation` + session stores | Anthropic cache read/write pricing is modeled separately, including block-level and request-level `cache_control`.                                    |
+| OpenAI        | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-4o`, `gpt-4o-mini`, `o3` | Yes       | Yes          | Yes           | Via `Conversation` + session stores | Uses the stateless Responses API with `store: false`, supports GPT-5.6 `max` reasoning effort, and exposes explicit prompt-cache options/breakpoints. |
+| Google Gemini | `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-2.5-flash`                        | Yes       | Yes          | Yes           | Via `Conversation` + session stores | Streaming uses the dedicated `streamGenerateContent` endpoint, and explicit caches are managed with `client.googleCaches`.                            |
 
 These are the checked-in seeded completion models, not the provider's full live catalog. The exact current IDs above are accepted directly by the static registry; use `client.models.listRemote({ provider })` when you want discovery against the provider's broader current model list.
 
 ## Translation Differences
 
-| Concern | Anthropic | OpenAI | Gemini |
-| --- | --- | --- | --- |
-| System prompt handling | Lifted into `system` blocks | Flattened into top-level `instructions` | Lifted into `systemInstruction` |
-| Assistant role name | `assistant` | `assistant` | `model` |
-| Tool call payload | `tool_use` blocks | `function_call.arguments` JSON string with `call_id` | `functionCall.args` object |
-| Tool result payload | `tool_result` block in a user turn | `function_call_output` item keyed by `call_id` | `functionResponse` part in a user turn |
-| Streaming terminator | SSE close / `message_stop` | `response.completed` / stream close | SSE close on dedicated stream endpoint |
+| Concern                | Anthropic                          | OpenAI                                               | Gemini                                 |
+| ---------------------- | ---------------------------------- | ---------------------------------------------------- | -------------------------------------- |
+| System prompt handling | Lifted into `system` blocks        | Flattened into top-level `instructions`              | Lifted into `systemInstruction`        |
+| Assistant role name    | `assistant`                        | `assistant`                                          | `model`                                |
+| Tool call payload      | `tool_use` blocks                  | `function_call.arguments` JSON string with `call_id` | `functionCall.args` object             |
+| Tool result payload    | `tool_result` block in a user turn | `function_call_output` item keyed by `call_id`       | `functionResponse` part in a user turn |
+| Streaming terminator   | SSE close / `message_stop`         | `response.completed` / stream close                  | SSE close on dedicated stream endpoint |
 
 ## Choosing a Provider
 
@@ -32,6 +32,6 @@ These are the checked-in seeded completion models, not the provider's full live 
 
 - All three adapters normalize token usage into a shared `UsageMetrics` shape and estimate cost from the model registry.
 - All three adapters map auth, rate-limit, context-window, and generic provider failures into typed `LLMError` subclasses.
-- OpenAI and Gemini cached-read usage is priced separately from uncached input when the provider returns cached-token counts.
+- OpenAI and Gemini cached-read usage is priced separately from uncached input when the provider returns cached-token counts. OpenAI cached-write counts are also normalized and priced separately when returned.
 - Live-provider smoke tests can be executed with `LIVE_TESTS=1 pnpm test:live` after populating `.env`.
 - Deeper real-service integration checks can be executed with `pnpm test:real:providers` or `pnpm test:real` after populating `.env`. These are intentionally opt-in because they consume provider quota and can fail for account-state reasons such as Anthropic low credits or Gemini rate limits.

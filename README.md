@@ -643,15 +643,19 @@ When the provider returns reasoning or thought-token counts, they are exposed as
 ## Prompt Caching Status
 
 - OpenAI automatic prompt caching works on supported models, and request-side hints are exposed via `providerOptions.openai.promptCaching`.
+- OpenAI explicit cache mode is exposed through `promptCaching.options`, and supported user text/image parts can declare `promptCacheBreakpoint: { mode: 'explicit' }`.
 - Anthropic block-level and top-level `cache_control` are exposed for cacheable content and tool definitions.
 - Gemini implicit caching benefits supported models automatically, and explicit cache usage is exposed via `providerOptions.google.promptCaching.cachedContent` plus `client.googleCaches`.
 - Implementation planning lives in [docs/PROMPT_CACHING_REPORT.md](docs/PROMPT_CACHING_REPORT.md) and the active task tracker lives in [prompt_caching_todo.md](prompt_caching_todo.md).
 
 OpenAI cache keys, when present, must be non-empty strings; retention is
 `in_memory` or `24h`. The legacy retention field remains supported for
-compatibility and is not model-gated locally. Anthropic cache control requires
-`type: 'ephemeral'`; `ttl` may be omitted or set to `5m` or `1h`. Invalid
-values fail with a typed `ProviderCapabilityError` before provider dispatch.
+compatibility and is not model-gated locally. Cache options accept `mode:
+'implicit' | 'explicit'` and the currently supported explicit TTL is `30m`.
+Breakpoints are accepted only on user `text`, `image_url`, and `image_base64`
+parts. Anthropic cache control requires `type: 'ephemeral'`; `ttl` may be
+omitted or set to `5m` or `1h`. Invalid values fail with a typed
+`ProviderCapabilityError` before provider dispatch.
 
 ## Prompt Caching Examples
 
@@ -659,17 +663,33 @@ OpenAI request hints:
 
 ```ts
 const openaiResponse = await client.complete({
-  model: 'gpt-4o',
-  messages: [{ content: 'Summarize the support FAQ.', role: 'user' }],
+  model: 'gpt-5.6-luna',
+  messages: [
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: 'Stable support policy and product context...',
+          promptCacheBreakpoint: { mode: 'explicit' },
+        },
+        { type: 'text', text: 'Summarize the refund policy.' },
+      ],
+    },
+  ],
   providerOptions: {
     openai: {
       promptCaching: {
         key: 'support-faq-v1',
         retention: '24h',
+        options: { mode: 'explicit', ttl: '30m' },
       },
     },
   },
 });
+
+console.log(openaiResponse.usage.cachedReadTokens);
+console.log(openaiResponse.usage.cachedWriteTokens);
 ```
 
 Anthropic block and tool cache control:
