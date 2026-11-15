@@ -2,7 +2,7 @@
 
 All notable changes to this project will be tracked here.
 
-## Unreleased
+## 0.3.0 - 2026-11-15
 
 ### feat
 
@@ -35,6 +35,16 @@ All notable changes to this project will be tracked here.
   and Gemini 4 thinking/caching options before transport
 - allow audio model metadata to omit an unpublished token context window;
   completion and embedding models still require a positive window
+
+### compatibility
+
+- default file transcription to `gpt-transcribe`; explicitly select a compatible
+  legacy model when requesting diarization, timestamps, or speaker controls
+- reject unsupported OpenAI verbosity/reasoning settings after model switches;
+  set `providerOptions.unsupportedFeaturePolicy: 'omit'` to accept omission of
+  unsupported response controls while preserving input content
+- resolve provider-confirmed redirects and reject models past confirmed shutdown
+  dates; update model selections using the documented lifecycle migration table
 
 ### docs
 
