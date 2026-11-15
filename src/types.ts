@@ -67,6 +67,8 @@ export interface OpenAIPromptCachingOptions {
 export interface OpenAIProviderOptions {
   promptCaching?: OpenAIPromptCachingOptions;
   reasoning?: OpenAIReasoningOptions;
+  /** Response detail preference on compatible GPT-5/GPT-6 models. */
+  verbosity?: 'low' | 'medium' | 'high';
 }
 
 export interface GooglePromptCachingOptions {
@@ -542,6 +544,8 @@ export interface CanonicalResponse {
   provider: CanonicalProvider;
   raw: unknown;
   refusal?: string;
+  /** Provider-authored reasoning summary, separate from the final answer. */
+  reasoningSummary?: string;
   responseFormat?: StructuredOutputMode;
   structuredOutputStatus?: StructuredOutputStatus;
   text: string;

@@ -1714,9 +1714,7 @@ describe('OpenAI adapter', () => {
       adapter.complete({
         messages: [
           {
-            content: [
-              { data: 'pdf', mediaType: 'application/pdf', type: 'document' },
-            ],
+            content: [{ data: 'audio', mediaType: 'audio/wav', type: 'audio' }],
             role: 'user',
           },
         ],
@@ -1802,7 +1800,7 @@ describe('OpenAI adapter', () => {
     ).toBe('error');
   });
 
-  it('ignores reasoning items in Responses output for parity', () => {
+  it('keeps reasoning summaries separate from Responses answer text', () => {
     const response = translateOpenAIResponse({
       id: 'resp_reasoning',
       model: 'gpt-4o',

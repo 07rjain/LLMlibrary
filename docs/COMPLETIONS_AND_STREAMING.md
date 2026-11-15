@@ -120,6 +120,10 @@ metadata in v1.
 
 ## Reasoning And Thinking Controls
 
+OpenAI also accepts PDF document inputs and response verbosity preferences. See
+[OpenAI Responses features](./OPENAI_RESPONSES_FEATURES.md) for input formats,
+model compatibility, summary streaming, and cost-estimation limits.
+
 Reasoning controls are exposed through provider-specific options. This is intentional: OpenAI, Anthropic, and Gemini use different request fields and the values are not perfectly portable across model families.
 
 OpenAI Responses API reasoning options:
@@ -140,6 +144,7 @@ const response = await client.complete({
 });
 
 console.log(response.usage?.reasoningTokens);
+console.log(response.reasoningSummary);
 ```
 
 `OpenAIReasoningEffort` accepts `none`, `minimal`, `low`, `medium`, `high`,

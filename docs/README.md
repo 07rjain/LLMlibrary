@@ -58,6 +58,8 @@ If you are opening the repository for the first time, read the pages below in or
 
 ## Reference Docs
 
+- OpenAI PDF inputs, verbosity, and reasoning summaries: [OPENAI_RESPONSES_FEATURES.md](./OPENAI_RESPONSES_FEATURES.md)
+
 - Current models, prices, and retirement dates: [MODEL_CATALOG.md](./MODEL_CATALOG.md)
 
 - API reference: [docs/api/index.html](./api/index.html)

@@ -490,7 +490,14 @@ function optionalProviderOptions(
     const openai = nestedOptions(providers, 'openai', [
       'promptCaching',
       'reasoning',
+      'verbosity',
     ]);
+    enumField(
+      openai,
+      'verbosity',
+      new Set(['low', 'medium', 'high']),
+      'snapshot.providerOptions.openai',
+    );
     if (hasValue(openai, 'promptCaching')) {
       const caching = nestedRecord(
         readValue(openai, 'promptCaching'),

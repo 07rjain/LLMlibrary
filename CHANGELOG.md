@@ -6,6 +6,12 @@ All notable changes to this project will be tracked here.
 
 ### feat
 
+- support OpenAI PDF user inputs from inline base64 or HTTPS URLs through
+  completion, streaming, and restored conversations
+- add `providerOptions.openai.verbosity` for compatible GPT-5/GPT-6 models,
+  including requests with structured output
+- expose provider-authored OpenAI summaries as `reasoningSummary` and existing
+  reasoning stream events without mixing them into answers or persisted history
 - register GPT-6 Astra, GPT-6.1 Sol/Terra, GPT-6 Luna, Claude Fable 5.2,
   Claude Opus/Sonnet/Haiku 5.5, Gemini 4 Carbon/Argon/Hydrogen, and Gemini 3.8 Flash
 - add `gpt-transcribe` for file transcription and use it as the default STT model
