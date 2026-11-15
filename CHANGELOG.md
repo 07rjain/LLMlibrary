@@ -12,6 +12,10 @@ All notable changes to this project will be tracked here.
   including requests with structured output
 - expose provider-authored OpenAI summaries as `reasoningSummary` and existing
   reasoning stream events without mixing them into answers or persisted history
+- inspect PDF, verbosity, and reasoning-summary support with
+  `client.models.getResponseCapabilities()`; reject unsupported OpenAI response
+  controls after model switches by default, or explicitly omit them with
+  `providerOptions.unsupportedFeaturePolicy: 'omit'` without removing PDF inputs
 - register GPT-6 Astra, GPT-6.1 Sol/Terra, GPT-6 Luna, Claude Fable 5.2,
   Claude Opus/Sonnet/Haiku 5.5, Gemini 4 Carbon/Argon/Hydrogen, and Gemini 3.8 Flash
 - add `gpt-transcribe` for file transcription and use it as the default STT model
@@ -23,6 +27,8 @@ All notable changes to this project will be tracked here.
 
 ### fix
 
+- apply response feature policy per dispatched fallback attempt and preserve it
+  in restored conversations; check PDF vision capability across all three adapters
 - refresh provider pricing sources and verification dates, including GPT-5.6 Sol
   promotional rates and Gemini Flash promotional rates and future price schedules
 - validate current Claude thinking modes, GPT-6 reasoning/sampling combinations,

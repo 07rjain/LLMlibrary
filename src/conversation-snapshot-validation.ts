@@ -401,7 +401,13 @@ function optionalProviderOptions(
     value,
     SNAPSHOT_CONTEXT,
     'snapshot.providerOptions',
-    ['anthropic', 'google', 'openai'],
+    ['anthropic', 'google', 'openai', 'unsupportedFeaturePolicy'],
+  );
+  enumField(
+    providers,
+    'unsupportedFeaturePolicy',
+    new Set(['error', 'omit']),
+    'snapshot.providerOptions',
   );
   if (hasValue(providers, 'anthropic')) {
     const anthropic = nestedOptions(providers, 'anthropic', [

@@ -16,6 +16,7 @@ export {
   translateOpenAIDocument,
   validateOpenAIVerbosity,
 } from './openai-responses.js';
+export { applyResponseFeaturePolicy } from './response-features.js';
 
 export {
   assertCurrentAnthropicOptions,

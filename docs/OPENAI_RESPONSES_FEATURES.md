@@ -103,6 +103,65 @@ as summary chunks. `raw` retains the provider payload. This adds summary output
 handling; it does not add encrypted reasoning replay. Existing provider usage
 accounting still includes reasoning tokens without charging them twice.
 
+## Switching Models And Providers
+
+Inspect the library's adapter support before enabling a control in your UI:
+
+```ts
+const support = client.models.getResponseCapabilities(selectedModel);
+// { pdfInput: boolean, verbosity: boolean, reasoningSummary: boolean }
+```
+
+This resolves registered lifecycle redirects first. It describes completion
+adapter coverage based on the model's registered provider, kind, vision flag,
+and compatible OpenAI model family; provider/account restrictions still apply.
+Custom OpenAI aliases need compatible family names to use these response controls.
+`reasoningSummary` refers to the canonical non-streaming summary field. Gemini's
+thought stream and Anthropic's thinking controls have separate contracts.
+
+Reusing OpenAI verbosity or reasoning options with an incompatible model throws
+`ProviderCapabilityError` before sending that attempt. This includes switching to
+Gemini or Anthropic, and using reasoning controls on non-reasoning OpenAI models.
+The error's `details.unsupported` lists the affected option paths.
+
+To let users switch models while accepting the loss of these optional controls:
+
+```ts
+await client.complete({
+  model: selectedModel,
+  messages, // including any canonical PDF document parts
+  providerOptions: {
+    unsupportedFeaturePolicy: 'omit',
+    openai: { verbosity: 'low', reasoning: { summary: 'auto' } },
+  },
+});
+```
+
+The default policy is `error`. `omit` removes only unsupported OpenAI verbosity
+and reasoning settings from the translated attempt, without mutating the caller's
+request. Supported settings remain: for example, switching to `o3` omits verbosity
+but retains reasoning. On a non-reasoning OpenAI model it removes the entire
+reasoning configuration, including effort and encrypted-content requests.
+Structured output and independently configured native provider settings remain.
+There is no automatic conversion from OpenAI verbosity or summaries into another
+provider's thinking options. Configure those explicitly in `google` or `anthropic`
+when needed. This policy does not normalize every legacy provider-specific option.
+
+PDFs remain message content under either policy. They use each selected provider's
+native document translation, require a vision-capable model, and remain subject to
+that provider's file formats, URL handling, and limits. Unsupported inputs reject;
+`omit` never removes documents or other message parts to make a request succeed.
+Inline PDF data is the most portable form; a URL accepted by one provider is not a
+guarantee that another provider can retrieve it.
+
+The same policy applies to `complete()`, `stream()`, conversation sends, and restored
+snapshots. Fallback checks run only when an attempt is dispatched, so an unused
+incompatible fallback does not invalidate a compatible primary. A strict-policy
+capability error stops the request; it does not trigger another automatic fallback.
+With `omit`, a fallback triggered by an eligible provider failure can proceed using
+the selected provider's supported controls. Existing restrictions on fallback after
+stream output still apply.
+
 ## Sources And Remaining Gaps
 
 Checked November 15, 2026 against the official [file input guide](https://developers.openai.com/api/docs/guides/file-inputs),

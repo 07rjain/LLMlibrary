@@ -39,6 +39,7 @@ import {
 import { estimateTokens } from '../utils/token-estimator.js';
 import { buildOpenAITextFormat } from '../structured-output.js';
 import {
+  applyResponseFeaturePolicy,
   OpenAIReasoningSummaryStream,
   readOpenAIReasoningSummary,
   translateOpenAIDocument,
@@ -1207,6 +1208,7 @@ function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 export function translateOpenAIRequest(
   options: OpenAICompletionOptions,
 ): Record<string, unknown> {
+  options = applyResponseFeaturePolicy(options, 'openai');
   validateOpenAIPromptCacheBreakpoints(options.messages, options.model);
   const input: OpenAIInputItem[] = [];
   const instructions: string[] = [];

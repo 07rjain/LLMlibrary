@@ -22,6 +22,7 @@ import {
   usageWithCost,
 } from 'unified-llm-client/utils';
 import {
+  applyResponseFeaturePolicy,
   assertCurrentGeminiOptions,
   supportsGeminiSamplingParameters,
   assertProviderArray,
@@ -752,6 +753,7 @@ export class GeminiAdapter {
 export function translateGeminiRequest(
   options: GeminiCompletionOptions,
 ): Record<string, unknown> {
+  options = applyResponseFeaturePolicy(options, 'google');
   const systemMessages = options.messages.filter(
     (message) => message.role === 'system',
   );
@@ -2100,7 +2102,10 @@ function messageContainsVisionContent(message: CanonicalMessage): boolean {
   return (
     typeof message.content !== 'string' &&
     message.content.some(
-      (part) => part.type === 'image_base64' || part.type === 'image_url',
+      (part) =>
+        part.type === 'image_base64' ||
+        part.type === 'image_url' ||
+        (part.type === 'document' && part.mediaType === 'application/pdf'),
     )
   );
 }

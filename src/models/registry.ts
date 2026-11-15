@@ -2,6 +2,7 @@ import { ProviderCapabilityError } from 'unified-llm-client/errors';
 import { isProductionRuntime } from '../runtime.js';
 
 import { defaultModelPrices } from './prices.js';
+import { getResponseCapabilities } from './response-capabilities.js';
 
 import type { ModelCapability, ModelInfo } from '../types.js';
 
@@ -146,6 +147,11 @@ export class ModelRegistry {
     }
 
     return model;
+  }
+
+  /** Inspect the resolved model's PDF, verbosity, and canonical summary support. */
+  getResponseCapabilities(modelId: string) {
+    return getResponseCapabilities(this.resolve(modelId));
   }
 
   assertModelKind(

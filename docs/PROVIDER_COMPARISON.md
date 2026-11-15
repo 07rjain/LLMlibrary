@@ -4,15 +4,44 @@ This library currently ships first-party adapters for Anthropic, OpenAI, and Goo
 
 ## Capability Matrix
 
-| Provider      | Selected seeded completion models                                                                                                   | Streaming | Tool calling | Vision inputs | Session persistence                 | Notes                                                                                                                                                 |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------- | ------------ | ------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Anthropic     | `claude-opus-5`, `claude-sonnet-4-6`, `claude-haiku-4-5`, `claude-haiku-4-5-20251001`, `claude-opus-4-6`                            | Yes       | Yes          | Yes           | Via `Conversation` + session stores | Anthropic cache read/write pricing is modeled separately, including block-level and request-level `cache_control`.                                    |
-| OpenAI        | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-4o`, `gpt-4o-mini`, `o3` | Yes       | Yes          | Yes           | Via `Conversation` + session stores | Uses the stateless Responses API with `store: false`, supports GPT-5.6 `max` reasoning effort, and exposes explicit prompt-cache options/breakpoints. |
-| Google Gemini | `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-2.5-flash`                        | Yes       | Yes          | Yes           | Via `Conversation` + session stores | Streaming uses the dedicated `streamGenerateContent` endpoint, and explicit caches are managed with `client.googleCaches`.                            |
+| Provider      | Selected seeded completion models                                              | Streaming | Tool calling | Vision inputs | Session persistence                 | Notes                                                                                                                 |
+| ------------- | ------------------------------------------------------------------------------ | --------- | ------------ | ------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Anthropic     | `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5` | Yes       | Yes          | Yes           | Via `Conversation` + session stores | Native thinking modes and effort depend on the model. Cache read/write pricing is modeled separately.                 |
+| OpenAI        | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-luna`                    | Yes       | Yes          | Yes           | Via `Conversation` + session stores | Uses the stateless Responses API with `store: false`. Reasoning effort and sampling restrictions depend on the model. |
+| Google Gemini | `gemini-4-carbon`, `gemini-4-argon`, `gemini-4-hydrogen`, `gemini-3.8-flash`   | Yes       | Yes          | Yes           | Via `Conversation` + session stores | Streaming uses `streamGenerateContent`. Gemini 4 uses implicit caching and thinking levels rather than token budgets. |
 
-These are the checked-in seeded completion models, not the provider's full live catalog. The exact current IDs above are accepted directly by the static registry; use `client.models.listRemote({ provider })` when you want discovery against the provider's broader current model list.
+These are selected checked-in models, not the provider's full live catalog. See
+[the model catalog](./MODEL_CATALOG.md) for pricing, lifecycle changes, and older
+models. Use `client.models.listRemote({ provider })` for discovery against the
+provider's broader model list; discovery does not add adapter capabilities.
 
 ## Translation Differences
+
+### Switching response features
+
+The following table describes this library's adapter coverage. Provider API
+availability alone does not mean a feature is exposed by this library.
+
+| Feature                                  | OpenAI                        | Anthropic                                                 | Google Gemini          |
+| ---------------------------------------- | ----------------------------- | --------------------------------------------------------- | ---------------------- |
+| Canonical PDF input                      | Yes, vision models            | Yes, vision models                                        | Yes, vision models     |
+| Explicit response verbosity              | Compatible GPT-5/GPT-6 models | No equivalent mapping                                     | No equivalent mapping  |
+| Canonical `reasoningSummary` field       | Compatible reasoning models   | Not exposed                                               | Not exposed            |
+| Reasoning stream events                  | Requested provider summaries  | Thinking blocks not exposed as canonical reasoning events | Requested thought text |
+| Native reasoning controls                | `openai.reasoning`            | `anthropic.thinking` / `effort`                           | `google.thinking`      |
+| Canonical video input                    | Not implemented               | Not implemented                                           | Not implemented        |
+| Canonical token probabilities / logprobs | Not implemented               | Not implemented                                           | Not implemented        |
+
+Use `client.models.getResponseCapabilities(modelId)` to inspect PDF, verbosity,
+and canonical summary support for a resolved registered model. Reusing OpenAI
+verbosity/reasoning settings on an incompatible model fails clearly by default.
+Set `providerOptions.unsupportedFeaturePolicy: 'omit'` to explicitly drop those
+unsupported controls on that attempt. PDF content remains intact and must be
+supported by the selected model. See [model switching](./OPENAI_RESPONSES_FEATURES.md#switching-models-and-providers)
+for fallback and persistence behavior. Token probabilities describe token
+likelihood, not the factual correctness of an answer, and are separate from reasoning.
+
+### Wire formats
 
 | Concern                | Anthropic                          | OpenAI                                               | Gemini                                 |
 | ---------------------- | ---------------------------------- | ---------------------------------------------------- | -------------------------------------- |
