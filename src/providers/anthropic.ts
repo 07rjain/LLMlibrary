@@ -15,13 +15,17 @@ import {
   readPaginationCursor,
   readRequiredModelId,
 } from '../model-discovery.js';
-import { anthropicUsageToCanonical, usageWithCost } from '../utils/cost.js';
+import {
+  anthropicUsageToCanonical,
+  usageWithCost,
+} from 'unified-llm-client/utils';
 import {
   validateAndCloneTool,
   validateAndCloneTools,
 } from '../tool-validation.js';
 import { buildAnthropicOutputConfig } from '../structured-output.js';
 import {
+  assertCurrentAnthropicOptions,
   assertProviderArray,
   assertProviderContentType,
   assertProviderObject,
@@ -208,6 +212,10 @@ export class AnthropicAdapter {
   async complete(
     options: AnthropicCompletionOptions,
   ): Promise<CanonicalResponse> {
+    options = {
+      ...options,
+      model: this.modelRegistry.resolve(options.model).id,
+    };
     this.assertCapabilities(options);
     throwIfAborted(options.signal);
 
@@ -245,6 +253,10 @@ export class AnthropicAdapter {
   async *stream(
     options: AnthropicCompletionOptions,
   ): AsyncGenerator<StreamChunk, void, void> {
+    options = {
+      ...options,
+      model: this.modelRegistry.resolve(options.model).id,
+    };
     this.assertCapabilities({ ...options, stream: true });
     throwIfAborted(options.signal);
 
@@ -378,6 +390,7 @@ export class AnthropicAdapter {
   private assertCapabilities(
     options: AnthropicCompletionOptions & { stream?: boolean },
   ): void {
+    assertCurrentAnthropicOptions(options);
     const effort = options.providerOptions?.anthropic?.effort as unknown;
     if (effort !== undefined) {
       assertAnthropicThinkingEffort(effort, options.model);
@@ -778,11 +791,7 @@ function validateAnthropicResponsePayload(
   assertProviderString(value.model, context, 'response.model');
   assertProviderArray(value.content, context, 'response.content');
   if (value.stop_reason !== null) {
-    assertProviderString(
-      value.stop_reason,
-      context,
-      'response.stop_reason',
-    );
+    assertProviderString(value.stop_reason, context, 'response.stop_reason');
   }
   if (
     context.operation === 'complete' &&
@@ -809,11 +818,7 @@ function validateAnthropicResponsePayload(
         `response.content[${index}].text`,
       );
     } else if (block.type === 'tool_use') {
-      assertProviderString(
-        block.id,
-        context,
-        `response.content[${index}].id`,
-      );
+      assertProviderString(block.id, context, `response.content[${index}].id`);
       assertProviderString(
         block.name,
         context,
@@ -965,10 +970,7 @@ class AnthropicStreamAssembler {
             name: event.content_block.name,
             type: 'tool-call-start',
           };
-        } else if (
-          event.content_block &&
-          event.content_block.type !== 'text'
-        ) {
+        } else if (event.content_block && event.content_block.type !== 'text') {
           this.outputObserved = true;
         }
         return;

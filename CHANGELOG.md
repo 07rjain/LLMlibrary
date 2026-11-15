@@ -2,6 +2,33 @@
 
 All notable changes to this project will be tracked here.
 
+## Unreleased
+
+### feat
+
+- register GPT-6 Astra, GPT-6.1 Sol/Terra, GPT-6 Luna, Claude Fable 5.2,
+  Claude Opus/Sonnet/Haiku 5.5, Gemini 4 Carbon/Argon/Hydrogen, and Gemini 3.8 Flash
+- add `gpt-transcribe` for file transcription and use it as the default STT model
+- expose lifecycle metadata and `client.models.resolve()`; reject confirmed
+  retirements before dispatch while retaining deprecated IDs until shutdown
+- apply announced Google redirects before routing, quoting, dispatch, and usage accounting
+- apply scheduled Standard token prices and prompt-length pricing tiers, including
+  Haiku 5.5 cache tokens; reject expired promotional pricing without verified successor rates
+
+### fix
+
+- refresh provider pricing sources and verification dates, including GPT-5.6 Sol
+  promotional rates and Gemini Flash promotional rates and future price schedules
+- validate current Claude thinking modes, GPT-6 reasoning/sampling combinations,
+  and Gemini 4 thinking/caching options before transport
+- allow audio model metadata to omit an unpublished token context window;
+  completion and embedding models still require a positive window
+
+### docs
+
+- document current model prices, API retirement dates, redirects, migration
+  requirements, and audio integrations that need a separate Realtime adapter
+
 ## 0.2.2 - 2026-08-20
 
 ### feat

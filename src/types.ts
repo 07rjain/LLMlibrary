@@ -49,7 +49,7 @@ export type AnthropicThinkingEffort =
 export interface AnthropicThinkingOptions {
   budgetTokens?: number;
   display?: 'omitted' | 'summarized';
-  type: 'adaptive' | 'disabled' | 'enabled';
+  type: 'adaptive' | 'between_tools' | 'disabled' | 'enabled';
 }
 
 export interface AnthropicProviderOptions {
@@ -76,7 +76,7 @@ export interface GooglePromptCachingOptions {
 export interface GoogleThinkingOptions {
   budgetTokens?: number;
   includeThoughts?: boolean;
-  level?: 'high' | 'low' | 'medium' | 'minimal';
+  level?: 'high' | 'low' | 'medium' | 'minimal' | 'xhigh';
 }
 
 export interface GoogleProviderOptions {
@@ -620,10 +620,28 @@ export interface UsageEvent extends UsageMetrics {
   timestamp: string;
 }
 
-export interface ModelInfo {
+/** Standard on-demand USD rates per million tokens. */
+export interface ModelTokenPrices {
   cacheReadPrice?: number;
   cacheWritePrice?: number;
-  contextWindow: number;
+  inputPrice: number;
+  outputPrice: number;
+}
+
+export interface ModelLifecycle {
+  status: 'active' | 'deprecated' | 'retired' | 'redirected';
+  /** Exact shutdown date (UTC). Do not use minimum availability guarantees. */
+  shutdownDate?: string;
+  /** Advisory only: an earliest possible shutdown is not an exact deadline. */
+  earliestShutdownDate?: string;
+  /** Provider-confirmed redirect, applied on or after this UTC date. */
+  redirectDate?: string;
+  replacementModel?: string;
+}
+
+export interface ModelInfo extends ModelTokenPrices {
+  /** Omitted for audio models whose provider does not publish a token window. */
+  contextWindow?: number;
   embeddingDimensions?: {
     default: number;
     max?: number;
@@ -631,11 +649,21 @@ export interface ModelInfo {
     recommended?: number[];
   };
   id: string;
-  inputPrice: number;
   kind?: 'completion' | 'embedding' | 'speech' | 'transcription';
   lastUpdated: string;
+  lifecycle?: ModelLifecycle;
+  longContextPricing?: {
+    thresholdTokens: number;
+    inputMultiplier: number;
+    outputMultiplier: number;
+    cacheMultiplier?: number;
+  };
   maxInputTokens?: number;
-  outputPrice: number;
+  /** Announced complete rate cards, effective at midnight UTC. */
+  priceChanges?: Array<ModelTokenPrices & { effectiveFrom: string }>;
+  /** Refuse cost estimates after an offer ends without published successor rates. */
+  pricingExpiresAt?: string;
+  pricingSource?: string;
   provider: CanonicalProvider;
   supportedReasoningEfforts?: readonly AnthropicThinkingEffort[];
   supportedInputModalities?: Array<

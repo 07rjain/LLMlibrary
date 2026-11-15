@@ -26,8 +26,7 @@ liveDescribe('live-real OpenAI speech', () => {
   it('round-trips TTS audio through STT without leaking media or prompts', async () => {
     const ttsModel =
       process.env.LIVE_REAL_OPENAI_TTS_MODEL ?? 'gpt-4o-mini-tts';
-    const sttModel =
-      process.env.LIVE_REAL_OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe';
+    const sttModel = process.env.LIVE_REAL_OPENAI_STT_MODEL ?? 'gpt-transcribe';
     const prompt = 'Say SPEECH_SMOKE_OK.';
     const events: SpeechUsageEvent[] = [];
     const client = LLMClient.fromEnv({

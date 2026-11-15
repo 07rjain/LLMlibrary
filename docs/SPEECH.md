@@ -20,6 +20,11 @@ The first implementation supports OpenAI batch speech endpoints.
 
 Unsupported providers throw `ProviderCapabilityError` instead of silently falling back.
 
+`transcribe()` defaults to `gpt-transcribe` ($0.0045/minute). The batch TTS models
+are deprecated and shut down January 6, 2027; the older transcription models shut
+down February 26, 2027. See [model migrations](./MODEL_CATALOG.md) for replacement
+requirements. Realtime audio needs a separate adapter.
+
 ## Live OpenAI smoke test
 
 The TTS/STT round-trip is opt-in because it makes two billable OpenAI requests.
@@ -33,7 +38,7 @@ LIVE_REAL_TESTS=1 LIVE_REAL_SPEECH=1 OPENAI_API_KEY=... \
 pnpm test:real:speech
 ```
 
-The defaults are `gpt-4o-mini-tts` and `gpt-4o-mini-transcribe`. Override them
+The defaults are `gpt-4o-mini-tts` and `gpt-transcribe`. Override them
 with `LIVE_REAL_OPENAI_TTS_MODEL` and `LIVE_REAL_OPENAI_STT_MODEL`. The test
 uses bounded duration and budget estimates, requires non-empty normalized TTS
 audio and STT text, and fails visibly on provider, billing, or rate-limit
@@ -90,7 +95,7 @@ const transcript = await client.transcribe({
   },
   inputAudioSeconds: 42,
   language: 'en',
-  model: 'gpt-4o-mini-transcribe',
+  model: 'gpt-transcribe',
   responseFormat: 'json',
 });
 

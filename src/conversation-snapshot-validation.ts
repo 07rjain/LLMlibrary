@@ -425,7 +425,7 @@ function optionalProviderOptions(
       enumField(
         thinking,
         'type',
-        new Set(['adaptive', 'disabled', 'enabled']),
+        new Set(['adaptive', 'between_tools', 'disabled', 'enabled']),
         'snapshot.providerOptions.anthropic.thinking',
         true,
       );
@@ -481,7 +481,7 @@ function optionalProviderOptions(
       enumField(
         thinking,
         'level',
-        new Set(['high', 'low', 'medium', 'minimal']),
+        new Set(['high', 'low', 'medium', 'minimal', 'xhigh']),
         'snapshot.providerOptions.google.thinking',
       );
     }

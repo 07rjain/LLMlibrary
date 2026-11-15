@@ -29,7 +29,7 @@ import {
   openaiUsageToCanonical,
   speechUsageWithCost,
   usageWithCost,
-} from '../utils/cost.js';
+} from 'unified-llm-client/utils';
 import {
   base64ToBytes,
   deriveAudioDurationSeconds,
@@ -39,6 +39,8 @@ import {
 import { estimateTokens } from '../utils/token-estimator.js';
 import { buildOpenAITextFormat } from '../structured-output.js';
 import {
+  assertCurrentOpenAIOptions,
+  assertCurrentTranscriptionOptions,
   assertProviderArray,
   assertProviderContentType,
   assertProviderObject,
@@ -76,7 +78,7 @@ import type {
   TranscriptionUrlPolicy,
   TranscriptionWord,
 } from '../types.js';
-import type { OpenAIUsagePayload } from '../utils/cost.js';
+import type { OpenAIUsagePayload } from 'unified-llm-client/utils';
 import type { RetryOptions } from '../utils/retry.js';
 
 type OpenAIInputItem =
@@ -326,6 +328,10 @@ export class OpenAIAdapter {
   }
 
   async complete(options: OpenAICompletionOptions): Promise<CanonicalResponse> {
+    options = {
+      ...options,
+      model: this.modelRegistry.resolve(options.model).id,
+    };
     this.assertCapabilities(options);
     throwIfAborted(options.signal);
 
@@ -359,6 +365,10 @@ export class OpenAIAdapter {
   async *stream(
     options: OpenAICompletionOptions,
   ): AsyncGenerator<StreamChunk, void, void> {
+    options = {
+      ...options,
+      model: this.modelRegistry.resolve(options.model).id,
+    };
     this.assertCapabilities({ ...options, stream: true });
     throwIfAborted(options.signal);
 
@@ -465,6 +475,7 @@ export class OpenAIAdapter {
 
   async speak(options: OpenAIAdapterSpeechOptions): Promise<SpeechResponse> {
     const validated = validateSpeechRequest(options);
+    validated.model = this.modelRegistry.resolve(validated.model).id;
     throwIfAborted(validated.signal);
     const format = validated.format ?? 'mp3';
     const response = await withRetry(
@@ -526,6 +537,8 @@ export class OpenAIAdapter {
     options: OpenAIAdapterTranscriptionOptions,
   ): Promise<TranscriptionResponse> {
     const validated = validateTranscriptionRequest(options);
+    validated.model = this.modelRegistry.resolve(validated.model).id;
+    assertCurrentTranscriptionOptions(validated);
     throwIfAborted(validated.signal);
     const body = await buildOpenAITranscriptionFormData(
       validated,
@@ -699,7 +712,10 @@ async function buildOpenAITranscriptionFormData(
   formData.set('model', options.model);
 
   if (options.language !== undefined) {
-    formData.set('language', options.language);
+    formData.set(
+      options.model === 'gpt-transcribe' ? 'languages[]' : 'language',
+      options.language,
+    );
   }
 
   if (options.prompt !== undefined) {
@@ -711,7 +727,7 @@ async function buildOpenAITranscriptionFormData(
     (options.diarization || options.model === 'gpt-4o-transcribe-diarize'
       ? 'diarized_json'
       : undefined);
-  if (responseFormat !== undefined) {
+  if (responseFormat !== undefined && options.model !== 'gpt-transcribe') {
     formData.set('response_format', responseFormat);
   }
 
@@ -1194,6 +1210,7 @@ export function translateOpenAIRequest(
     options.model,
   );
   const reasoning = openaiOptions?.reasoning;
+  assertCurrentOpenAIOptions(options);
   const tools =
     options.tools === undefined
       ? undefined

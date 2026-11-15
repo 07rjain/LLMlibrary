@@ -1,7 +1,10 @@
 # Cost And Pricing
 
 Prepared: 2026-04-16  
-Updated: 2026-08-02
+Updated: 2026-11-15
+
+See [current models, pricing, and retirements](./MODEL_CATALOG.md) for the verified
+catalog, scheduled price changes, prompt-length tiers, and migration deadlines.
 
 ## Cost Semantics
 
@@ -34,7 +37,12 @@ Updated: 2026-08-02
   model is not registered instead of treating unknown pricing as free. A
   registered model whose validated input and output prices are genuinely zero
   still returns zero.
-- When provider pricing is tiered by prompt size, execution mode, or preview/stable status, the checked-in registry stores one explicit baseline price per model. Those cases should be treated as routing-grade estimates, not invoice-grade pricing.
+- The registry applies documented Standard-rate date schedules and prompt-length
+  multipliers to the whole request. Haiku 5.5 tier selection includes separately
+  reported cache reads and writes. Quotes and normalized usage use the same
+  pricing calculation. Other execution modes, regional premiums, longer cache
+  retention, cache storage, hosted tools, and modality-specific embedding rates
+  remain outside the baseline estimate.
 
 ## Token Counting
 
@@ -45,6 +53,10 @@ Updated: 2026-08-02
 ## Staleness Policy
 
 - Each model price entry carries a `lastUpdated` field.
+- Seeded entries also carry a `pricingSource`; announced complete rate cards are
+  stored under `priceChanges`. Expired offers without documented successor rates
+  fail closed using `pricingExpiresAt`. `pnpm pricecheck` checks both freshness
+  and expired offers.
 - Development warnings still trigger when pricing is older than 90 days.
 - `pnpm pricecheck` enforces a tighter 45-day freshness target for automated maintenance.
 - `.github/workflows/prices-drift.yml` runs that check weekly so stale pricing does not silently linger.
@@ -62,4 +74,7 @@ Updated: 2026-08-02
 - Token totals remain exact only when the provider exposes authoritative counts or when the tokenizer contract is stable enough to reproduce locally.
 - USD totals should be treated as operational estimates for routing, budgets, and reporting rather than invoice-grade accounting.
 - Consumers that need billing reconciliation should compare library output with provider-side usage exports.
-- Gemini preview models with size-based or mode-based pricing and any future OpenAI / Anthropic tiered schedules are the clearest examples where provider invoices can differ from the registry baseline.
+- Provider invoices can still differ because of execution mode, tool charges,
+  cache retention/storage, regional pricing, modality-specific rates, or token
+  estimates. Published prompt-length tiers and scheduled Standard rate changes
+  are included where present in the registry.

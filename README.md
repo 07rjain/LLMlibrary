@@ -254,7 +254,7 @@ const transcript = await client.transcribe({
     mediaType: 'audio/wav',
   },
   inputAudioSeconds: 42,
-  model: 'gpt-4o-mini-transcribe',
+  model: 'gpt-transcribe',
 });
 
 console.log(speech.audio); // Uint8Array

@@ -51,8 +51,13 @@ const MODEL_OVERRIDE_FIELDS = [
   'inputPrice',
   'kind',
   'lastUpdated',
+  'lifecycle',
+  'longContextPricing',
   'maxInputTokens',
   'outputPrice',
+  'priceChanges',
+  'pricingExpiresAt',
+  'pricingSource',
   'speechPrices',
   'supportedInputModalities',
   'supportedOutputModalities',
@@ -170,7 +175,93 @@ export class ModelRegistry {
       });
     }
 
-    return cloneModelInfo(normalizeModelInfo({ ...model }));
+    const result = cloneModelInfo(normalizeModelInfo({ ...model }));
+    const today = this.now().toISOString().slice(0, 10);
+    for (const change of result.priceChanges ?? []) {
+      if (change.effectiveFrom <= today) {
+        // Each schedule entry is a complete rate card, not a partial override.
+        delete result.cacheReadPrice;
+        delete result.cacheWritePrice;
+        result.inputPrice = change.inputPrice;
+        result.outputPrice = change.outputPrice;
+        if (change.cacheReadPrice !== undefined)
+          result.cacheReadPrice = change.cacheReadPrice;
+        if (change.cacheWritePrice !== undefined)
+          result.cacheWritePrice = change.cacheWritePrice;
+      }
+    }
+    return result;
+  }
+
+  /** Resolve documented redirects and reject confirmed retirements before dispatch. */
+  resolve(modelId: string): ModelInfo {
+    const seen = new Set<string>();
+    const today = this.now().toISOString().slice(0, 10);
+    let model = this.get(modelId);
+    while (true) {
+      if (seen.has(model.id)) {
+        throw new ProviderCapabilityError('Model redirect cycle detected.', {
+          model: modelId,
+        });
+      }
+      seen.add(model.id);
+      const lifecycle = model.lifecycle;
+      if (lifecycle?.redirectDate && lifecycle.redirectDate <= today) {
+        const replacement = this.get(lifecycle.replacementModel!);
+        if (
+          replacement.provider !== model.provider ||
+          replacement.kind !== model.kind
+        ) {
+          throw new ProviderCapabilityError(
+            'Model redirects must preserve provider and kind.',
+            {
+              model: model.id,
+              provider: model.provider,
+            },
+          );
+        }
+        model = replacement;
+        continue;
+      }
+      if (
+        lifecycle?.status === 'retired' ||
+        (lifecycle?.shutdownDate && lifecycle.shutdownDate <= today)
+      ) {
+        throw new ProviderCapabilityError(
+          `Model "${model.id}" is retired.${lifecycle.replacementModel ? ` Use "${lifecycle.replacementModel}" instead.` : ''}`,
+          {
+            model: model.id,
+            provider: model.provider,
+            details: {
+              code: 'model_retired',
+              ...(lifecycle.replacementModel
+                ? { replacementModel: lifecycle.replacementModel }
+                : {}),
+            },
+            retryable: false,
+          },
+        );
+      }
+      return this.getPricing(model.id);
+    }
+  }
+
+  /** Return effective prices, failing closed when a published offer has expired. */
+  getPricing(modelId: string): ModelInfo {
+    const model = this.get(modelId);
+    const today = this.now().toISOString().slice(0, 10);
+    if (model.pricingExpiresAt && model.pricingExpiresAt <= today) {
+      throw new ProviderCapabilityError(
+        `Pricing for "${modelId}" has expired. Update its verified rates before estimating costs.`,
+        {
+          model: modelId,
+          provider: model.provider,
+          details: { code: 'expired_model_pricing' },
+          retryable: false,
+        },
+      );
+    }
+    return model;
   }
 
   isSupported(modelId: string): boolean {
@@ -179,7 +270,7 @@ export class ModelRegistry {
 
   list(): ModelInfo[] {
     return [...this.models.values()]
-      .map((model) => cloneModelInfo(normalizeModelInfo({ ...model })))
+      .map((model) => this.get(model.id))
       .sort((left, right) => left.id.localeCompare(right.id));
   }
 
@@ -270,6 +361,13 @@ function cloneModelInfo(model: ModelInfo): ModelInfo {
         }
       : {}),
     ...(model.speechPrices ? { speechPrices: { ...model.speechPrices } } : {}),
+    ...(model.lifecycle ? { lifecycle: { ...model.lifecycle } } : {}),
+    ...(model.longContextPricing
+      ? { longContextPricing: { ...model.longContextPricing } }
+      : {}),
+    ...(model.priceChanges
+      ? { priceChanges: model.priceChanges.map((change) => ({ ...change })) }
+      : {}),
     ...(model.supportedInputModalities
       ? { supportedInputModalities: [...model.supportedInputModalities] }
       : {}),
@@ -321,11 +419,18 @@ function assertValidModelInfo(
     );
   }
 
-  assertContextWindow(model.contextWindow, id, provider);
+  if (
+    model.contextWindow !== undefined ||
+    kind === 'completion' ||
+    kind === 'embedding'
+  ) {
+    assertContextWindow(model.contextWindow, id, provider);
+  }
   if (model.maxInputTokens !== undefined) {
     assertPositiveInteger(model.maxInputTokens, 'maxInputTokens', id, provider);
   }
   assertDate(model.lastUpdated, id, provider);
+  assertPricingAndLifecycle(model, id, provider);
 
   for (const option of [
     'supportsStreaming',
@@ -408,6 +513,168 @@ function assertValidModelInfo(
   }
   if (model.speechPrices !== undefined) {
     assertSpeechPrices(model.speechPrices, id, provider);
+  }
+}
+
+function assertPricingAndLifecycle(
+  model: Record<string, unknown>,
+  id: string,
+  provider: ModelInfo['provider'],
+): void {
+  const record = (value: unknown, path: string, allowed: readonly string[]) => {
+    if (!isPlainObject(value))
+      throw modelValidationError(path, 'plain_object', value, id, provider);
+    for (const key of Object.keys(value)) {
+      if (!allowed.includes(key))
+        throw modelValidationError(
+          `${path}.${key}`,
+          'supported_field',
+          value[key],
+          id,
+          provider,
+        );
+    }
+    return value;
+  };
+  if (model.pricingSource !== undefined) {
+    assertNonEmptyString(model.pricingSource, 'pricingSource', id, provider);
+  }
+  if (model.pricingExpiresAt !== undefined) {
+    assertDate(model.pricingExpiresAt, id, provider, 'pricingExpiresAt');
+  }
+  if (model.priceChanges !== undefined) {
+    if (!Array.isArray(model.priceChanges))
+      throw modelValidationError(
+        'priceChanges',
+        'array',
+        model.priceChanges,
+        id,
+        provider,
+      );
+    let previous = '';
+    for (const [index, value] of model.priceChanges.entries()) {
+      const path = `priceChanges.${index}`;
+      const change = record(value, path, [
+        'effectiveFrom',
+        'inputPrice',
+        'outputPrice',
+        'cacheReadPrice',
+        'cacheWritePrice',
+      ]);
+      assertDate(change.effectiveFrom, id, provider, `${path}.effectiveFrom`);
+      if ((change.effectiveFrom as string) <= previous)
+        throw modelValidationError(
+          path,
+          'ascending_unique_dates',
+          value,
+          id,
+          provider,
+        );
+      previous = change.effectiveFrom as string;
+      for (const field of [
+        'inputPrice',
+        'outputPrice',
+        'cacheReadPrice',
+        'cacheWritePrice',
+      ]) {
+        if (
+          field === 'inputPrice' ||
+          field === 'outputPrice' ||
+          change[field] !== undefined
+        ) {
+          assertNonNegativePrice(
+            change[field],
+            `${path}.${field}`,
+            id,
+            provider,
+          );
+        }
+      }
+    }
+  }
+  if (model.longContextPricing !== undefined) {
+    const tier = record(model.longContextPricing, 'longContextPricing', [
+      'thresholdTokens',
+      'inputMultiplier',
+      'outputMultiplier',
+      'cacheMultiplier',
+    ]);
+    assertPositiveInteger(
+      tier.thresholdTokens,
+      'longContextPricing.thresholdTokens',
+      id,
+      provider,
+    );
+    for (const field of [
+      'inputMultiplier',
+      'outputMultiplier',
+      'cacheMultiplier',
+    ]) {
+      if (field === 'cacheMultiplier' && tier[field] === undefined) continue;
+      assertNonNegativePrice(
+        tier[field],
+        `longContextPricing.${field}`,
+        id,
+        provider,
+      );
+      if (tier[field] === 0)
+        throw modelValidationError(
+          `longContextPricing.${field}`,
+          'positive_number',
+          0,
+          id,
+          provider,
+        );
+    }
+  }
+  if (model.lifecycle !== undefined) {
+    const lifecycle = record(model.lifecycle, 'lifecycle', [
+      'status',
+      'shutdownDate',
+      'earliestShutdownDate',
+      'redirectDate',
+      'replacementModel',
+    ]);
+    assertAllowedString(
+      lifecycle.status,
+      ['active', 'deprecated', 'retired', 'redirected'],
+      'lifecycle.status',
+      id,
+      provider,
+    );
+    for (const field of [
+      'shutdownDate',
+      'earliestShutdownDate',
+      'redirectDate',
+    ]) {
+      if (lifecycle[field] !== undefined)
+        assertDate(lifecycle[field], id, provider, `lifecycle.${field}`);
+    }
+    if (lifecycle.replacementModel !== undefined) {
+      assertNonEmptyString(
+        lifecycle.replacementModel,
+        'lifecycle.replacementModel',
+        id,
+        provider,
+      );
+    }
+    if (
+      (lifecycle.redirectDate !== undefined &&
+        lifecycle.replacementModel === undefined) ||
+      (lifecycle.status === 'redirected' &&
+        lifecycle.redirectDate === undefined) ||
+      (lifecycle.shutdownDate !== undefined &&
+        (lifecycle.redirectDate !== undefined ||
+          lifecycle.earliestShutdownDate !== undefined))
+    ) {
+      throw modelValidationError(
+        'lifecycle',
+        'consistent_lifecycle_dates',
+        lifecycle,
+        id,
+        provider,
+      );
+    }
   }
 }
 
@@ -628,6 +895,7 @@ function assertDate(
   value: unknown,
   model: string,
   provider: ModelInfo['provider'],
+  option = 'lastUpdated',
 ): void {
   const parsed =
     typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
@@ -638,13 +906,7 @@ function assertDate(
     Number.isNaN(parsed.getTime()) ||
     parsed.toISOString().slice(0, 10) !== value
   ) {
-    throw modelValidationError(
-      'lastUpdated',
-      'yyyy_mm_dd',
-      value,
-      model,
-      provider,
-    );
+    throw modelValidationError(option, 'yyyy_mm_dd', value, model, provider);
   }
 }
 

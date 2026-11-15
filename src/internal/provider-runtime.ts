@@ -10,3 +10,11 @@ export {
 } from '../provider-response.js';
 export { awaitWithAbort, throwIfAborted } from '../stream-control.js';
 export { parseSSE, withRetry } from 'unified-llm-client/utils';
+
+export {
+  assertCurrentAnthropicOptions,
+  assertCurrentGeminiOptions,
+  assertCurrentOpenAIOptions,
+  assertCurrentTranscriptionOptions,
+  supportsGeminiSamplingParameters,
+} from './current-model-options.js';
