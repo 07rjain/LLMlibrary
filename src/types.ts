@@ -67,6 +67,8 @@ export interface OpenAIPromptCachingOptions {
 export interface OpenAIProviderOptions {
   promptCaching?: OpenAIPromptCachingOptions;
   reasoning?: OpenAIReasoningOptions;
+  /** Response detail preference on compatible GPT-5/GPT-6 models. */
+  verbosity?: 'low' | 'medium' | 'high';
 }
 
 export interface GooglePromptCachingOptions {
@@ -85,9 +87,18 @@ export interface GoogleProviderOptions {
 }
 
 export interface ProviderOptions {
+  /** How to handle unsupported OpenAI verbosity/reasoning settings after a model switch. Defaults to error. Never removes message content. */
+  unsupportedFeaturePolicy?: 'error' | 'omit';
   anthropic?: AnthropicProviderOptions;
   google?: GoogleProviderOptions;
   openai?: OpenAIProviderOptions;
+}
+
+/** Features exposed by this library's completion adapters, rather than the full provider API. */
+export interface ResponseCapabilities {
+  pdfInput: boolean;
+  verbosity: boolean;
+  reasoningSummary: boolean;
 }
 
 export interface CacheablePartBase {
@@ -542,6 +553,8 @@ export interface CanonicalResponse {
   provider: CanonicalProvider;
   raw: unknown;
   refusal?: string;
+  /** Provider-authored reasoning summary, separate from the final answer. */
+  reasoningSummary?: string;
   responseFormat?: StructuredOutputMode;
   structuredOutputStatus?: StructuredOutputStatus;
   text: string;

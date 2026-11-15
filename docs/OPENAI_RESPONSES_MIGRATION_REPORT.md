@@ -11,6 +11,9 @@ Current status:
 - `store: false` is sent explicitly
 - library-owned `Conversation` and `SessionApi` state remain the source of truth
 - the earlier dual-transport rollout notes below are historical migration planning, not the current runtime design
+- PDF inputs, verbosity, and normalized/streamed reasoning summaries are now
+  available; see [current Responses features](./OPENAI_RESPONSES_FEATURES.md).
+  The initial parity plan below predates those additions.
 
 ## Objective
 

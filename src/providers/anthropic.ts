@@ -25,6 +25,7 @@ import {
 } from '../tool-validation.js';
 import { buildAnthropicOutputConfig } from '../structured-output.js';
 import {
+  applyResponseFeaturePolicy,
   assertCurrentAnthropicOptions,
   assertProviderArray,
   assertProviderContentType,
@@ -459,6 +460,7 @@ export class AnthropicAdapter {
 export function translateAnthropicRequest(
   options: AnthropicCompletionOptions,
 ): Record<string, unknown> {
+  options = applyResponseFeaturePolicy(options, 'anthropic');
   const validatedTools =
     options.tools === undefined
       ? undefined
@@ -1304,7 +1306,10 @@ function messageContainsVisionContent(message: CanonicalMessage): boolean {
   return (
     typeof message.content !== 'string' &&
     message.content.some(
-      (part) => part.type === 'image_base64' || part.type === 'image_url',
+      (part) =>
+        part.type === 'image_base64' ||
+        part.type === 'image_url' ||
+        (part.type === 'document' && part.mediaType === 'application/pdf'),
     )
   );
 }

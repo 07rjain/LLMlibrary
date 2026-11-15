@@ -39,6 +39,11 @@ import {
 import { estimateTokens } from '../utils/token-estimator.js';
 import { buildOpenAITextFormat } from '../structured-output.js';
 import {
+  applyResponseFeaturePolicy,
+  OpenAIReasoningSummaryStream,
+  readOpenAIReasoningSummary,
+  translateOpenAIDocument,
+  validateOpenAIVerbosity,
   assertCurrentOpenAIOptions,
   assertCurrentTranscriptionOptions,
   assertProviderArray,
@@ -80,6 +85,7 @@ import type {
 } from '../types.js';
 import type { OpenAIUsagePayload } from 'unified-llm-client/utils';
 import type { RetryOptions } from '../utils/retry.js';
+import type { OpenAIInputFilePart } from '../internal/openai-responses.js';
 
 type OpenAIInputItem =
   | OpenAIFunctionCallInput
@@ -105,6 +111,7 @@ interface OpenAIInputImagePart {
 }
 
 type OpenAIInputContentPart =
+  | OpenAIInputFilePart
   | OpenAIInputImagePart
   | OpenAIInputTextPart
   | OpenAIOutputTextInputPart;
@@ -1201,6 +1208,7 @@ function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 export function translateOpenAIRequest(
   options: OpenAICompletionOptions,
 ): Record<string, unknown> {
+  options = applyResponseFeaturePolicy(options, 'openai');
   validateOpenAIPromptCacheBreakpoints(options.messages, options.model);
   const input: OpenAIInputItem[] = [];
   const instructions: string[] = [];
@@ -1211,6 +1219,8 @@ export function translateOpenAIRequest(
   );
   const reasoning = openaiOptions?.reasoning;
   assertCurrentOpenAIOptions(options);
+  const verbosity = openaiOptions?.verbosity;
+  validateOpenAIVerbosity(verbosity, options.model);
   const tools =
     options.tools === undefined
       ? undefined
@@ -1251,8 +1261,11 @@ export function translateOpenAIRequest(
     messages: options.messages,
     ...(options.system !== undefined ? { system: options.system } : {}),
   });
-  if (textFormat !== undefined) {
-    body.text = textFormat;
+  if (textFormat !== undefined || verbosity !== undefined) {
+    body.text = {
+      ...textFormat,
+      ...(verbosity !== undefined ? { verbosity } : {}),
+    };
   }
 
   if (tools && tools.length > 0) {
@@ -1355,6 +1368,11 @@ export function translateOpenAIResponse(
   const content: CanonicalPart[] = [];
   const toolCalls: CanonicalToolCall[] = [];
   const textSegments: string[] = [];
+  const reasoningSummary = readOpenAIReasoningSummary(payload.output, {
+    model: resolvedModelId,
+    provider: 'openai',
+    operation: 'complete',
+  });
   let refusal: string | undefined;
 
   for (const item of payload.output ?? []) {
@@ -1408,6 +1426,7 @@ export function translateOpenAIResponse(
     model: resolvedModelId,
     provider: 'openai',
     raw: payload,
+    ...(reasoningSummary !== undefined ? { reasoningSummary } : {}),
     ...(refusal !== undefined
       ? {
           refusal,
@@ -1541,6 +1560,9 @@ function validateOpenAIResponsePayload(
         context,
         `response.output[${index}].type`,
       );
+      if (item.type === 'reasoning') {
+        readOpenAIReasoningSummary([item as { type: string }], context);
+      }
       if (item.type === 'message') {
         assertProviderArray(
           item.content,
@@ -1704,6 +1726,7 @@ class OpenAIStreamAssembler {
     { args: string; callId: string; name: string }
   >();
   private terminal = false;
+  private readonly reasoningSummary = new OpenAIReasoningSummaryStream();
 
   constructor(
     model: string,
@@ -1720,7 +1743,14 @@ class OpenAIStreamAssembler {
     type?: string;
   }): Generator<StreamChunk> {
     switch (event.type) {
+      case 'response.reasoning_summary_part.added':
+      case 'response.reasoning_summary_part.done':
+      case 'response.reasoning_summary_text.delta':
+      case 'response.reasoning_summary_text.done':
+        yield* this.reasoningSummary.consume(event, this.context);
+        return;
       case 'response.output_text.delta': {
+        yield* this.reasoningSummary.close();
         const typedEvent =
           event as unknown as OpenAIResponseOutputTextDeltaEvent;
         if (typedEvent.delta.length > 0) {
@@ -1734,6 +1764,8 @@ class OpenAIStreamAssembler {
       case 'response.output_item.added': {
         const typedEvent =
           event as unknown as OpenAIResponseOutputItemAddedEvent;
+        if (typedEvent.item.type !== 'reasoning')
+          yield* this.reasoningSummary.close();
         yield* this.handleOutputItemAdded(
           typedEvent.item,
           typedEvent.output_index,
@@ -1753,6 +1785,7 @@ class OpenAIStreamAssembler {
       case 'response.output_item.done': {
         const typedEvent =
           event as unknown as OpenAIResponseOutputItemDoneEvent;
+        yield* this.reasoningSummary.close();
         yield* this.handleOutputItemDone(
           typedEvent.item,
           typedEvent.output_index,
@@ -1761,6 +1794,7 @@ class OpenAIStreamAssembler {
       }
       case 'response.completed':
       case 'response.incomplete':
+        yield* this.reasoningSummary.close();
         this.finalResponse = (
           event as unknown as
             | OpenAIResponseCompletedEvent
@@ -1992,13 +2026,15 @@ function translateOpenAIUserMessage(
   for (const part of message.content) {
     switch (part.type) {
       case 'audio':
-      case 'document':
         throw new ProviderCapabilityError(
-          'OpenAI Responses do not support document or audio canonical parts in this adapter.',
+          'OpenAI Responses do not support audio canonical parts in this adapter.',
           {
             provider: 'openai',
           },
         );
+      case 'document':
+        userParts.push(translateOpenAIDocument(part));
+        break;
       case 'image_base64':
         userParts.push({
           image_url: `data:${part.mediaType};base64,${part.data}`,
@@ -2213,9 +2249,7 @@ function messageContainsUnsupportedOpenAIParts(
 ): boolean {
   return (
     typeof message.content !== 'string' &&
-    message.content.some(
-      (part) => part.type === 'audio' || part.type === 'document',
-    )
+    message.content.some((part) => part.type === 'audio')
   );
 }
 
@@ -2223,7 +2257,10 @@ function messageContainsVisionContent(message: CanonicalMessage): boolean {
   return (
     typeof message.content !== 'string' &&
     message.content.some(
-      (part) => part.type === 'image_base64' || part.type === 'image_url',
+      (part) =>
+        part.type === 'image_base64' ||
+        part.type === 'image_url' ||
+        part.type === 'document',
     )
   );
 }

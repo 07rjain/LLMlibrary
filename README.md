@@ -11,6 +11,7 @@ Provider-agnostic TypeScript client for Anthropic, OpenAI, and Google Gemini wit
 - Non-streaming and streaming completions with explicit `stream.cancel()`
 - JSON and schema-constrained structured output across supported providers
 - Provider-specific reasoning and thinking controls with usage token accounting
+- OpenAI PDF inputs, response verbosity, and separate reasoning summaries
 - Conversation state with running token and cost totals
 - Automatic tool execution in conversations, including streaming pause/execute/resume
 - Context trimming via sliding window or summarisation strategies

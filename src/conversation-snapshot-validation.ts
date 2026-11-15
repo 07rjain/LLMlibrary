@@ -401,7 +401,13 @@ function optionalProviderOptions(
     value,
     SNAPSHOT_CONTEXT,
     'snapshot.providerOptions',
-    ['anthropic', 'google', 'openai'],
+    ['anthropic', 'google', 'openai', 'unsupportedFeaturePolicy'],
+  );
+  enumField(
+    providers,
+    'unsupportedFeaturePolicy',
+    new Set(['error', 'omit']),
+    'snapshot.providerOptions',
   );
   if (hasValue(providers, 'anthropic')) {
     const anthropic = nestedOptions(providers, 'anthropic', [
@@ -490,7 +496,14 @@ function optionalProviderOptions(
     const openai = nestedOptions(providers, 'openai', [
       'promptCaching',
       'reasoning',
+      'verbosity',
     ]);
+    enumField(
+      openai,
+      'verbosity',
+      new Set(['low', 'medium', 'high']),
+      'snapshot.providerOptions.openai',
+    );
     if (hasValue(openai, 'promptCaching')) {
       const caching = nestedRecord(
         readValue(openai, 'promptCaching'),
