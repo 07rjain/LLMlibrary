@@ -405,6 +405,7 @@ describe('Usage logging', () => {
   });
 
   it('flushes queued usage events on a timer', async () => {
+    vi.useRealTimers();
     vi.useFakeTimers();
     const pool = new MockPool();
 

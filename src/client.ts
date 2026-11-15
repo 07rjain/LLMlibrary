@@ -273,6 +273,7 @@ export class LLMClient {
     list: ModelRegistry['list'];
     listRemote: (options: RemoteModelListOptions) => Promise<RemoteModelInfo[]>;
     register: ModelRegistry['register'];
+    resolve: ModelRegistry['resolve'];
   };
   readonly googleCaches: {
     create: (options: GeminiCreateCacheOptions) => Promise<GeminiCachedContent>;
@@ -367,6 +368,7 @@ export class LLMClient {
       list: this.modelRegistry.list.bind(this.modelRegistry),
       listRemote: this.listRemoteModels.bind(this),
       register: this.modelRegistry.register.bind(this.modelRegistry),
+      resolve: this.modelRegistry.resolve.bind(this.modelRegistry),
     };
     this.googleCaches = {
       create: (cacheOptions) =>
@@ -510,7 +512,9 @@ export class LLMClient {
         model: routeAttempt.request.model,
         provider: routeAttempt.request.provider,
       })),
-      contextWindow: modelInfo.contextWindow,
+      ...(modelInfo.contextWindow !== undefined
+        ? { contextWindow: modelInfo.contextWindow }
+        : {}),
       model: attempt.request.model,
       provider: attempt.request.provider,
     };
@@ -964,14 +968,15 @@ export class LLMClient {
     model: string;
     provider: CanonicalProvider;
   } {
-    const model = target.model ?? options.model ?? this.defaultModel;
-    if (!model) {
+    const requestedModel = target.model ?? options.model ?? this.defaultModel;
+    if (!requestedModel) {
       throw new ProviderCapabilityError(
         'No model was supplied. Set defaultModel on LLMClient or pass model per request.',
       );
     }
 
-    const modelInfo = this.modelRegistry.get(model);
+    const modelInfo = this.modelRegistry.resolve(requestedModel);
+    const model = modelInfo.id;
     const provider =
       target.provider ??
       options.provider ??
@@ -1008,9 +1013,11 @@ export class LLMClient {
     model: string;
     provider: EmbeddingProvider;
   } {
-    const model = normalizeEmbeddingModelId(
-      options.model ?? this.defaultEmbeddingModel ?? 'gemini-embedding-2',
-    );
+    const model = this.modelRegistry.resolve(
+      normalizeEmbeddingModelId(
+        options.model ?? this.defaultEmbeddingModel ?? 'gemini-embedding-2',
+      ),
+    ).id;
     const requestedProvider = options.provider as CanonicalProvider | undefined;
     if (requestedProvider && requestedProvider !== 'google') {
       throw new ProviderCapabilityError(
@@ -1067,7 +1074,9 @@ export class LLMClient {
     model: string;
     provider: SpeechProvider;
   } {
-    const model = options.model ?? 'gpt-4o-mini-tts';
+    const model = this.modelRegistry.resolve(
+      options.model ?? 'gpt-4o-mini-tts',
+    ).id;
     const modelInfo = this.modelRegistry.assertModelKind(model, 'speech');
     const provider = options.provider ?? (modelInfo.provider as SpeechProvider);
 
@@ -1114,7 +1123,9 @@ export class LLMClient {
     model: string;
     provider: SpeechProvider;
   } {
-    const model = options.model ?? 'gpt-4o-mini-transcribe';
+    const model = this.modelRegistry.resolve(
+      options.model ?? 'gpt-transcribe',
+    ).id;
     const modelInfo = this.modelRegistry.assertModelKind(
       model,
       'transcription',

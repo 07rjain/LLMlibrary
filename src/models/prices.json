@@ -10,7 +10,11 @@
     "outputPrice": 15,
     "cacheReadPrice": 0.3,
     "cacheWritePrice": 3.75,
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "lifecycle": {
+      "status": "active"
+    }
   },
   "claude-haiku-4-5": {
     "provider": "anthropic",
@@ -22,7 +26,11 @@
     "outputPrice": 5,
     "cacheReadPrice": 0.1,
     "cacheWritePrice": 1.25,
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "lifecycle": {
+      "status": "active"
+    }
   },
   "claude-haiku-4-5-20251001": {
     "provider": "anthropic",
@@ -34,7 +42,11 @@
     "outputPrice": 5,
     "cacheReadPrice": 0.1,
     "cacheWritePrice": 1.25,
-    "lastUpdated": "2026-07-27"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "lifecycle": {
+      "status": "active"
+    }
   },
   "claude-opus-4-6": {
     "provider": "anthropic",
@@ -47,7 +59,11 @@
     "outputPrice": 25,
     "cacheReadPrice": 0.5,
     "cacheWritePrice": 6.25,
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "lifecycle": {
+      "status": "active"
+    }
   },
   "claude-opus-5": {
     "provider": "anthropic",
@@ -60,7 +76,11 @@
     "outputPrice": 25,
     "cacheReadPrice": 0.5,
     "cacheWritePrice": 6.25,
-    "lastUpdated": "2026-07-28"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "lifecycle": {
+      "status": "active"
+    }
   },
   "claude-fable-5": {
     "provider": "anthropic",
@@ -71,7 +91,13 @@
     "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
     "inputPrice": 10,
     "outputPrice": 50,
-    "lastUpdated": "2026-08-04"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "lifecycle": {
+      "status": "active"
+    },
+    "cacheReadPrice": 1,
+    "cacheWritePrice": 12.5
   },
   "gpt-5.5": {
     "provider": "openai",
@@ -82,7 +108,17 @@
     "inputPrice": 5,
     "outputPrice": 30,
     "cacheReadPrice": 0.5,
-    "lastUpdated": "2026-08-04"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-5.5",
+    "lifecycle": {
+      "status": "active"
+    },
+    "longContextPricing": {
+      "thresholdTokens": 272000,
+      "inputMultiplier": 2,
+      "outputMultiplier": 1.5,
+      "cacheMultiplier": 2
+    }
   },
   "gpt-5.6-luna": {
     "provider": "openai",
@@ -94,7 +130,17 @@
     "outputPrice": 1.2,
     "cacheReadPrice": 0.02,
     "cacheWritePrice": 0.25,
-    "lastUpdated": "2026-08-19"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+    "lifecycle": {
+      "status": "active"
+    },
+    "longContextPricing": {
+      "thresholdTokens": 272000,
+      "inputMultiplier": 2,
+      "outputMultiplier": 1.5,
+      "cacheMultiplier": 2
+    }
   },
   "gpt-5.6-sol": {
     "provider": "openai",
@@ -102,11 +148,22 @@
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
-    "inputPrice": 5,
-    "outputPrice": 30,
-    "cacheReadPrice": 0.5,
-    "cacheWritePrice": 6.25,
-    "lastUpdated": "2026-07-28"
+    "inputPrice": 4,
+    "outputPrice": 20,
+    "cacheReadPrice": 0.4,
+    "cacheWritePrice": 5,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+    "lifecycle": {
+      "status": "active"
+    },
+    "pricingExpiresAt": "2026-12-01",
+    "longContextPricing": {
+      "thresholdTokens": 272000,
+      "inputMultiplier": 2,
+      "outputMultiplier": 1.5,
+      "cacheMultiplier": 2
+    }
   },
   "gpt-5.6": {
     "provider": "openai",
@@ -114,11 +171,22 @@
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
-    "inputPrice": 5,
-    "outputPrice": 30,
-    "cacheReadPrice": 0.5,
-    "cacheWritePrice": 6.25,
-    "lastUpdated": "2026-07-28"
+    "inputPrice": 4,
+    "outputPrice": 20,
+    "cacheReadPrice": 0.4,
+    "cacheWritePrice": 5,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+    "lifecycle": {
+      "status": "active"
+    },
+    "pricingExpiresAt": "2026-12-01",
+    "longContextPricing": {
+      "thresholdTokens": 272000,
+      "inputMultiplier": 2,
+      "outputMultiplier": 1.5,
+      "cacheMultiplier": 2
+    }
   },
   "gpt-5.6-terra": {
     "provider": "openai",
@@ -130,7 +198,17 @@
     "outputPrice": 12,
     "cacheReadPrice": 0.2,
     "cacheWritePrice": 2.5,
-    "lastUpdated": "2026-08-19"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+    "lifecycle": {
+      "status": "active"
+    },
+    "longContextPricing": {
+      "thresholdTokens": 272000,
+      "inputMultiplier": 2,
+      "outputMultiplier": 1.5,
+      "cacheMultiplier": 2
+    }
   },
   "gpt-5.4": {
     "provider": "openai",
@@ -141,7 +219,17 @@
     "inputPrice": 2.5,
     "outputPrice": 15,
     "cacheReadPrice": 0.25,
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-5.4",
+    "lifecycle": {
+      "status": "active"
+    },
+    "longContextPricing": {
+      "thresholdTokens": 272000,
+      "inputMultiplier": 2,
+      "outputMultiplier": 1.5,
+      "cacheMultiplier": 2
+    }
   },
   "gpt-5.4-mini": {
     "provider": "openai",
@@ -153,7 +241,11 @@
     "outputPrice": 4.5,
     "cacheReadPrice": 0.075,
     "maxInputTokens": 272000,
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-5.4-mini",
+    "lifecycle": {
+      "status": "active"
+    }
   },
   "gpt-5.4-nano": {
     "provider": "openai",
@@ -165,7 +257,13 @@
     "outputPrice": 1.25,
     "cacheReadPrice": 0.02,
     "maxInputTokens": 272000,
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-5.4-nano",
+    "lifecycle": {
+      "status": "deprecated",
+      "replacementModel": "gpt-6-luna",
+      "shutdownDate": "2027-04-01"
+    }
   },
   "gpt-4o": {
     "provider": "openai",
@@ -176,7 +274,13 @@
     "inputPrice": 2.5,
     "outputPrice": 10,
     "cacheReadPrice": 1.25,
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-4o",
+    "lifecycle": {
+      "status": "deprecated",
+      "replacementModel": "gpt-6-luna",
+      "shutdownDate": "2027-01-14"
+    }
   },
   "gpt-4o-mini": {
     "provider": "openai",
@@ -187,7 +291,13 @@
     "inputPrice": 0.15,
     "outputPrice": 0.6,
     "cacheReadPrice": 0.075,
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-4o-mini",
+    "lifecycle": {
+      "status": "deprecated",
+      "replacementModel": "gpt-6-luna",
+      "shutdownDate": "2027-01-14"
+    }
   },
   "o3": {
     "provider": "openai",
@@ -198,7 +308,13 @@
     "inputPrice": 2,
     "outputPrice": 8,
     "cacheReadPrice": 0.5,
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/o3",
+    "lifecycle": {
+      "status": "deprecated",
+      "replacementModel": "gpt-6.1-sol",
+      "shutdownDate": "2026-12-11"
+    }
   },
   "gemini-2.5-pro": {
     "provider": "google",
@@ -208,7 +324,20 @@
     "supportsStreaming": true,
     "inputPrice": 1.25,
     "outputPrice": 10,
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://ai.google.dev/gemini-api/docs/pricing",
+    "lifecycle": {
+      "status": "deprecated",
+      "replacementModel": "gemini-3.8-flash",
+      "redirectDate": "2026-12-01"
+    },
+    "cacheReadPrice": 0.125,
+    "longContextPricing": {
+      "thresholdTokens": 200000,
+      "inputMultiplier": 2,
+      "outputMultiplier": 1.5,
+      "cacheMultiplier": 2
+    }
   },
   "gemini-2.5-flash": {
     "provider": "google",
@@ -218,7 +347,14 @@
     "supportsStreaming": true,
     "inputPrice": 0.3,
     "outputPrice": 2.5,
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://ai.google.dev/gemini-api/docs/pricing",
+    "lifecycle": {
+      "status": "deprecated",
+      "replacementModel": "gemini-3.5-flash-lite",
+      "redirectDate": "2026-12-01"
+    },
+    "cacheReadPrice": 0.03
   },
   "gemini-2.5-flash-lite": {
     "provider": "google",
@@ -228,7 +364,12 @@
     "supportsStreaming": true,
     "inputPrice": 0.1,
     "outputPrice": 0.4,
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://ai.google.dev/gemini-api/docs/pricing",
+    "lifecycle": {
+      "status": "active"
+    },
+    "cacheReadPrice": 0.01
   },
   "gemini-3.5-flash": {
     "provider": "google",
@@ -236,10 +377,24 @@
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
-    "inputPrice": 1.5,
-    "outputPrice": 9,
-    "cacheReadPrice": 0.15,
-    "lastUpdated": "2026-08-04"
+    "inputPrice": 0.75,
+    "outputPrice": 3.75,
+    "cacheReadPrice": 0.075,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://ai.google.dev/gemini-api/docs/pricing",
+    "lifecycle": {
+      "status": "redirected",
+      "replacementModel": "gemini-3.6-flash",
+      "redirectDate": "2026-07-21"
+    },
+    "priceChanges": [
+      {
+        "effectiveFrom": "2027-01-01",
+        "inputPrice": 1.5,
+        "outputPrice": 7.5,
+        "cacheReadPrice": 0.15
+      }
+    ]
   },
   "gemini-3.6-flash": {
     "provider": "google",
@@ -247,10 +402,22 @@
     "supportsVision": true,
     "supportsTools": true,
     "supportsStreaming": true,
-    "inputPrice": 1.5,
-    "outputPrice": 7.5,
-    "cacheReadPrice": 0.15,
-    "lastUpdated": "2026-07-28"
+    "inputPrice": 0.75,
+    "outputPrice": 3.75,
+    "cacheReadPrice": 0.075,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://ai.google.dev/gemini-api/docs/pricing",
+    "lifecycle": {
+      "status": "active"
+    },
+    "priceChanges": [
+      {
+        "effectiveFrom": "2027-01-01",
+        "inputPrice": 1.5,
+        "outputPrice": 7.5,
+        "cacheReadPrice": 0.15
+      }
+    ]
   },
   "gemini-3.5-flash-lite": {
     "provider": "google",
@@ -261,7 +428,11 @@
     "inputPrice": 0.3,
     "outputPrice": 2.5,
     "cacheReadPrice": 0.03,
-    "lastUpdated": "2026-07-28"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://ai.google.dev/gemini-api/docs/pricing",
+    "lifecycle": {
+      "status": "active"
+    }
   },
   "gemini-3.1-pro-preview": {
     "provider": "google",
@@ -272,7 +443,17 @@
     "inputPrice": 2,
     "outputPrice": 12,
     "cacheReadPrice": 0.2,
-    "lastUpdated": "2026-08-04"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://ai.google.dev/gemini-api/docs/pricing",
+    "lifecycle": {
+      "status": "active"
+    },
+    "longContextPricing": {
+      "thresholdTokens": 200000,
+      "inputMultiplier": 2,
+      "outputMultiplier": 1.5,
+      "cacheMultiplier": 2
+    }
   },
   "gemini-3.1-flash-lite": {
     "provider": "google",
@@ -283,7 +464,13 @@
     "inputPrice": 0.25,
     "outputPrice": 1.5,
     "cacheReadPrice": 0.025,
-    "lastUpdated": "2026-07-27"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://ai.google.dev/gemini-api/docs/pricing",
+    "lifecycle": {
+      "status": "deprecated",
+      "earliestShutdownDate": "2027-05-07",
+      "replacementModel": "gemini-3.5-flash-lite"
+    }
   },
   "gemini-embedding-2": {
     "provider": "google",
@@ -302,7 +489,11 @@
       "recommended": [768, 1536, 3072]
     },
     "supportedInputModalities": ["audio", "document", "image", "text"],
-    "lastUpdated": "2026-08-04"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://ai.google.dev/gemini-api/docs/pricing",
+    "lifecycle": {
+      "status": "active"
+    }
   },
   "gpt-4o-mini-tts": {
     "provider": "openai",
@@ -320,7 +511,13 @@
     },
     "supportedInputModalities": ["text"],
     "supportedOutputModalities": ["audio"],
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-4o-mini-tts",
+    "lifecycle": {
+      "status": "deprecated",
+      "replacementModel": "gpt-realtime-2.1-mini",
+      "shutdownDate": "2027-01-06"
+    }
   },
   "gpt-4o-mini-tts-2025-12-15": {
     "provider": "openai",
@@ -338,7 +535,13 @@
     },
     "supportedInputModalities": ["text"],
     "supportedOutputModalities": ["audio"],
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-4o-mini-tts",
+    "lifecycle": {
+      "status": "deprecated",
+      "replacementModel": "gpt-realtime-2.1-mini",
+      "shutdownDate": "2027-01-06"
+    }
   },
   "tts-1": {
     "provider": "openai",
@@ -354,7 +557,13 @@
     },
     "supportedInputModalities": ["text"],
     "supportedOutputModalities": ["audio"],
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/tts-1",
+    "lifecycle": {
+      "status": "deprecated",
+      "replacementModel": "gpt-realtime-2.1-mini",
+      "shutdownDate": "2027-01-06"
+    }
   },
   "tts-1-hd": {
     "provider": "openai",
@@ -370,7 +579,13 @@
     },
     "supportedInputModalities": ["text"],
     "supportedOutputModalities": ["audio"],
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/tts-1-hd",
+    "lifecycle": {
+      "status": "deprecated",
+      "replacementModel": "gpt-realtime-2.1-mini",
+      "shutdownDate": "2027-01-06"
+    }
   },
   "gpt-4o-mini-transcribe": {
     "provider": "openai",
@@ -382,11 +597,17 @@
     "inputPrice": 0,
     "outputPrice": 0,
     "speechPrices": {
-      "inputAudioSecondPrice": 0.00005
+      "inputAudioSecondPrice": 5e-5
     },
     "supportedInputModalities": ["audio", "text"],
     "supportedOutputModalities": ["text"],
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe",
+    "lifecycle": {
+      "status": "deprecated",
+      "replacementModel": "gpt-transcribe",
+      "shutdownDate": "2027-02-26"
+    }
   },
   "gpt-4o-mini-transcribe-2025-12-15": {
     "provider": "openai",
@@ -398,11 +619,17 @@
     "inputPrice": 0,
     "outputPrice": 0,
     "speechPrices": {
-      "inputAudioSecondPrice": 0.00005
+      "inputAudioSecondPrice": 5e-5
     },
     "supportedInputModalities": ["audio", "text"],
     "supportedOutputModalities": ["text"],
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe",
+    "lifecycle": {
+      "status": "deprecated",
+      "replacementModel": "gpt-transcribe",
+      "shutdownDate": "2027-02-26"
+    }
   },
   "gpt-4o-transcribe": {
     "provider": "openai",
@@ -418,7 +645,13 @@
     },
     "supportedInputModalities": ["audio", "text"],
     "supportedOutputModalities": ["text"],
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-4o-transcribe",
+    "lifecycle": {
+      "status": "deprecated",
+      "replacementModel": "gpt-transcribe",
+      "shutdownDate": "2027-02-26"
+    }
   },
   "gpt-4o-transcribe-diarize": {
     "provider": "openai",
@@ -434,7 +667,13 @@
     },
     "supportedInputModalities": ["audio", "text"],
     "supportedOutputModalities": ["text"],
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-4o-transcribe-diarize",
+    "lifecycle": {
+      "status": "deprecated",
+      "replacementModel": "gpt-transcribe",
+      "shutdownDate": "2027-02-26"
+    }
   },
   "whisper-1": {
     "provider": "openai",
@@ -450,6 +689,277 @@
     },
     "supportedInputModalities": ["audio"],
     "supportedOutputModalities": ["text"],
-    "lastUpdated": "2026-07-13"
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/whisper-1",
+    "lifecycle": {
+      "status": "deprecated",
+      "replacementModel": "gpt-transcribe",
+      "shutdownDate": "2027-02-26"
+    }
+  },
+  "gpt-6-astra": {
+    "provider": "openai",
+    "contextWindow": 1050000,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 10,
+    "outputPrice": 50,
+    "cacheReadPrice": 1,
+    "cacheWritePrice": 12.5,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+    "lifecycle": {
+      "status": "active"
+    },
+    "longContextPricing": {
+      "thresholdTokens": 272000,
+      "inputMultiplier": 2,
+      "outputMultiplier": 1.5,
+      "cacheMultiplier": 2
+    }
+  },
+  "gpt-6.1-sol": {
+    "provider": "openai",
+    "contextWindow": 1050000,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 2,
+    "outputPrice": 10,
+    "cacheReadPrice": 0.1,
+    "cacheWritePrice": 2.5,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+    "lifecycle": {
+      "status": "active"
+    },
+    "longContextPricing": {
+      "thresholdTokens": 272000,
+      "inputMultiplier": 2,
+      "outputMultiplier": 1.5,
+      "cacheMultiplier": 2
+    }
+  },
+  "gpt-6.1-terra": {
+    "provider": "openai",
+    "contextWindow": 1050000,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 1,
+    "outputPrice": 5,
+    "cacheReadPrice": 0.05,
+    "cacheWritePrice": 1.25,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+    "lifecycle": {
+      "status": "active"
+    },
+    "longContextPricing": {
+      "thresholdTokens": 272000,
+      "inputMultiplier": 2,
+      "outputMultiplier": 1.5,
+      "cacheMultiplier": 2
+    }
+  },
+  "gpt-6-luna": {
+    "provider": "openai",
+    "contextWindow": 1050000,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 0.1,
+    "outputPrice": 0.5,
+    "cacheReadPrice": 0.01,
+    "cacheWritePrice": 0.125,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    "lifecycle": {
+      "status": "active"
+    },
+    "longContextPricing": {
+      "thresholdTokens": 272000,
+      "inputMultiplier": 2,
+      "outputMultiplier": 1.5,
+      "cacheMultiplier": 2
+    }
+  },
+  "claude-fable-5-2": {
+    "provider": "anthropic",
+    "contextWindow": 1000000,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+    "inputPrice": 8,
+    "outputPrice": 40,
+    "cacheReadPrice": 0.2,
+    "cacheWritePrice": 10.0,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "lifecycle": {
+      "status": "active"
+    }
+  },
+  "claude-opus-5-5": {
+    "provider": "anthropic",
+    "contextWindow": 1000000,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+    "inputPrice": 4,
+    "outputPrice": 20,
+    "cacheReadPrice": 0.2,
+    "cacheWritePrice": 5.0,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "lifecycle": {
+      "status": "active"
+    }
+  },
+  "claude-sonnet-5-5": {
+    "provider": "anthropic",
+    "contextWindow": 1000000,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+    "inputPrice": 2,
+    "outputPrice": 10,
+    "cacheReadPrice": 0.1,
+    "cacheWritePrice": 2.5,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "lifecycle": {
+      "status": "active"
+    }
+  },
+  "claude-haiku-5-5": {
+    "provider": "anthropic",
+    "contextWindow": 1000000,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+    "inputPrice": 0.1,
+    "outputPrice": 0.5,
+    "cacheReadPrice": 0.01,
+    "cacheWritePrice": 0.125,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "lifecycle": {
+      "status": "active"
+    },
+    "longContextPricing": {
+      "thresholdTokens": 100000,
+      "inputMultiplier": 5,
+      "outputMultiplier": 5,
+      "cacheMultiplier": 5
+    }
+  },
+  "gemini-3.8-flash": {
+    "provider": "google",
+    "contextWindow": 1048576,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 0.75,
+    "outputPrice": 3.75,
+    "cacheReadPrice": 0.075,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://ai.google.dev/gemini-api/docs/pricing",
+    "lifecycle": {
+      "status": "active"
+    },
+    "priceChanges": [
+      {
+        "effectiveFrom": "2027-01-01",
+        "inputPrice": 1.5,
+        "outputPrice": 7.5,
+        "cacheReadPrice": 0.15
+      }
+    ]
+  },
+  "gemini-4-carbon": {
+    "provider": "google",
+    "contextWindow": 1048576,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 2,
+    "outputPrice": 10,
+    "cacheReadPrice": 0.1,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://ai.google.dev/gemini-api/docs/pricing",
+    "lifecycle": {
+      "status": "active"
+    },
+    "priceChanges": [
+      {
+        "effectiveFrom": "2026-12-01",
+        "inputPrice": 4,
+        "outputPrice": 20,
+        "cacheReadPrice": 0.2
+      }
+    ]
+  },
+  "gemini-4-argon": {
+    "provider": "google",
+    "contextWindow": 1048576,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 2,
+    "outputPrice": 10,
+    "cacheReadPrice": 0.1,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://ai.google.dev/gemini-api/docs/pricing",
+    "lifecycle": {
+      "status": "active"
+    },
+    "priceChanges": [
+      {
+        "effectiveFrom": "2026-12-01",
+        "inputPrice": 4,
+        "outputPrice": 20,
+        "cacheReadPrice": 0.2
+      }
+    ]
+  },
+  "gemini-4-hydrogen": {
+    "provider": "google",
+    "contextWindow": 1048576,
+    "supportsVision": true,
+    "supportsTools": true,
+    "supportsStreaming": true,
+    "inputPrice": 1.5,
+    "outputPrice": 7.5,
+    "cacheReadPrice": 0.075,
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://ai.google.dev/gemini-api/docs/pricing",
+    "lifecycle": {
+      "status": "active"
+    }
+  },
+  "gpt-transcribe": {
+    "provider": "openai",
+    "kind": "transcription",
+    "supportsVision": false,
+    "supportsTools": false,
+    "supportsStreaming": false,
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "speechPrices": {
+      "inputAudioSecondPrice": 7.5e-5
+    },
+    "supportedInputModalities": ["audio", "text"],
+    "supportedOutputModalities": ["text"],
+    "lastUpdated": "2026-11-15",
+    "pricingSource": "https://developers.openai.com/api/docs/models/gpt-transcribe",
+    "lifecycle": {
+      "status": "active"
+    }
   }
 }

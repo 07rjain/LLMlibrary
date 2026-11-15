@@ -58,6 +58,8 @@ If you are opening the repository for the first time, read the pages below in or
 
 ## Reference Docs
 
+- Current models, prices, and retirement dates: [MODEL_CATALOG.md](./MODEL_CATALOG.md)
+
 - API reference: [docs/api/index.html](./api/index.html)
 - Session API contract: [SESSION_API_REFERENCE.md](./SESSION_API_REFERENCE.md)
 - Provider comparison: [PROVIDER_COMPARISON.md](./PROVIDER_COMPARISON.md)

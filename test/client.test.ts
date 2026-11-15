@@ -1308,7 +1308,7 @@ describe('LLMClient', () => {
     });
     expect(skippedTranscription).toMatchObject({
       durationSeconds: 2,
-      model: 'gpt-4o-mini-transcribe',
+      model: 'gpt-transcribe',
       provider: 'openai',
       raw: { reason: 'budget_exceeded', skipped: true },
       text: '',

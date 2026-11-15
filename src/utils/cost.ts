@@ -101,20 +101,39 @@ export function calcCostUSD(
     );
   }
 
-  const model = registry.get(input.model);
+  const model = registry.resolve(input.model);
   const billedInputTokens = input.billedInputTokens ?? input.inputTokens;
+  // Anthropic reports cache tokens outside input_tokens; OpenAI and Google
+  // include them in the prompt total. Tier selection must use the full prompt.
+  const promptTokens =
+    model.provider === 'anthropic'
+      ? input.inputTokens +
+        (input.cachedReadTokens ?? 0) +
+        (input.cachedWriteTokens ?? 0)
+      : input.inputTokens;
+  const tier =
+    model.longContextPricing &&
+    promptTokens > model.longContextPricing.thresholdTokens
+      ? model.longContextPricing
+      : undefined;
+  const inputMultiplier = tier?.inputMultiplier ?? 1;
+  const outputMultiplier = tier?.outputMultiplier ?? 1;
+  const cacheMultiplier = tier?.cacheMultiplier ?? inputMultiplier;
 
   const costUSD = roundUsd(
-    costForTokens(billedInputTokens, model.inputPrice) +
-      costForTokens(input.outputTokens, model.outputPrice) +
-      costForTokens(input.billableReasoningTokens ?? 0, model.outputPrice) +
+    costForTokens(billedInputTokens, model.inputPrice * inputMultiplier) +
+      costForTokens(input.outputTokens, model.outputPrice * outputMultiplier) +
+      costForTokens(
+        input.billableReasoningTokens ?? 0,
+        model.outputPrice * outputMultiplier,
+      ) +
       costForTokens(
         input.cachedReadTokens ?? 0,
-        model.cacheReadPrice ?? model.inputPrice * 0.1,
+        (model.cacheReadPrice ?? model.inputPrice * 0.1) * cacheMultiplier,
       ) +
       costForTokens(
         input.cachedWriteTokens ?? 0,
-        model.cacheWritePrice ?? model.inputPrice * 1.25,
+        (model.cacheWritePrice ?? model.inputPrice * 1.25) * cacheMultiplier,
       ),
   );
   if (!Number.isFinite(costUSD) || costUSD < 0) {
@@ -439,7 +458,15 @@ function roundUsd(value: number): number {
 
 function toRegistryEntry(model: ModelInfo): Omit<ModelInfo, 'id'> {
   const entry: Omit<ModelInfo, 'id'> = {
-    contextWindow: model.contextWindow,
+    ...(model.contextWindow !== undefined
+      ? { contextWindow: model.contextWindow }
+      : {}),
+    ...(model.longContextPricing
+      ? { longContextPricing: model.longContextPricing }
+      : {}),
+    ...(model.pricingExpiresAt
+      ? { pricingExpiresAt: model.pricingExpiresAt }
+      : {}),
     inputPrice: model.inputPrice,
     lastUpdated: model.lastUpdated,
     outputPrice: model.outputPrice,

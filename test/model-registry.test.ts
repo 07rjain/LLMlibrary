@@ -54,9 +54,15 @@ describe('ModelRegistry', () => {
       contextWindow: 224,
       kind: 'transcription',
     });
-    expect(registry.list().every((model) => model.contextWindow > 0)).toBe(
-      true,
-    );
+    expect(
+      registry
+        .list()
+        .every((model) =>
+          model.contextWindow === undefined
+            ? model.kind === 'transcription' || model.kind === 'speech'
+            : model.contextWindow > 0,
+        ),
+    ).toBe(true);
   });
 
   it('keeps every seeded model complete for its declared kind', () => {
@@ -81,8 +87,12 @@ describe('ModelRegistry', () => {
       expect(model.id.trim().length).toBeGreaterThan(0);
       expect(allowedProviders).toContain(model.provider);
       expect(allowedKinds).toContain(model.kind);
-      expect(Number.isSafeInteger(model.contextWindow)).toBe(true);
-      expect(model.contextWindow).toBeGreaterThan(0);
+      if (model.contextWindow !== undefined) {
+        expect(Number.isSafeInteger(model.contextWindow)).toBe(true);
+        expect(model.contextWindow).toBeGreaterThan(0);
+      } else {
+        expect(['transcription', 'speech']).toContain(model.kind);
+      }
       expect(Number.isFinite(model.inputPrice)).toBe(true);
       expect(model.inputPrice).toBeGreaterThanOrEqual(0);
       expect(Number.isFinite(model.outputPrice)).toBe(true);
@@ -202,16 +212,16 @@ describe('ModelRegistry', () => {
     });
     expect(registry.get('gpt-5.6-sol')).toMatchObject({
       contextWindow: 1050000,
-      inputPrice: 5,
-      outputPrice: 30,
+      inputPrice: 4,
+      outputPrice: 20,
       provider: 'openai',
-      cacheReadPrice: 0.5,
-      cacheWritePrice: 6.25,
+      cacheReadPrice: 0.4,
+      cacheWritePrice: 5,
     });
     expect(registry.get('gpt-5.6')).toMatchObject({
       contextWindow: 1050000,
-      inputPrice: 5,
-      outputPrice: 30,
+      inputPrice: 4,
+      outputPrice: 20,
       provider: 'openai',
     });
     expect(registry.get('gpt-5.6-terra')).toMatchObject({
@@ -241,10 +251,10 @@ describe('ModelRegistry', () => {
     });
     expect(registry.get('gemini-3.6-flash')).toMatchObject({
       contextWindow: 1048576,
-      inputPrice: 1.5,
-      outputPrice: 7.5,
+      inputPrice: 0.75,
+      outputPrice: 3.75,
       provider: 'google',
-      cacheReadPrice: 0.15,
+      cacheReadPrice: 0.075,
     });
     expect(registry.get('gemini-3.5-flash-lite')).toMatchObject({
       contextWindow: 1048576,

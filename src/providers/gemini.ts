@@ -17,8 +17,13 @@ import {
   readPaginationCursor,
   readRequiredModelId,
 } from '../model-discovery.js';
-import { geminiUsageToCanonical, usageWithCost } from '../utils/cost.js';
 import {
+  geminiUsageToCanonical,
+  usageWithCost,
+} from 'unified-llm-client/utils';
+import {
+  assertCurrentGeminiOptions,
+  supportsGeminiSamplingParameters,
   assertProviderArray,
   assertProviderContentType,
   assertProviderObject,
@@ -301,6 +306,10 @@ export class GeminiAdapter {
   }
 
   async complete(options: GeminiCompletionOptions): Promise<CanonicalResponse> {
+    options = {
+      ...options,
+      model: this.modelRegistry.resolve(options.model).id,
+    };
     this.assertCapabilities(options);
     throwIfAborted(options.signal);
 
@@ -332,7 +341,9 @@ export class GeminiAdapter {
   }
 
   async embed(options: GeminiEmbeddingOptions): Promise<EmbeddingResponse> {
-    const model = normalizeGeminiModelId(options.model);
+    const model = this.modelRegistry.resolve(
+      normalizeGeminiModelId(options.model),
+    ).id;
     const modelInfo = this.modelRegistry.assertModelKind(model, 'embedding');
     const requests = validateEmbeddingRequest(options, {
       model,
@@ -420,6 +431,10 @@ export class GeminiAdapter {
   async *stream(
     options: GeminiCompletionOptions,
   ): AsyncGenerator<StreamChunk, void, void> {
+    options = {
+      ...options,
+      model: this.modelRegistry.resolve(options.model).id,
+    };
     this.assertCapabilities({ ...options, stream: true });
     throwIfAborted(options.signal);
 
@@ -700,6 +715,7 @@ export class GeminiAdapter {
   private assertCapabilities(
     options: GeminiCompletionOptions & { stream?: boolean },
   ): void {
+    assertCurrentGeminiOptions(options);
     if (options.tools && options.tools.length > 0) {
       this.modelRegistry.assertCapability(
         options.model,
@@ -802,10 +818,6 @@ export function translateGeminiRequest(
   }
 
   return body;
-}
-
-function supportsGeminiSamplingParameters(model: string): boolean {
-  return model !== 'gemini-3.6-flash' && model !== 'gemini-3.5-flash-lite';
 }
 
 function translateGeminiThinkingConfig(
