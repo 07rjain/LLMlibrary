@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { LLMClient } from '../src/client.js';
 import { ProviderCapabilityError } from '../src/errors.js';
 import { ModelRegistry } from '../src/models/registry.js';
+import { ModelRouter } from '../src/router.js';
 import {
   calcCostUSD,
   calcSpeechCostUSD,
@@ -148,6 +149,99 @@ describe('model lifecycle and effective pricing', () => {
     ).toThrow('Pricing');
     expect(fetchImplementation).not.toHaveBeenCalled();
     expect(registry.get('gpt-5.6-sol').inputPrice).toBe(4);
+  });
+
+  it.each([
+    [
+      '2026-11-30T23:59:59.999Z',
+      'gpt-5.6-sol',
+      ['gpt-5.6', 'gpt-6-luna'],
+      'gpt-5.6-sol',
+    ],
+    [
+      '2026-12-01T00:00:00Z',
+      'gpt-5.6-sol',
+      ['gpt-5.6', 'gpt-6-luna'],
+      'gpt-6-luna',
+    ],
+    ['2026-12-01T00:00:00Z', 'gpt-6-luna', ['gpt-5.6'], 'gpt-6-luna'],
+  ] as const)(
+    'uses the first priced candidate at %s with primary %s',
+    async (date, target, fallback, expected) => {
+      const fetchImplementation = vi
+        .fn<typeof fetch>()
+        .mockImplementation(async (_url, init) => {
+          const { model, stream } = JSON.parse(String(init?.body));
+          const response = {
+            id: 'resp_price_boundary',
+            model,
+            status: 'completed',
+            output: [
+              {
+                type: 'message',
+                role: 'assistant',
+                content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+              },
+            ],
+            usage: { input_tokens: 2, output_tokens: 1 },
+          };
+          return stream
+            ? new Response(
+                `data: ${JSON.stringify({ type: 'response.completed', response })}\n\n`,
+                { headers: { 'content-type': 'text/event-stream' } },
+              )
+            : Response.json(response);
+        });
+      const client = new LLMClient({
+        modelRegistry: registryAt(date),
+        fetchImplementation,
+        modelRouter: new ModelRouter({
+          rules: [{ target, fallback: [...fallback] }],
+        }),
+        openaiApiKey: 'test',
+      });
+      const request = {
+        messages: [{ role: 'user', content: 'Hello' }],
+      } as const;
+      const options = { messages: [...request.messages], budgetUsd: 1 };
+      expect(client.estimateRequest(options).model).toBe(expected);
+      await expect(client.complete(options)).resolves.toMatchObject({
+        model: expected,
+        text: 'ok',
+      });
+
+      const chunks = [];
+      for await (const chunk of client.stream(options)) chunks.push(chunk);
+      expect(chunks.at(-1)).toMatchObject({ type: 'done' });
+      expect(
+        fetchImplementation.mock.calls.map(
+          ([, init]) => JSON.parse(String(init?.body)).model,
+        ),
+      ).toEqual([expected, expected]);
+    },
+  );
+
+  it('preserves the pricing error when every configured route is expired', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>();
+    const client = new LLMClient({
+      modelRegistry: registryAt('2026-12-01T00:00:00Z'),
+      fetchImplementation,
+      openaiApiKey: 'test',
+      modelRouter: new ModelRouter({
+        rules: [{ target: 'gpt-5.6', fallback: ['gpt-5.6-sol'] }],
+      }),
+    });
+    const error = {
+      model: 'gpt-5.6',
+      details: { code: 'expired_model_pricing' },
+    };
+    await expect(client.complete({ messages: [] })).rejects.toMatchObject(
+      error,
+    );
+    expect(() => client.estimateRequest({ messages: [] })).toThrow(
+      expect.objectContaining(error),
+    );
+    expect(fetchImplementation).not.toHaveBeenCalled();
   });
 
   it('selects Haiku prompt-length pricing using uncached, cache-read, and cache-write tokens', () => {

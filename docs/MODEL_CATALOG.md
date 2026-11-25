@@ -55,7 +55,10 @@ registry clock, applying complete `priceChanges` cards at midnight UTC:
 promotional rates through November 30, 2026. The checked source does not publish
 successor rates. Their `pricingExpiresAt` is December 1: dispatch and cost
 estimates fail closed after that date until verified pricing is updated. The
-registry still exposes their metadata through `get()` for inspection.
+registry still exposes their metadata through `get()` for inspection. To keep
+completion requests running without using unverified rates, configure a
+`ModelRouter` fallback to a model you have tested and priced separately. The
+client does not migrate these IDs automatically.
 
 Prompt-length tiers apply to the **entire request**, with a strict `>` boundary:
 
