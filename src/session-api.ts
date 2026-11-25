@@ -1018,7 +1018,7 @@ export class SessionApi {
                   formatSseEvent(
                     'response.error',
                     streamEventData(chunk, {
-                      ...serializeStreamError(chunk.error),
+                      ...serializePublicError(chunk.error),
                     }),
                   ),
                 ),
@@ -1061,7 +1061,7 @@ export class SessionApi {
                     streamEventData(chunk, {
                       attempt: chunk.attempt,
                       ...(chunk.error
-                        ? { error: serializeStreamError(chunk.error) }
+                        ? { error: serializePublicError(chunk.error) }
                         : {}),
                     }),
                   ),
@@ -1139,7 +1139,7 @@ export class SessionApi {
           }
         } catch (error) {
           if (!abortController.signal.aborted) {
-            const errorPayload = serializeStreamError(error);
+            const errorPayload = serializePublicError(error);
             controller.enqueue(
               encoder.encode(
                 formatSseEvent('response.error', {
@@ -1854,10 +1854,6 @@ function stripSystemFromSnapshot(
   };
   delete next.system;
   return next;
-}
-
-function serializeStreamError(error: Error | unknown): PublicSessionApiError {
-  return serializePublicError(error);
 }
 
 function streamEventData(

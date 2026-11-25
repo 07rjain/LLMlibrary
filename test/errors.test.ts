@@ -28,6 +28,16 @@ describe('LLMError hierarchy', () => {
       statusCode: 429,
     });
 
+    expect(error).toBeInstanceOf(Error);
+    expect(error.cause).toMatchObject({ message: 'root' });
+    expect(new LLMError('plain')).toMatchObject({
+      message: 'plain',
+      name: 'LLMError',
+      retryable: false,
+      cause: undefined,
+      model: undefined,
+      provider: undefined,
+    });
     expect(error.toJSON()).toMatchObject({
       details: { feature: 'tools' },
       message: 'boom',

@@ -29,10 +29,6 @@ export async function* parseSSE(
       return;
     }
 
-    if (line.startsWith(':')) {
-      return;
-    }
-
     if (!line.startsWith('data:')) {
       return;
     }
