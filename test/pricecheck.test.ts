@@ -8,6 +8,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 describe('pricecheck', () => {
@@ -36,15 +37,27 @@ describe('pricecheck', () => {
           },
         }),
       );
-      const clock = `data:text/javascript,globalThis.Date=class extends Date{constructor(...args){super(...(args.length?args:[${JSON.stringify(date + 'T00:00:00Z')}]));}}`;
-      const result = spawnSync(process.execPath, ['--import', clock, script], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          GITHUB_ACTIONS: 'true',
-          PRICE_STALENESS_DAYS: '45',
+      const clock = join(fixture, 'clock.mjs');
+      writeFileSync(
+        clock,
+        `globalThis.Date = class extends Date {
+          constructor(...args) {
+            super(...(args.length ? args : [${JSON.stringify(date + 'T00:00:00Z')}]));
+          }
+        };`,
+      );
+      const result = spawnSync(
+        process.execPath,
+        ['--import', pathToFileURL(clock).href, script],
+        {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            GITHUB_ACTIONS: 'true',
+            PRICE_STALENESS_DAYS: '45',
+          },
         },
-      });
+      );
 
       expect(result.status, result.stderr).toBe(status);
       expect(JSON.parse(result.stdout)).toMatchObject({
