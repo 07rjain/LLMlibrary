@@ -468,12 +468,12 @@ describe('ModelRegistry', () => {
       inputPrice: 0,
       outputPrice: 0,
     };
-    expect(
-      new ModelRegistry(
-        { [id]: freeSeed },
-        { emitStalenessWarning: false },
-      ).get(id),
-    ).toMatchObject({ inputPrice: 0, outputPrice: 0 });
+    const custom = new ModelRegistry(
+      { [id]: freeSeed },
+      { emitStalenessWarning: false },
+    );
+    expect(custom.get(id)).toMatchObject({ inputPrice: 0, outputPrice: 0 });
+    expect(custom.isSupported('gpt-4o')).toBe(false);
   });
 
   it('accepts kind-relevant custom metadata and zero prices', () => {

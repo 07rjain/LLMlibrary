@@ -50,11 +50,17 @@ describe('Usage logging', () => {
       write,
     });
 
-    logger.log(buildUsageEvent());
+    logger.log(buildUsageEvent({ botId: 'bot-1', sessionId: 'sess-1' }));
     disabledLogger.log(buildUsageEvent());
 
     expect(write).toHaveBeenCalledTimes(1);
-    expect(write.mock.calls[0]?.[0]).toContain('llm-usage');
+    const output = write.mock.calls[0]?.[0] ?? '';
+    expect(output).toContain('llm-usage');
+    expect(output).toContain('"model":"gpt-4o"');
+    expect(output).toContain('"provider":"openai"');
+    expect(output).toContain('"botId":"bot-1"');
+    expect(output).toContain('"sessionId":"sess-1"');
+    expect(output).toContain('"tenantId":"tenant-1"');
   });
 
   it('redacts credential-like fields from console logs', () => {

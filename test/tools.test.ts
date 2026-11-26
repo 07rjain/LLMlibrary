@@ -6,8 +6,9 @@ describe('defineTool', () => {
   it('returns the tool definition unchanged', async () => {
     const tool = defineTool<{ city: string }>({
       description: 'Lookup a city',
-      execute: async (args) => ({
+      execute: async (args, context) => ({
         city: args.city,
+        tenantId: context?.tenantId ?? null,
       }),
       name: 'lookup_city',
       parameters: {
@@ -21,8 +22,12 @@ describe('defineTool', () => {
 
     expect(tool.name).toBe('lookup_city');
     expect(tool.parameters.required).toEqual(['city']);
-    await expect(tool.execute?.({ city: 'Berlin' })).resolves.toEqual({
-      city: 'Berlin',
-    });
+    expect(tool.description).toBe('Lookup a city');
+    await expect(
+      tool.execute?.(
+        { city: 'Berlin' },
+        { model: 'gpt-4o', provider: 'openai', tenantId: 'tenant-test' },
+      ),
+    ).resolves.toEqual({ city: 'Berlin', tenantId: 'tenant-test' });
   });
 });

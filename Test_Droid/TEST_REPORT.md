@@ -6,6 +6,9 @@
 
 ---
 
+> Historical snapshot from April 2026. Some suites listed below have since been
+> consolidated into `test/`. Use `pnpm test` for current suite and coverage results.
+
 ## Executive Summary
 
 All tests in the `Test_Droid` test suite pass successfully. The test suite provides comprehensive coverage of the Unified LLM Client Library functionality as specified in the PRD.
