@@ -59,7 +59,13 @@ catalog, scheduled price changes, prompt-length tiers, and migration deadlines.
   and expired offers.
 - Development warnings still trigger when pricing is older than 90 days.
 - `pnpm pricecheck` enforces a tighter 45-day freshness target for automated maintenance.
-- `.github/workflows/prices-drift.yml` runs that check weekly so stale pricing does not silently linger.
+- `.github/workflows/prices-drift.yml` runs that check weekly. Offers expiring
+  in the next seven UTC days produce warnings and appear in `expiringModels`;
+  they do not fail the check until their expiration date.
+- Completion routes skip a model with expired pricing only if an explicitly
+  configured route has another usable candidate. Budget estimates use the first
+  usable candidate. A direct request or an all-expired route still fails before
+  dispatch; the client does not choose a replacement model on its own.
 - Newly released remote models discovered through `client.models.listRemote({ provider })` are not automatically priced or routable until they are explicitly registered.
 - `client.updatePrices()` accepts finite non-negative numeric prices, including
   zero/free pricing, and validates nested cache and speech billing units. A

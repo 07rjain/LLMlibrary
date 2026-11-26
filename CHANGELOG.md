@@ -2,6 +2,14 @@
 
 All notable changes to this project will be tracked here.
 
+## Unreleased
+
+### fix
+
+- use explicitly configured completion fallbacks when a route's promotional
+  pricing has expired, without dispatching unpriced requests
+- warn about upcoming promotional price expirations in the weekly price check
+
 ## 0.3.0 - 2026-11-15
 
 ### feat

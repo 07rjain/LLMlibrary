@@ -1188,12 +1188,32 @@ export class LLMClient {
                 ],
         }
       : this.resolveRoute(requestOptions, resolveOptions);
-    return {
-      attempts: resolvedRoute.attempts.map((attempt) => ({
-        decision: attempt.decision,
-        request: this.resolveRequest(requestOptions, attempt, resolveOptions),
-      })),
-    };
+    const attempts = [];
+    let expiredPricingError: ProviderCapabilityError | undefined;
+    for (const attempt of resolvedRoute.attempts) {
+      try {
+        attempts.push({
+          decision: attempt.decision,
+          request: this.resolveRequest(requestOptions, attempt, resolveOptions),
+        });
+      } catch (error) {
+        if (
+          !(error instanceof ProviderCapabilityError) ||
+          error.details?.code !== 'expired_model_pricing'
+        ) {
+          throw error;
+        }
+
+        // Skip only explicitly routed candidates with expired rates. A direct
+        // request, or a chain without a usable alternate, still fails closed.
+        expiredPricingError ??= error;
+      }
+    }
+
+    if (attempts.length === 0 && expiredPricingError) {
+      throw expiredPricingError;
+    }
+    return { attempts };
   }
 
   private resolveRoute(

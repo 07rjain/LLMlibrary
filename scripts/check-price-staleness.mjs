@@ -4,8 +4,18 @@ const maxAgeDays = Number.parseInt(
   process.env.PRICE_STALENESS_DAYS ?? '45',
   10,
 );
+const noticeDays = 7;
 const now = new Date();
 const today = now.toISOString().slice(0, 10);
+const noticeThrough = new Date(
+  Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + noticeDays,
+  ),
+)
+  .toISOString()
+  .slice(0, 10);
 const prices = JSON.parse(
   readFileSync(new URL('../src/models/prices.json', import.meta.url), 'utf8'),
 );
@@ -28,9 +38,16 @@ const staleModels = Object.entries(prices)
     (entry) => Number.isFinite(entry.ageDays) && entry.ageDays > maxAgeDays,
   );
 
-const expiredModels = Object.entries(prices)
-  .filter(([, info]) => info.pricingExpiresAt && info.pricingExpiresAt <= today)
+const offers = Object.entries(prices)
+  .filter(([, info]) => info.pricingExpiresAt)
   .map(([model, info]) => ({ model, pricingExpiresAt: info.pricingExpiresAt }));
+const expiredModels = offers.filter(
+  ({ pricingExpiresAt }) => pricingExpiresAt <= today,
+);
+const expiringModels = offers.filter(
+  ({ pricingExpiresAt }) =>
+    pricingExpiresAt > today && pricingExpiresAt <= noticeThrough,
+);
 
 console.log(
   JSON.stringify(
@@ -39,12 +56,20 @@ console.log(
       maxAgeDays,
       ok: staleModels.length === 0 && expiredModels.length === 0,
       expiredModels,
+      expiringModels,
       staleModels,
     },
     null,
     2,
   ),
 );
+
+for (const { model, pricingExpiresAt } of expiringModels) {
+  const message = `Verified promotional pricing for ${model} expires on ${pricingExpiresAt} (UTC). Check for successor rates before then.`;
+  console.warn(
+    process.env.GITHUB_ACTIONS === 'true' ? `::warning::${message}` : message,
+  );
+}
 
 if (staleModels.length > 0) {
   throw new Error(
